@@ -88,10 +88,24 @@ export class Character {
 
   setColor(color) {
     this.tint.set(color);
+    const tintHSL = {};
+    this.tint.getHSL(tintHSL);
     this.model.traverse((obj) => {
       if (!obj.isMesh || !obj.material) return;
       if (!obj.userData.baseColor) obj.userData.baseColor = obj.material.color?.clone() || new THREE.Color(0xffffff);
-      if (obj.material.color) obj.material.color.copy(obj.userData.baseColor).multiply(this.tint);
+      const baseHSL = {};
+      obj.userData.baseColor.getHSL(baseHSL);
+      if (obj.material.color) {
+        if (baseHSL.l < 0.16) {
+          // Piezas oscuras (visera, juntas): solo un reflejo del color.
+          obj.material.color.copy(obj.userData.baseColor).lerp(this.tint, 0.2);
+        } else {
+          // El tinte manda: se mantiene la luminosidad original para conservar el sombreado.
+          const lightness = Math.min(0.92, Math.max(0.5, baseHSL.l * 1.35));
+          obj.material.color.setHSL(tintHSL.h, Math.min(1, tintHSL.s * 1.05), lightness);
+        }
+      }
+      if (obj.material.emissive) obj.material.emissive.copy(this.tint).multiplyScalar(baseHSL.l < 0.16 ? 0.04 : 0.11);
     });
   }
 

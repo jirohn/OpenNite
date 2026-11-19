@@ -4,6 +4,7 @@ import { clamp, formatTime } from '../core/utils.js';
 const TEMPLATE = `
 <div class="hud">
   <div class="crosshair" id="crosshair"></div>
+  <button class="interactive lock-prompt" id="lock-prompt">CLIC PARA FIJAR EL RATÓN</button>
   <div class="hud-top-left">
     <div class="map-label" id="hud-map">ISLAS VERDES</div>
     <div class="kill-feed" id="kill-feed"></div>
@@ -101,6 +102,11 @@ export class HUD {
   update(game, dt) {
     if (!this.el) return;
     const { player, world, storm, bots, loot, camera } = game;
+
+    const lockPrompt = this.q('lock-prompt');
+    if (lockPrompt) {
+      lockPrompt.style.display = (!game.input.locked && game.input.autoLock && !game.paused) ? 'block' : 'none';
+    }
 
     // FPS
     this.frameCount++;

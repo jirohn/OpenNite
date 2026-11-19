@@ -57,6 +57,9 @@ export class Game {
       if (this.previewCharacter && this.mode === 'preview') {
         this.previewCharacter.setColor(this.settings.get('playerColor'));
       }
+      if (this.player?.character && (this.mode === 'playing' || this.mode === 'paused')) {
+        this.player.character.setColor(this.settings.get('playerColor'));
+      }
     });
     window.addEventListener('resize', () => this.resize());
     this.resize();
@@ -67,7 +70,12 @@ export class Game {
 
     // ESPACIO por pulsación: salir del bus, saltar o alternar el paracaídas.
     this.input.on('keydown', (code) => {
-      if (code !== 'Space' || this.mode !== 'playing' || this.paused || !this.player) return;
+      if (this.mode !== 'playing' || this.paused || !this.player) return;
+      if (code === 'Escape') {
+        this.app.requestPause();
+        return;
+      }
+      if (code !== 'Space') return;
       if (this.player.inBus) this.player.jumpFromBus();
       else this.player.onSpacePress();
     });
@@ -217,7 +225,8 @@ export class Game {
     const spots = this.world.spawnPoints || [];
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
-      const ch = new Character(gltf, { color: 0xffffff });
+      const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
+      const ch = new Character(gltf, { color: botColors[i % botColors.length] });
       this.scene.add(ch.group);
       const bot = new Bot(ch, this.world, this, i, sp);
       const w = createWeaponModel('ar');
@@ -226,6 +235,7 @@ export class Game {
     }
 
     this.hud.mount(config.map.name);
+    this.hud.q('lock-prompt').addEventListener('click', () => this.input.requestLock());
     this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.4);
     this.hud.toast('Clic para fijar el ratón · ESPACIO para saltar del autobús', 'good');
     this.matchTime = 0;

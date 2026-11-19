@@ -1,6 +1,6 @@
 {
   "name": "opennite",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "OpenNite - battle royale libre y de codigo abierto para PC, sin construccion.",
   "main": "electron/main.js",
   "author": "OpenNite Contributors",
