@@ -79,9 +79,19 @@ export class Input {
   }
 
   requestLock() {
-    if (!this.locked && this.canvas.requestPointerLock) {
-      const result = this.canvas.requestPointerLock();
-      if (result?.catch) result.catch(() => {});
+    if (this.locked || !this.canvas.requestPointerLock) return;
+    this.canvas.focus?.({ preventScroll: true });
+    const fallback = () => {
+      try {
+        const result = this.canvas.requestPointerLock();
+        if (result?.catch) result.catch(() => {});
+      } catch { /* el navegador puede rechazarlo; el overlay sigue visible */ }
+    };
+    try {
+      const result = this.canvas.requestPointerLock({ unadjustedMovement: true });
+      if (result?.catch) result.catch(fallback);
+    } catch {
+      fallback();
     }
   }
 

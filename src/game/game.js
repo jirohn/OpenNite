@@ -174,9 +174,9 @@ export class Game {
       // Ocho maniquíes 3D animados, uno por skin, para elegir aspecto en el lobby.
       SKIN_COLORS.forEach((color, i) => {
         const skin = new Character(gltf, { color });
-        skin.group.position.set(1.2 + i * 0.8, 0, 0);
+        skin.group.position.set(3.85 + i * 0.5, 0, 0);
         skin.group.rotation.y = -0.35;
-        skin.group.scale.setScalar(0.92);
+        skin.group.scale.setScalar(1.05);
         skin.play(SKIN_ANIMS[i]);
         const galleryAction = skin.actions[SKIN_ANIMS[i]];
         if (galleryAction) {
@@ -220,20 +220,20 @@ export class Game {
     this.selectedPreviewColor = color;
     for (const skin of this.previewSkins) {
       const active = skin.group.userData.color === color;
-      skin.group.userData.targetScale = active ? 1.14 : 0.9;
+      skin.group.userData.targetScale = active ? 1.3 : 1.05;
       if (skin.group.userData.disc) skin.group.userData.disc.material.emissiveIntensity = active ? 1.1 : 0.2;
     }
   }
 
   updatePreview(dt, elapsed) {
     if (this.skinPreviewMode) {
-      this.camera.position.set(0.2 + Math.sin(elapsed * 0.12) * 0.25, 2.75, 9.8);
-      this.camera.lookAt(0.2, 1.15, 0);
+      this.camera.position.set(3.0 + Math.sin(elapsed * 0.12) * 0.16, 2.6, 7.5);
+      this.camera.lookAt(3.0, 1.1, 0);
       this.previewSkins.forEach((skin, i) => {
         skin.update(dt);
         skin.group.rotation.y = -0.35 + Math.sin(elapsed * 0.5 + i * 0.6) * 0.18;
         skin.group.position.y = Math.sin(elapsed * 1.1 + i) * 0.03;
-        const target = skin.group.userData.targetScale ?? 0.9;
+        const target = skin.group.userData.targetScale ?? 1.05;
         const s = THREE.MathUtils.lerp(skin.group.scale.x, target, Math.min(1, dt * 8));
         skin.group.scale.setScalar(s);
       });
@@ -304,7 +304,9 @@ export class Game {
     }
 
     this.hud.mount(config.map.name);
-    this.hud.q('lock-prompt').addEventListener('click', () => this.input.requestLock());
+    const lockOverlay = this.hud.q('lock-prompt');
+    lockOverlay.addEventListener('mousedown', (e) => e.stopPropagation());
+    lockOverlay.addEventListener('click', () => this.input.requestLock());
     this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.4);
     this.hud.toast('Clic para fijar el ratón · ESPACIO para saltar del autobús', 'good');
     this.matchTime = 0;

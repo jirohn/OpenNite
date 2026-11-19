@@ -90,7 +90,11 @@ async function createWindow() {
       backgroundThrottling: false,
     },
   });
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    mainWindow?.focus();
+    mainWindow?.webContents.focus();
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 
   const devURL = process.env.VITE_DEV_SERVER_URL;

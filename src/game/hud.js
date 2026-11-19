@@ -4,7 +4,7 @@ import { clamp, formatTime } from '../core/utils.js';
 const TEMPLATE = `
 <div class="hud">
   <div class="crosshair" id="crosshair"></div>
-  <button class="interactive lock-prompt" id="lock-prompt">CLIC PARA FIJAR EL RATÓN</button>
+  <button class="interactive lock-overlay" id="lock-prompt"><span>CLIC PARA FIJAR EL RATÓN</span><small>El juego no responderá al ratón hasta que hagas clic aquí</small></button>
   <div class="hud-top-left">
     <div class="map-label" id="hud-map">ISLAS VERDES</div>
     <div class="kill-feed" id="kill-feed"></div>
