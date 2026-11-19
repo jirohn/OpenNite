@@ -1,0 +1,81 @@
+{
+  "name": "opennite",
+  "version": "0.1.0-alpha.1",
+  "description": "OpenNite - battle royale libre y de codigo abierto para PC, sin construccion.",
+  "main": "electron/main.js",
+  "author": "OpenNite Contributors",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "assets": "node scripts/fetch-assets.js",
+    "icons": "node scripts/build-icons.js",
+    "electron": "npm run build && electron .",
+    "dist:dir": "npm run icons && npm run build && electron-builder --dir",
+    "dist": "npm run icons && npm run build && electron-builder",
+    "dist:win": "npm run icons && npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "sharp": "^0.33.5",
+    "vite": "^6.0.5"
+  },
+  "build": {
+    "appId": "com.opennite.royale",
+    "productName": "OpenNite",
+    "copyright": "Copyright © OpenNite Contributors",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets/icons"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "jirohn",
+      "repo": "OpenNite",
+      "releaseType": "prerelease"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OpenNite"
+    },
+    "portable": {
+      "artifactName": "OpenNite-Portable-${version}.exe"
+    },
+    "artifactName": "OpenNite-Setup-${version}.${ext}",
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Game",
+      "icon": "assets/icons/icon.png"
+    }
+  }
+}

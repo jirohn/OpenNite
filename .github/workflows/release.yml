@@ -1,0 +1,51 @@
+name: Build & Release (Alpha)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Descargar modelos CC0
+        run: npm run assets
+
+      - name: Generar iconos
+        run: npm run icons
+
+      - name: Compilar renderer
+        run: npm run build
+
+      - name: Empaquetar y publicar release alfa
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EP_PRE_RELEASE: 'true'
+
+      - name: Subir artefactos como respaldo
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opennite-windows
+          path: |
+            release/*.exe
+            release/*.yml
+          if-no-files-found: ignore

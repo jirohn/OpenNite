@@ -1,0 +1,35 @@
+{
+  "id": "verdant-isles",
+  "name": "Islas Verdes",
+  "version": 2,
+  "seed": 872341,
+  "size": 4096,
+  "waterLevel": 1.5,
+  "theme": "temperate",
+  "biome": {
+    "baseHeight": 16,
+    "amplitude": 34,
+    "frequency": 0.00085,
+    "roughness": 7,
+    "treeDensity": 0.62,
+    "rockDensity": 0.3,
+    "grassDensity": 0.75,
+    "mountainHeight": 70
+  },
+  "lootDensity": 1,
+  "pois": [
+    { "name": "Puerto Verde", "type": "harbor", "x": -1180, "z": -1040, "radius": 205 },
+    { "name": "Villa Roble", "type": "town", "x": 860, "z": -1240, "radius": 190 },
+    { "name": "La Presa", "type": "dam", "x": 40, "z": -180, "radius": 130 },
+    { "name": "Torre Norte", "type": "tower", "x": -1420, "z": 1120, "radius": 105 },
+    { "name": "Campamento", "type": "outpost", "x": 1220, "z": 980, "radius": 150 },
+    { "name": "Ruinas del Mar", "type": "ruins", "x": -320, "z": 1520, "radius": 165 },
+    { "name": "Almacenes", "type": "warehouse", "x": 1560, "z": -160, "radius": 140 },
+    { "name": "Cabañas", "type": "village", "x": -720, "z": 380, "radius": 150 },
+    { "name": "Estación", "type": "facility", "x": 430, "z": 540, "radius": 125 },
+    { "name": "Acantilado", "type": "ruins", "x": 1700, "z": 1560, "radius": 120 },
+    { "name": "Isla Norte", "type": "town", "x": -1620, "z": -320, "radius": 145 },
+    { "name": "Molino", "type": "outpost", "x": 180, "z": -1380, "radius": 110 }
+  ],
+  "roads": [[0, 2], [2, 1], [2, 4], [4, 6], [0, 7], [7, 3], [2, 8], [8, 5], [1, 11], [6, 9], [10, 0], [10, 3]]
+}

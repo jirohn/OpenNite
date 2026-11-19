@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "updated": "2026-11-19",
+  "repository": "https://github.com/jirohn/OpenNite",
+  "baseUrl": "https://raw.githubusercontent.com/jirohn/OpenNite/main/public/maps/",
+  "maps": [
+    {
+      "id": "verdant-isles",
+      "name": "Islas Verdes",
+      "description": "Bosques densos, puertos y pueblos conectados por carreteras. Ideal para partidas largas.",
+      "file": "verdant-isles.json",
+      "version": 2,
+      "size": 4096,
+      "theme": "temperate",
+      "gradient": "linear-gradient(135deg,#3d7a4e,#87b96b 45%,#c9d9a0)",
+      "tags": ["Bosque", "Pueblos", "Clásico"]
+    },
+    {
+      "id": "dust-basin",
+      "name": "Cuenca Polvorienta",
+      "description": "Desierto abierto, refinerías y cañones. Poco cover, mucho duelo a larga distancia.",
+      "file": "dust-basin.json",
+      "version": 2,
+      "size": 4096,
+      "theme": "desert",
+      "gradient": "linear-gradient(135deg,#8b5a2b,#d9a15b 50%,#f0d6a0)",
+      "tags": ["Desierto", "Larga distancia"]
+    },
+    {
+      "id": "frost-peak",
+      "name": "Pico Helado",
+      "description": "Montañas nevadas, estaciones de esquí y un lago congelado. Verticalidad extrema.",
+      "file": "frost-peak.json",
+      "version": 2,
+      "size": 5120,
+      "theme": "snow",
+      "gradient": "linear-gradient(135deg,#5d7e9e,#a9c8dc 50%,#f2f7fb)",
+      "tags": ["Nieve", "Montaña", " Grande"]
+    },
+    {
+      "id": "crimson-badlands",
+      "name": "Badlands Carmesí",
+      "description": "Mesas rojizas, ruinas y un cañón central lleno de botín.Terreno muy irregular.",
+      "file": "crimson-badlands.json",
+      "version": 2,
+      "size": 4096,
+      "theme": "autumn",
+      "gradient": "linear-gradient(135deg,#7d3327,#c85a35 50%,#e8a76b)",
+      "tags": ["Ruinas", "Cañón", "Botín"]
+    }
+  ]
+}
