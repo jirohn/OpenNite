@@ -72,6 +72,7 @@ export class Player {
   placeOnBus() {
     this.inBus = true;
     this.gliding = false;
+    this.grounded = false;
     this.fallPeakY = 340;
     this.position.set(0, 340, this.world.half + 500);
     this.yaw = Math.PI;
@@ -82,6 +83,7 @@ export class Player {
   jumpFromBus() {
     if (!this.inBus) return;
     this.inBus = false;
+    this.grounded = false;
     this.gliding = true;
     this.fallPeakY = this.position.y;
     this.velocity.set(0, -3, -this.busSpeed * 0.45);

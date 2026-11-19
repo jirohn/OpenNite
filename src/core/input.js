@@ -40,7 +40,7 @@ export class Input {
       this.emit('mouseup', e.button);
     };
     this._onWheel = (e) => {
-      if (!this.locked || !this.enabled) return;
+      if (!this.enabled || (!this.locked && !this.autoLock)) return;
       this.wheel += Math.sign(e.deltaY);
     };
     this._onLockChange = () => {
