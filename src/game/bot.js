@@ -146,6 +146,7 @@ export class Bot {
     const dist = from.distanceTo(to);
     if (dist > 190) return;
     this.fireCooldown = 60 / this.diff.rpm * (0.85 + Math.random() * 0.3);
+    this.character.fire('ar');
 
     const dir = _v2.copy(to).sub(from).normalize();
     const spread = this.diff.accuracy * (1 + dist / 120);
@@ -185,8 +186,14 @@ export class Bot {
   }
 
   muzzlePosition() {
-    this.character.weaponMount.updateWorldMatrix(true, false);
-    return this.character.weaponMount.getWorldPosition(new THREE.Vector3());
+    const mount = this.character.weaponMount;
+    const weapon = mount.children[0];
+    if (weapon?.userData?.muzzle) {
+      mount.updateWorldMatrix(true, true);
+      return weapon.localToWorld(weapon.userData.muzzle.clone());
+    }
+    mount.updateWorldMatrix(true, false);
+    return mount.getWorldPosition(new THREE.Vector3());
   }
 
   update(dt, player, bots, storm) {
@@ -278,7 +285,8 @@ export class Bot {
     }
 
     this.character.group.position.copy(this.position);
-    this.character.group.rotation.y = this.yaw;
+    // El GLB mira hacia +Z; el frente del bot es -Z.
+    this.character.group.rotation.y = this.yaw + Math.PI;
     if (!this.dropping) this.character.setLocomotion(Math.hypot(this.velocity.x, this.velocity.z), this.grounded);
     if (!this.dropping && Math.random() < dt * 0.5) this.character.play('idle');
     this.character.update(dt);

@@ -24,6 +24,8 @@ export class Player {
     this.velocity = new THREE.Vector3();
     this.yaw = 0;
     this.pitch = -0.12;
+    this.padCooldown = 0;
+    this.onJumpPad = null;
     this.hp = 100;
     this.shield = 0;
     this.maxShield = 100;
@@ -160,7 +162,8 @@ export class Player {
       this.position.z -= this.busSpeed * dt;
       this.position.y = 340 + Math.sin(this.time * 0.8) * 1.2;
       this.character.group.position.copy(this.position);
-      this.character.group.rotation.y = this.yaw;
+      // El GLB mira hacia +Z; la cámara/frente del juego miran hacia -Z.
+    this.character.group.rotation.y = this.yaw + Math.PI;
       this.character.play('idle');
       this.character.update(dt);
       this.updateCamera(dt);
@@ -231,9 +234,26 @@ export class Player {
       this.grounded = false;
     }
 
+    // Bombas de fuerza: impulsos verticales para saltos grandes.
+    this.padCooldown = Math.max(0, this.padCooldown - dt);
+    if (this.padCooldown <= 0 && !this.gliding && !this.inBus) {
+      const pad = this.world.getJumpPad?.(this.position);
+      if (pad && Math.abs(this.position.y - pad.y) < 2.6) {
+        this.velocity.y = pad.power;
+        this.grounded = false;
+        this.gliding = false;
+        this.fallPeakY = this.position.y;
+        this.padCooldown = 0.75;
+        this.audio.play('jump');
+        this.character.play('jump');
+        this.onJumpPad?.(this.position, pad);
+      }
+    }
+
     const planarSpeed = Math.hypot(this.velocity.x, this.velocity.z);
     this.character.group.position.copy(this.position);
-    this.character.group.rotation.y = this.yaw;
+    // El GLB mira hacia +Z; la cámara/frente del juego miran hacia -Z.
+    this.character.group.rotation.y = this.yaw + Math.PI;
     if (this.gliding) this.character.play('jump', 0.15);
     else this.character.setLocomotion(planarSpeed, this.grounded);
     this.character.update(dt);
@@ -319,6 +339,7 @@ export class Player {
   equipStarting() {
     this.inventory.addWeapon('pistol', 0);
     this.inventory.addAmmo('light', 60);
+    this.inventory.addWeapon('pickaxe', 0);
     this.inventory.switchTo(0);
   }
 }

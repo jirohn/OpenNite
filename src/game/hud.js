@@ -141,15 +141,15 @@ export class HUD {
       this.q('slots').innerHTML = inv.slots.map((s, i) => `
         <div class="slot ${i === inv.active ? 'active' : ''} ${s ? '' : 'empty'}">
           <span class="n">${i + 1}</span><span>${s ? s.def.icon : ''}</span>
-          <span class="ammo">${s ? s.ammo : ''}</span>
+          <span class="ammo">${s ? (s.def.melee ? '∞' : s.ammo) : ''}</span>
         </div>`).join('');
     }
     const cur = inv.current();
     this.q('weapon-name').textContent = cur ? cur.name : 'Sin arma';
     if (cur) this.q('weapon-name').style.color = cur.color;
-    this.q('ammo-num').textContent = cur ? cur.ammo : '0';
-    this.q('ammo-reserve').textContent = cur ? `/ ${inv.ammo[cur.def.ammo]}` : '';
-    this.q('reload-hint').textContent = inv.reloading ? 'RECARGANDO...' : cur && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
+    this.q('ammo-num').textContent = cur ? (cur.def.melee ? '∞' : cur.ammo) : '0';
+    this.q('ammo-reserve').textContent = cur && cur.def.ammo ? `/ ${inv.ammo[cur.def.ammo] ?? 0}` : '';
+    this.q('reload-hint').textContent = inv.reloading ? 'RECARGANDO...' : cur && !cur.def.melee && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
 
     // Contadores
     const alive = 1 + bots.filter((b) => b.alive).length;

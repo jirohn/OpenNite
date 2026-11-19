@@ -5,7 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { clamp, distance2D, raySphere } from '../core/utils.js';
-import { loadCharacterModel, Character, createWeaponModel, createParachute } from './character.js';
+import { loadCharacterModel, Character, createParachute, attachWeapon } from './character.js';
 import { World } from './world.js';
 import { Player } from './player.js';
 import { Bot } from './bot.js';
@@ -165,9 +165,7 @@ export class Game {
       ch.group.position.set(0, 0, 0);
       ch.group.rotation.y = -0.5;
       ch.play('dance');
-      const weapon = createWeaponModel('ar');
-      weapon.position.set(0.45, 1.25, 0.15);
-      ch.group.add(weapon);
+      attachWeapon(ch, 'ar');
       this.preview.add(ch.group);
       this.previewCharacter = ch;
 
@@ -183,10 +181,7 @@ export class Game {
           galleryAction.setLoop(THREE.LoopRepeat, Infinity);
           galleryAction.clampWhenFinished = false;
         }
-        const weapon = createWeaponModel(i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
-        weapon.position.set(0.38, 1.2, 0.2);
-        weapon.scale.multiplyScalar(0.75);
-        skin.group.add(weapon);
+        attachWeapon(skin, i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
         const disc = new THREE.Mesh(
           new THREE.CylinderGeometry(0.66, 0.72, 0.09, 24),
           new THREE.MeshStandardMaterial({ color: 0x12161f, emissive: color, emissiveIntensity: 0.25, metalness: 0.5, roughness: 0.4 }),
@@ -271,6 +266,11 @@ export class Game {
       if (damage >= 99) this.hud.toast('¡Caída mortal!', 'warn');
       this.onBotHit(this.player, damage, 'body', { name: 'la caída' }, null);
     };
+    this.player.onJumpPad = (position, pad) => {
+      this.effects.burst(new THREE.Vector3(pad.x, pad.y + 0.5, pad.z), 22, [0x4ff0ff, 0xffffff, 0x2a8dff],
+        { speed: 7, size: 0.22, life: 0.65, lift: 6, gravity: 3 });
+      this.hud.toast('¡Bomba de fuerza!', 'good');
+    };
     this.scene.add(this.player.character.group);
     this.player.equipStarting();
     this.player.placeOnBus();
@@ -298,8 +298,7 @@ export class Game {
       const ch = new Character(gltf, { color: botColors[i % botColors.length] });
       this.scene.add(ch.group);
       const bot = new Bot(ch, this.world, this, i, sp);
-      const w = createWeaponModel('ar');
-      ch.weaponMount.add(w);
+      attachWeapon(ch, 'ar');
       this.bots.push(bot);
     }
 
@@ -344,9 +343,7 @@ export class Game {
     const type = inv?.current()?.type || null;
     if (type === this.lastWeaponType) return;
     this.lastWeaponType = type;
-    const mount = this.player.character.weaponMount;
-    while (mount.children.length) mount.remove(mount.children[0]);
-    if (type) mount.add(createWeaponModel(type));
+    attachWeapon(this.player.character, type);
   }
 
   // ---------------------- Combate ----------------------
@@ -360,6 +357,7 @@ export class Game {
     }
     this.audio.play('shoot', { weapon: shot.weapon.type });
     this.player.addRecoil(shot.recoil);
+    this.player.character.fire(shot.weapon.type);
     const origin = this.camera.position.clone();
     const muzzle = this.player.getMuzzlePosition();
     const dirBase = this.player.getAimDirection(0);

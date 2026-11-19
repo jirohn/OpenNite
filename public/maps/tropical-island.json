@@ -1,0 +1,32 @@
+{
+  "id": "tropical-island",
+  "name": "Isla Tropical",
+  "version": 1,
+  "seed": 4471209,
+  "size": 4096,
+  "waterLevel": 1.5,
+  "theme": "temperate",
+  "island": true,
+  "biome": {
+    "baseHeight": 14,
+    "amplitude": 26,
+    "frequency": 0.00095,
+    "roughness": 5,
+    "treeDensity": 0.78,
+    "rockDensity": 0.24,
+    "grassDensity": 0.85,
+    "mountainHeight": 86
+  },
+  "lootDensity": 1.15,
+  "pois": [
+    { "name": "Playa Palma", "type": "harbor", "x": -880, "z": -520, "radius": 165 },
+    { "name": "Pueblo Costero", "type": "town", "x": 610, "z": -720, "radius": 175 },
+    { "name": "Volcán", "type": "ruins", "x": 0, "z": 0, "radius": 145 },
+    { "name": "Torre del Faro", "type": "tower", "x": -250, "z": 950, "radius": 110 },
+    { "name": "Jungla Norte", "type": "village", "x": 900, "z": 560, "radius": 150 },
+    { "name": "Cala Escondida", "type": "outpost", "x": -1020, "z": 460, "radius": 125 },
+    { "name": "Ruinas del Templo", "type": "ruins", "x": 350, "z": -1080, "radius": 135 },
+    { "name": "Campo de Palmas", "type": "facility", "x": -520, "z": -1020, "radius": 120 }
+  ],
+  "roads": [[0, 2], [2, 1], [2, 3], [3, 4], [4, 6], [6, 7], [7, 0], [5, 3], [5, 7], [1, 4]]
+}

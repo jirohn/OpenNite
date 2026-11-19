@@ -9,6 +9,11 @@ export const RARITIES = [
 ];
 
 export const WEAPONS = {
+  pickaxe: {
+    id: 'pickaxe', name: 'Pico', icon: '⛏', dmg: 58, rpm: 105, mag: 1, reload: 0,
+    spread: 0, adsSpread: 0, range: 4.5, falloff: 0, pellets: 1, recoil: 1.1,
+    auto: false, ammo: null, rarity: 0, scope: false, melee: true,
+  },
   pistol: {
     id: 'pistol', name: 'Pistola', icon: '🔫', dmg: 26, rpm: 320, mag: 12, reload: 1.25,
     spread: 0.014, adsSpread: 0.004, range: 130, falloff: 0.0009, pellets: 1, recoil: 0.55,
@@ -94,7 +99,7 @@ export class Inventory {
 
   reload() {
     const w = this.current();
-    if (!w || w.ammo >= w.def.mag || this.reloading || this.ammo[w.def.ammo] <= 0) return false;
+    if (!w || !w.def.ammo || w.ammo >= w.def.mag || this.reloading || this.ammo[w.def.ammo] <= 0) return false;
     this.reloading = true;
     this.reloadTime = w.def.reload;
     return true;
@@ -125,11 +130,13 @@ export class Inventory {
     const w = this.current();
     if (!w || this.reloading) return null;
     if (this.cooldown > 0) return null;
-    if (w.ammo <= 0) {
-      this.reload();
-      return null;
+    if (!w.def.melee) {
+      if (w.ammo <= 0) {
+        this.reload();
+        return null;
+      }
+      w.ammo--;
     }
-    w.ammo--;
     this.cooldown = 60 / w.def.rpm;
     this.lastShotAt = this.time;
     return {
@@ -150,7 +157,7 @@ export function randomLoot(rnd) {
   if (roll < 0.16) return { kind: 'shield', amount: 50, name: 'Escudo 50', icon: '🛡️', color: '#41b7ff' };
   if (roll < 0.24) return { kind: 'health', amount: 35, name: 'Botiquín', icon: '➕', color: '#5bd88a' };
   if (roll < 0.31) return { kind: 'shield', amount: 100, name: 'Escudo 100', icon: '🔵', color: '#41b7ff' };
-  const types = Object.keys(WEAPONS);
+  const types = Object.keys(WEAPONS).filter((id) => !WEAPONS[id].melee);
   const type = types[Math.floor(rnd() * types.length)];
   const maxRar = WEAPONS[type].rarity;
   const rarity = Math.floor(rnd() ** 1.8 * (maxRar + 1));

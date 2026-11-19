@@ -16,6 +16,17 @@
       "tags": ["Bosque", "Pueblos", "Clásico"]
     },
     {
+      "id": "tropical-island",
+      "name": "Isla Tropical",
+      "description": "Isla circular con palmeras, playas, volcán y puertos. Bombas de fuerza repartidas por todo el mapa.",
+      "file": "tropical-island.json",
+      "version": 1,
+      "size": 4096,
+      "theme": "temperate",
+      "gradient": "linear-gradient(135deg,#1e7d8c,#4fc3a1 45%,#f2e2a8)",
+      "tags": ["Isla", "Palmeras", "Nuevo"]
+    },
+    {
       "id": "dust-basin",
       "name": "Cuenca Polvorienta",
       "description": "Desierto abierto, refinerías y cañones. Poco cover, mucho duelo a larga distancia.",
