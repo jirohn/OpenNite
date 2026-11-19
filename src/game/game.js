@@ -15,6 +15,9 @@ import { Storm } from './storm.js';
 import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
 
+const SKIN_COLORS = [0xffb45c, 0x4ecdc4, 0xff6b9d, 0x9b6dff, 0x6bd97f, 0x5aa9ff, 0xf2e35a, 0xf2f2f2];
+const SKIN_ANIMS = ['dance', 'wave', 'idle', 'yes', 'dance', 'no', 'wave', 'idle'];
+
 export class Game {
   constructor(canvas, uiRoot, settings, audio, input, app) {
     this.canvas = canvas;
@@ -25,6 +28,9 @@ export class Game {
     this.app = app;
     this.clock = new THREE.Clock();
     this.mode = 'preview';
+    this.previewSkins = [];
+    this.skinPreviewMode = false;
+    this.selectedPreviewColor = settings.get('playerColor');
     this.running = false;
     this.paused = false;
     this.bots = [];
@@ -57,6 +63,7 @@ export class Game {
       if (this.previewCharacter && this.mode === 'preview') {
         this.previewCharacter.setColor(this.settings.get('playerColor'));
       }
+      if (this.mode === 'preview') this.setPreviewSkin(this.settings.get('playerColor'));
       if (this.player?.character && (this.mode === 'playing' || this.mode === 'paused')) {
         this.player.character.setColor(this.settings.get('playerColor'));
       }
@@ -141,6 +148,7 @@ export class Game {
     );
     pedestal.position.y = -0.25;
     this.preview.add(pedestal);
+    this.previewPedestal = pedestal;
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(2.25, 0.045, 8, 64),
       new THREE.MeshBasicMaterial({ color: 0xff8a2b }),
@@ -162,6 +170,35 @@ export class Game {
       ch.group.add(weapon);
       this.preview.add(ch.group);
       this.previewCharacter = ch;
+
+      // Ocho maniquíes 3D animados, uno por skin, para elegir aspecto en el lobby.
+      SKIN_COLORS.forEach((color, i) => {
+        const skin = new Character(gltf, { color });
+        skin.group.position.set(1.2 + i * 0.8, 0, 0);
+        skin.group.rotation.y = -0.35;
+        skin.group.scale.setScalar(0.92);
+        skin.play(SKIN_ANIMS[i]);
+        const galleryAction = skin.actions[SKIN_ANIMS[i]];
+        if (galleryAction) {
+          galleryAction.setLoop(THREE.LoopRepeat, Infinity);
+          galleryAction.clampWhenFinished = false;
+        }
+        const weapon = createWeaponModel(i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
+        weapon.position.set(0.38, 1.2, 0.2);
+        weapon.scale.multiplyScalar(0.75);
+        skin.group.add(weapon);
+        const disc = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.66, 0.72, 0.09, 24),
+          new THREE.MeshStandardMaterial({ color: 0x12161f, emissive: color, emissiveIntensity: 0.25, metalness: 0.5, roughness: 0.4 }),
+        );
+        disc.position.y = -0.05;
+        skin.group.add(disc);
+        skin.group.userData.color = color;
+        skin.group.userData.disc = disc;
+        this.preview.add(skin.group);
+        this.previewSkins.push(skin);
+      });
+      this.setSkinPreview(this.skinPreviewMode);
       this.app.onAssetsReady?.();
     } catch (error) {
       console.error('No se pudo cargar el modelo CC0:', error);
@@ -169,16 +206,48 @@ export class Game {
     }
   }
 
+  /** Activa la galería de skins 3D (lobby) o el héroe singular (menú). */
+  setSkinPreview(active) {
+    this.skinPreviewMode = !!active;
+    if (this.previewCharacter) this.previewCharacter.group.visible = !this.skinPreviewMode;
+    for (const skin of this.previewSkins) skin.group.visible = this.skinPreviewMode;
+    if (this.previewPedestal) this.previewPedestal.visible = !this.skinPreviewMode;
+    if (this.previewRing) this.previewRing.visible = !this.skinPreviewMode;
+    this.setPreviewSkin(this.selectedPreviewColor);
+  }
+
+  setPreviewSkin(color) {
+    this.selectedPreviewColor = color;
+    for (const skin of this.previewSkins) {
+      const active = skin.group.userData.color === color;
+      skin.group.userData.targetScale = active ? 1.14 : 0.9;
+      if (skin.group.userData.disc) skin.group.userData.disc.material.emissiveIntensity = active ? 1.1 : 0.2;
+    }
+  }
+
   updatePreview(dt, elapsed) {
-    this.camera.position.set(3.1 + Math.sin(elapsed * 0.15) * 0.4, 2.3 + Math.sin(elapsed * 0.22) * 0.12, 4.15);
-    this.camera.lookAt(0, 1.2, 0);
+    if (this.skinPreviewMode) {
+      this.camera.position.set(0.2 + Math.sin(elapsed * 0.12) * 0.25, 2.75, 9.8);
+      this.camera.lookAt(0.2, 1.15, 0);
+      this.previewSkins.forEach((skin, i) => {
+        skin.update(dt);
+        skin.group.rotation.y = -0.35 + Math.sin(elapsed * 0.5 + i * 0.6) * 0.18;
+        skin.group.position.y = Math.sin(elapsed * 1.1 + i) * 0.03;
+        const target = skin.group.userData.targetScale ?? 0.9;
+        const s = THREE.MathUtils.lerp(skin.group.scale.x, target, Math.min(1, dt * 8));
+        skin.group.scale.setScalar(s);
+      });
+    } else {
+      this.camera.position.set(3.1 + Math.sin(elapsed * 0.15) * 0.4, 2.3 + Math.sin(elapsed * 0.22) * 0.12, 4.15);
+      this.camera.lookAt(0, 1.2, 0);
+      if (this.previewCharacter) {
+        this.previewCharacter.update(dt);
+        this.previewCharacter.group.rotation.y = -0.5 + Math.sin(elapsed * 0.3) * 0.35;
+      }
+      if (this.previewRing) this.previewRing.rotation.z += dt * 0.25;
+    }
     this.camera.fov = 46;
     this.camera.updateProjectionMatrix();
-    if (this.previewCharacter) {
-      this.previewCharacter.update(dt);
-      this.previewCharacter.group.rotation.y = -0.5 + Math.sin(elapsed * 0.3) * 0.35;
-    }
-    if (this.previewRing) this.previewRing.rotation.z += dt * 0.25;
   }
 
   // ---------------------- Partida ----------------------

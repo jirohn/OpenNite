@@ -30,6 +30,7 @@ export class UI {
     el.innerHTML = html;
     this.root.appendChild(el);
     this.current = el;
+    this.app.game?.setSkinPreview?.(el.classList.contains('lobby-screen'));
     return el;
   }
 
@@ -98,7 +99,7 @@ export class UI {
     const maps = this.maps.list();
     if (!maps.some((m) => m.id === this.selectedMap)) this.selectedMap = maps[0]?.id || 'verdant-isles';
     const el = this.screen(`
-      <div class="panel-screen">
+      <div class="panel-screen lobby-screen">
         <div class="panel">
           <div class="panel-head"><button class="btn small close-x interactive" data-back>✕</button><h2>Desplegar partida</h2><div class="spacer"></div><span class="status-pill">ALPHA</span></div>
           <div class="panel-body">
@@ -119,6 +120,7 @@ export class UI {
                 <div class="field"><label>Dificultad <span class="value" id="diff-val">${this.settings.get('botDifficulty')}</span></label><select id="diff"><option value="easy">Fácil</option><option value="normal">Normal</option><option value="hard">Difícil</option></select></div>
                 <div class="field"><label>Calidad gráfica <span class="value">${QUALITY_PRESETS[this.settings.get('quality')]?.name}</span></label><select id="quality">${Object.entries(QUALITY_PRESETS).map(([k, v]) => `<option value="${k}" ${k === this.settings.get('quality') ? 'selected' : ''}>${v.name}</option>`).join('')}</select></div>
                 <div class="field"><label>Aspecto (skin) <span class="value">${SKIN_NAMES[SKINS.indexOf(this.settings.get('playerColor'))] || 'Personalizado'}</span></label>
+                <p class="hint" style="margin:-2px 0 9px">8 modelos 3D animados en la galería de la derecha. Pulsa uno para equiparlo.</p>
                   <div id="skin-row" class="skin-row">
                     ${SKINS.map((c, i) => `
                       <button class="interactive skin-swatch ${c === this.settings.get('playerColor') ? 'selected' : ''}" data-skin="${c}" title="${SKIN_NAMES[i]} · ${hexColor(c)}" style="border-color:${c === this.settings.get('playerColor') ? 'var(--accent)' : 'var(--line)'}">
@@ -136,7 +138,8 @@ export class UI {
           </div>
           <div class="panel-foot"><button class="btn small interactive" data-back>Volver</button><button class="btn primary interactive" data-start style="min-width:190px;justify-content:center">DESPLEGAR ▶</button></div>
         </div>
-      </div>`);
+        <div class="skin-gallery-label"><span>Galería 3D</span><strong>8 skins animados</strong></div>
+      </div>`, 'lobby-screen');
 
     el.querySelector('#diff').value = this.settings.get('botDifficulty');
     this.bind(el, '[data-map]', 'click', (e, node) => {

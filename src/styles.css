@@ -138,6 +138,35 @@ html, body {
 
 /* ---------- Paneles ---------- */
 .panel-screen { background: rgba(6, 8, 12, 0.86); backdrop-filter: blur(14px); align-items: center; justify-content: center; }
+
+/* El lobby deja la mitad derecha libre para la galería 3D animada. */
+.lobby-screen {
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 22px;
+  background:
+    linear-gradient(90deg, rgba(6,8,12,0.94) 0%, rgba(6,8,12,0.9) 34%, rgba(6,8,12,0.55) 54%, rgba(6,8,12,0.06) 74%),
+    linear-gradient(0deg, rgba(6,8,12,0.5), transparent 30%);
+  backdrop-filter: none;
+}
+.lobby-screen .panel { width: min(560px, 46vw); max-height: calc(100vh - 44px); }
+.lobby-screen .two-col { grid-template-columns: 1fr; gap: 18px; }
+.lobby-screen .panel-body { padding: 18px 20px; }
+.lobby-screen .panel-head { padding: 18px 20px; }
+.lobby-screen .panel-head h2 { font-size: 25px; }
+.lobby-screen .panel-foot { padding: 14px 20px; }
+.lobby-screen .map-thumb { height: 62px; }
+.lobby-screen .map-info { padding: 9px 12px; }
+.lobby-screen .map-info h3 { margin: 0 0 3px; font-size: 14px; }
+.lobby-screen .map-info p { margin: 0; font-size: 11px; }
+.skin-gallery-label {
+  position: absolute; top: 34px; right: 44px; text-align: right;
+  pointer-events: none; text-transform: uppercase; letter-spacing: 3px;
+  color: var(--accent); text-shadow: 0 2px 14px #000;
+}
+.skin-gallery-label span { display: block; font-size: 11px; opacity: 0.85; }
+.skin-gallery-label strong { display: block; font-family: var(--font-title); font-size: 21px; color: var(--text); margin-top: 4px; }
+
 .panel {
   width: min(940px, 92vw);
   max-height: 88vh;
