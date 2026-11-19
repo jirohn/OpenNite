@@ -4,6 +4,7 @@ import { formatTime } from '../core/utils.js';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const SKINS = [0xffb45c, 0x4ecdc4, 0xff6b9d, 0x9b6dff, 0x6bd97f, 0x5aa9ff, 0xf2e35a, 0xf2f2f2];
+const SKIN_NAMES = ['Ámbar', 'Cian', 'Rosa', 'Violeta', 'Esmeralda', 'Azul', 'Oro', 'Blanco'];
 const hexColor = (c) => `#${Number(c).toString(16).padStart(6, '0')}`;
 
 export class UI {
@@ -117,9 +118,13 @@ export class UI {
                 <div class="field"><label>Rivales (bots) <span class="value" id="bots-val">${this.settings.get('maxBots')}</span></label><input type="range" id="bots" min="0" max="60" step="1" value="${this.settings.get('maxBots')}"></div>
                 <div class="field"><label>Dificultad <span class="value" id="diff-val">${this.settings.get('botDifficulty')}</span></label><select id="diff"><option value="easy">Fácil</option><option value="normal">Normal</option><option value="hard">Difícil</option></select></div>
                 <div class="field"><label>Calidad gráfica <span class="value">${QUALITY_PRESETS[this.settings.get('quality')]?.name}</span></label><select id="quality">${Object.entries(QUALITY_PRESETS).map(([k, v]) => `<option value="${k}" ${k === this.settings.get('quality') ? 'selected' : ''}>${v.name}</option>`).join('')}</select></div>
-                <div class="field"><label>Aspecto (skin)</label>
-                  <div id="skin-row" style="display:flex;gap:8px;flex-wrap:wrap">
-                    ${SKINS.map((c) => `<button class="interactive" data-skin="${c}" title="${hexColor(c)}" style="width:32px;height:32px;border-radius:9px;cursor:pointer;border:2px solid ${c === this.settings.get('playerColor') ? 'var(--accent)' : 'var(--line)'};background:${hexColor(c)}"></button>`).join('')}
+                <div class="field"><label>Aspecto (skin) <span class="value">${SKIN_NAMES[SKINS.indexOf(this.settings.get('playerColor'))] || 'Personalizado'}</span></label>
+                  <div id="skin-row" class="skin-row">
+                    ${SKINS.map((c, i) => `
+                      <button class="interactive skin-swatch ${c === this.settings.get('playerColor') ? 'selected' : ''}" data-skin="${c}" title="${SKIN_NAMES[i]} · ${hexColor(c)}" style="border-color:${c === this.settings.get('playerColor') ? 'var(--accent)' : 'var(--line)'}">
+                        <span class="skin-dot" style="background:${hexColor(c)}"></span>
+                        <span class="skin-name">${SKIN_NAMES[i]}</span>
+                      </button>`).join('')}
                   </div>
                 </div>
                 <div class="hint" style="margin-top:20px">
@@ -150,10 +155,16 @@ export class UI {
     });
     this.bind(el, '#quality', 'change', (e, node) => this.settings.set('quality', node.value));
     this.bind(el, '[data-skin]', 'click', (e, node) => {
-      this.settings.set('playerColor', Number(node.dataset.skin));
+      const color = Number(node.dataset.skin);
+      this.settings.set('playerColor', color);
       for (const sw of el.querySelectorAll('[data-skin]')) {
-        sw.style.borderColor = Number(sw.dataset.skin) === this.settings.get('playerColor') ? 'var(--accent)' : 'var(--line)';
+        const active = Number(sw.dataset.skin) === color;
+        sw.classList.toggle('selected', active);
+        sw.style.borderColor = active ? 'var(--accent)' : 'var(--line)';
       }
+      const label = node.closest('.field')?.querySelector('.value');
+      if (label && SKINS.includes(color)) label.textContent = SKIN_NAMES[SKINS.indexOf(color)];
+      this.audio?.play?.('click');
     });
     this.bind(el, '[data-start]', 'click', () => {
       this.app.startMatch(this.selectedMap);

@@ -162,9 +162,9 @@ export class Game {
   }
 
   updatePreview(dt, elapsed) {
-    this.camera.position.set(4.4 + Math.sin(elapsed * 0.15) * 0.6, 2.75 + Math.sin(elapsed * 0.22) * 0.15, 5.8);
-    this.camera.lookAt(0, 1.35, 0);
-    this.camera.fov = 52;
+    this.camera.position.set(3.1 + Math.sin(elapsed * 0.15) * 0.4, 2.3 + Math.sin(elapsed * 0.22) * 0.12, 4.15);
+    this.camera.lookAt(0, 1.2, 0);
+    this.camera.fov = 46;
     this.camera.updateProjectionMatrix();
     if (this.previewCharacter) {
       this.previewCharacter.update(dt);

@@ -40,7 +40,7 @@ export class Player {
     this.recoil = 0;
     this.recoilYaw = 0;
     this.bob = 0;
-    this.cameraDistance = 3.8;
+    this.cameraDistance = 3.35;
     this.inventory = new Inventory();
     this.kills = 0;
     this.damageDealt = 0;
