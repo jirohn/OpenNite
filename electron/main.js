@@ -43,18 +43,40 @@ function registerIPC() {
 
   ipcMain.handle('maps:list', () => readJSON(mapsIndex, []));
   ipcMain.handle('maps:read', (_event, id) => readJSON(join(mapsDir, `${safeId(id)}.json`), null));
-  ipcMain.handle('maps:download', async (_event, { id, url, version } = {}) => {
+  ipcMain.handle('maps:download', async (_event, { id, url, version, binary } = {}) => {
     const clean = safeId(id);
     if (!clean || !/^https:\/\//i.test(String(url))) throw new Error('URL de mapa no válida');
-    const response = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    const response = await fetch(url, { signal: AbortSignal.timeout(60000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const text = await response.text();
+
+    const isGlb = !!binary || /\.glb(?:$|\?)/i.test(String(url));
     let data;
-    try { data = JSON.parse(text); } catch { throw new Error('El mapa descargado no es JSON válido'); }
-    if (!data.id || !data.seed) throw new Error('Formato de mapa no reconocido');
-    await writeFile(join(mapsDir, `${clean}.json`), JSON.stringify(data, null, 2), 'utf8');
+    let file;
+    if (isGlb) {
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.subarray(0, 4).toString('ascii') !== 'glTF') {
+        throw new Error('El archivo descargado no es un GLB válido');
+      }
+      file = `${clean}.glb`;
+      await writeFile(join(mapsDir, file), bytes);
+      data = { id: clean, name: clean, type: 'glb', file, version: version || 1 };
+    } else {
+      const text = await response.text();
+      try { data = JSON.parse(text); } catch { throw new Error('El mapa descargado no es JSON válido'); }
+      if (!data.id || !data.seed) throw new Error('Formato de mapa no reconocido');
+      file = `${clean}.json`;
+      await writeFile(join(mapsDir, file), JSON.stringify(data, null, 2), 'utf8');
+    }
+
     const list = await readJSON(mapsIndex, []);
-    const item = { id: clean, name: data.name || clean, version: version || data.version || 1, installedAt: Date.now() };
+    const item = {
+      id: clean,
+      name: data.name || clean,
+      version: version || data.version || 1,
+      file,
+      type: data.type || (isGlb ? 'glb' : 'json'),
+      installedAt: Date.now(),
+    };
     const idx = list.findIndex((m) => m.id === clean);
     if (idx >= 0) list[idx] = item; else list.push(item);
     await writeFile(mapsIndex, JSON.stringify(list, null, 2), 'utf8');
@@ -82,7 +104,7 @@ async function createWindow() {
     backgroundColor: '#0b0d12',
     show: false,
     webPreferences: {
-      preload: join(__dirname, 'preload.js'),
+      preload: join(__dirname, 'preload.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -104,7 +126,7 @@ async function createWindow() {
   } else {
     const dist = join(rootDir, 'dist');
     if (!existsSync(dist)) throw new Error('No existe dist/. Ejecuta npm run build primero.');
-    server = await createStaticServer(dist);
+    server = await createStaticServer(dist, mapsDir);
     await mainWindow.loadURL(`http://127.0.0.1:${server.port}/index.html`);
   }
 }

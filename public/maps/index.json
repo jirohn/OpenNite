@@ -5,59 +5,19 @@
   "baseUrl": "https://raw.githubusercontent.com/jirohn/OpenNite/main/public/maps/",
   "maps": [
     {
-      "id": "verdant-isles",
-      "name": "Islas Verdes",
-      "description": "Bosques densos, puertos y pueblos conectados por carreteras. Ideal para partidas largas.",
-      "file": "verdant-isles.json",
-      "version": 2,
-      "size": 4096,
-      "theme": "temperate",
-      "gradient": "linear-gradient(135deg,#3d7a4e,#87b96b 45%,#c9d9a0)",
-      "tags": ["Bosque", "Pueblos", "Clásico"]
-    },
-    {
-      "id": "tropical-island",
-      "name": "Isla Tropical",
-      "description": "Isla circular con palmeras, playas, volcán y puertos. Bombas de fuerza repartidas por todo el mapa.",
-      "file": "tropical-island.json",
+      "id": "battle-royale-town-and-airfield",
+      "name": "Pueblo y Aeródromo",
+      "description": "Mapa único de OpenNite: pueblo abandonado, gasolinera, torre de control, hangar y pista. Escena 3D completa descargada desde GitHub (CC0).",
+      "file": "battle-royale-town-and-airfield.glb",
       "version": 1,
-      "size": 4096,
+      "size": 432,
+      "scale": 6,
+      "type": "glb",
       "theme": "temperate",
-      "gradient": "linear-gradient(135deg,#1e7d8c,#4fc3a1 45%,#f2e2a8)",
-      "tags": ["Isla", "Palmeras", "Nuevo"]
-    },
-    {
-      "id": "dust-basin",
-      "name": "Cuenca Polvorienta",
-      "description": "Desierto abierto, refinerías y cañones. Poco cover, mucho duelo a larga distancia.",
-      "file": "dust-basin.json",
-      "version": 2,
-      "size": 4096,
-      "theme": "desert",
-      "gradient": "linear-gradient(135deg,#8b5a2b,#d9a15b 50%,#f0d6a0)",
-      "tags": ["Desierto", "Larga distancia"]
-    },
-    {
-      "id": "frost-peak",
-      "name": "Pico Helado",
-      "description": "Montañas nevadas, estaciones de esquí y un lago congelado. Verticalidad extrema.",
-      "file": "frost-peak.json",
-      "version": 2,
-      "size": 5120,
-      "theme": "snow",
-      "gradient": "linear-gradient(135deg,#5d7e9e,#a9c8dc 50%,#f2f7fb)",
-      "tags": ["Nieve", "Montaña", " Grande"]
-    },
-    {
-      "id": "crimson-badlands",
-      "name": "Badlands Carmesí",
-      "description": "Mesas rojizas, ruinas y un cañón central lleno de botín.Terreno muy irregular.",
-      "file": "crimson-badlands.json",
-      "version": 2,
-      "size": 4096,
-      "theme": "autumn",
-      "gradient": "linear-gradient(135deg,#7d3327,#c85a35 50%,#e8a76b)",
-      "tags": ["Ruinas", "Cañón", "Botín"]
+      "gradient": "linear-gradient(135deg,#5b6b70,#a8b39c 50%,#d2c39a)",
+      "tags": ["CC0", "GLB", "Pueblo", "Aeródromo"],
+      "source": "https://3dassets.dev/packs/battle-royale-town-and-airfield",
+      "license": "CC0 1.0 Universal"
     }
   ]
 }

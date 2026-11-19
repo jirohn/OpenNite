@@ -48,7 +48,7 @@ export class Bot {
     this.fireCooldown = Math.random();
     this.strafe = Math.random() > 0.5 ? 1 : -1;
     this.strafeTimer = 1 + Math.random() * 2;
-    this.destination = spawn.clone();
+    this.destination = new THREE.Vector3(spawn.x, spawn.y || 0, spawn.z);
     this.kills = 0;
     this.shotsFired = 0;
     this.time = 0;

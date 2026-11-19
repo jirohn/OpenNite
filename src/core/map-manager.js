@@ -29,6 +29,8 @@ export class MapManager {
         try {
           data = this.api ? await this.api.read(item.id) : JSON.parse(localStorage.getItem(`${LOCAL_KEY}.${item.id}`) || 'null');
         } catch { /* ignore */ }
+        // Los mapas GLB no se guardan como JSON: el índice local guarda sus metadatos.
+        if (!data && item.type === 'glb') data = { ...item };
         if (data) this.installed.set(item.id, data);
       }
     } catch (error) {
@@ -77,10 +79,22 @@ export class MapManager {
   }
 
   async getMapData(id) {
-    if (this.installed.has(id)) return this.installed.get(id);
+    const installed = this.installed.get(id);
+    const entry = this.entries.get(id);
+    const bundledVersion = Number(entry?.version || 0);
+    const installedVersion = Number(installed?.version || 0);
+    // Si hay una versión incluida más nueva, se usa aunque el jugador tuviera
+    // una copia antigua descargada. Así los cambios de tamaño llegan siempre.
+    if (installed && (!bundledVersion || installedVersion >= bundledVersion)) return installed;
+
     const res = await fetch(`./maps/${id}.json`);
-    if (!res.ok) throw new Error(`Mapa "${id}" no encontrado`);
-    return res.json();
+    if (!res.ok) {
+      if (installed) return installed;
+      throw new Error(`Mapa "${id}" no encontrado`);
+    }
+    const data = await res.json();
+    if (installed) this.installed.set(id, data);
+    return data;
   }
 
   async refreshCatalog(force = true) {
@@ -103,8 +117,20 @@ export class MapManager {
     const entry = this.entries.get(id);
     if (!entry) throw new Error('Mapa no encontrado en el catálogo');
     const url = entry.url || `${this.bundledIndex?.baseUrl || ''}${entry.file}`;
+    const isGlb = entry.type === 'glb' || /\.glb(?:$|\?)/i.test(entry.file || '');
     let data;
-    if (this.api?.download) {
+
+    if (isGlb) {
+      // El archivo completo se descarga y se guarda en userData/maps.
+      // El juego lo sirve desde /installed-maps/<archivo>.
+      if (this.api?.download) {
+        await this.api.download({ id, url, version: entry.version || 1, binary: true });
+      } else {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      }
+      data = { ...entry, type: 'glb', version: entry.version || 1 };
+    } else if (this.api?.download) {
       data = await this.api.download({ id, url, version: entry.version || 1 });
     } else {
       const res = await fetch(url);
@@ -117,7 +143,8 @@ export class MapManager {
       if (exists >= 0) list[exists] = item; else list.push(item);
       localStorage.setItem(LOCAL_KEY, JSON.stringify(list));
     }
-    if (!data || !data.seed) throw new Error('El archivo descargado no es un mapa válido');
+
+    if (!data || (!data.seed && data.type !== 'glb')) throw new Error('El archivo descargado no es un mapa válido');
     this.installed.set(id, data);
     this.refresh();
     return data;

@@ -19,16 +19,27 @@ const MIME = {
   '.wasm': 'application/wasm',
 };
 
-/** Servidor local mínimo: evita problemas de CORS con módulos ES en file://. */
-export function createStaticServer(rootDir) {
+/**
+ * Servidor local mínimo: evita problemas de CORS con módulos ES en file://.
+ * `mapsDir` se sirve bajo /installed-maps/ para los mapas descargados completos.
+ */
+export function createStaticServer(rootDir, mapsDir = null) {
   const root = resolve(rootDir);
+  const mapsRoot = mapsDir ? resolve(mapsDir) : null;
   const server = http.createServer(async (req, res) => {
     try {
       const raw = decodeURIComponent((req.url || '/').split('?')[0]);
       let rel = normalize(raw).replace(/^([/\\])+/, '');
+      let base = root;
+
+      if (mapsRoot && /^installed-maps[/\\]/i.test(rel)) {
+        base = mapsRoot;
+        rel = rel.replace(/^installed-maps[/\\]/i, '');
+      }
+
       if (rel === '' || rel.endsWith('/')) rel = join(rel, 'index.html');
-      let file = resolve(root, rel);
-      if (file !== root && !file.startsWith(root + sep)) {
+      let file = resolve(base, rel);
+      if (file !== base && !file.startsWith(base + sep)) {
         res.writeHead(403).end('Forbidden');
         return;
       }

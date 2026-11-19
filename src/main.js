@@ -1,3 +1,5 @@
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { settings } from './core/settings.js';
 import { AudioEngine } from './core/audio.js';
@@ -5,17 +7,18 @@ import { Input } from './core/input.js';
 import { MapManager } from './core/map-manager.js';
 import { Game } from './game/game.js';
 import { UI } from './ui/ui.js';
+import { App } from './ui/App.jsx';
+import { pushHudToast, uiStore } from './ui/store.js';
 
-class App {
+class AppController {
   constructor() {
     this.canvas = document.querySelector('#canvas') || document.querySelector('#game-canvas');
     this.uiRoot = document.querySelector('#ui');
-    this.loading = document.querySelector('#loading-screen');
-    this.loaderFill = document.querySelector('#loader-fill');
-    this.loaderText = document.querySelector('#loader-text');
     this.version = '0.1.0';
     this.updateInfo = null;
     this.assetsReady = false;
+
+    createRoot(this.uiRoot).render(createElement(App));
   }
 
   async init() {
@@ -45,8 +48,9 @@ class App {
   }
 
   setLoading(percent, text) {
-    if (this.loaderFill) this.loaderFill.style.width = `${percent}%`;
-    if (this.loaderText && text) this.loaderText.textContent = text;
+    uiStore.setState((s) => ({
+      loading: { ...s.loading, mounted: true, visible: true, percent, text },
+    }));
   }
 
   onAssetsReady() {
@@ -63,34 +67,22 @@ class App {
   }
 
   hideLoading() {
-    if (!this.loading || this.loading.classList.contains('hidden')) return;
-    this.loading.classList.add('hidden');
-    setTimeout(() => this.loading?.remove(), 600);
+    const loading = uiStore.getState().loading;
+    if (!loading.mounted || !loading.visible) return;
+    uiStore.setState({ loading: { ...loading, visible: false } });
+    setTimeout(() => {
+      const current = uiStore.getState().loading;
+      if (!current.visible) uiStore.setState({ loading: { ...current, mounted: false } });
+    }, 600);
   }
 
   toast(text, type = '') {
-    if (this.game?.hud?.el) {
-      this.game.hud.toast(text, type);
-      return;
-    }
-    const el = document.createElement('div');
-    el.className = `toast ${type}`;
-    el.style.cssText = 'position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:80;pointer-events:none';
-    el.textContent = text;
-    this.uiRoot.appendChild(el);
-    setTimeout(() => el.remove(), 3600);
+    pushHudToast(text, type);
   }
 
   async startMatch(mapId) {
     const id = mapId || settings.get('mapId');
     this.setLoading(5, 'Cargando mapa...');
-    const loadingScreen = document.createElement('div');
-    loadingScreen.id = 'loading-screen';
-    loadingScreen.innerHTML = `<div class="loader-title">OPENNITE</div><div class="loader-bar"><div id="loader-fill" style="width:5%"></div></div><div id="loader-text">Preparando partida...</div>`;
-    document.querySelector('#app').appendChild(loadingScreen);
-    this.loading = loadingScreen;
-    this.loaderFill = loadingScreen.querySelector('#loader-fill');
-    this.loaderText = loadingScreen.querySelector('#loader-text');
     try {
       const map = await this.maps.getMapData(id);
       this.ui.clear();
@@ -139,8 +131,7 @@ class App {
       const result = await api.check();
       if (result?.available) {
         this.updateInfo = result;
-        const status = document.querySelector('#update-status');
-        if (status) status.textContent = `Actualización ${result.version} disponible`;
+        uiStore.setState({ updateStatus: `Actualización ${result.version} disponible` });
         if (manual) this.ui.showUpdate(result);
         else this.toast(`Nueva versión ${result.version} disponible`, 'good');
       } else if (manual) {
@@ -172,10 +163,11 @@ class App {
   }
 }
 
-const app = new App();
+const app = new AppController();
 window.openniteApp = app;
 app.init().catch((error) => {
   console.error('Error al iniciar OpenNite:', error);
-  const text = document.querySelector('#loader-text');
-  if (text) text.textContent = `Error: ${error.message}`;
+  uiStore.setState((s) => ({
+    loading: { ...s.loading, mounted: true, visible: true, text: `Error: ${error.message}` },
+  }));
 });

@@ -33,7 +33,7 @@ export const DEFAULT_SETTINGS = {
   sfxVolume: 0.9,
   musicVolume: 0.4,
   showFPS: true,
-  maxBots: 30,
+  maxBots: 19,
   botDifficulty: 'normal',
   mapId: 'verdant-isles',
   playerColor: 0xffb45c,
@@ -48,7 +48,7 @@ function sanitize(raw) {
   out.viewDistance = Math.min(10, Math.max(2, Math.floor(Number(out.viewDistance) || 6)));
   out.fov = Math.min(110, Math.max(60, Number(out.fov) || 78));
   out.sensitivity = Math.min(0.01, Math.max(0.0003, Number(out.sensitivity) || 0.0022));
-  out.maxBots = Math.min(60, Math.max(0, Math.floor(Number(out.maxBots) || 30)));
+  out.maxBots = Math.min(19, Math.max(0, Math.floor(Number(out.maxBots) || 19)));
   out.playerColor = Number(out.playerColor) || 0xffb45c;
   for (const key of ['masterVolume', 'sfxVolume', 'musicVolume']) {
     out[key] = Math.min(1, Math.max(0, Number(out[key] ?? 0.75)));

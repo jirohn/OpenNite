@@ -58,6 +58,7 @@ export class Game {
     this.applyQuality();
 
     this.hud = new HUD(uiRoot, settings);
+    this.hud.input = this.input;
     this.settings.onChange(() => {
       this.applyQuality();
       if (this.previewCharacter && this.mode === 'preview') {
@@ -251,14 +252,16 @@ export class Game {
     this.ending = false;
     this.paused = false;
     this.mode = 'loading';
-    this.app.setLoading?.(20, 'Generando terreno...');
+    this.app.setLoading?.(20, 'Descargando mapa desde GitHub...');
 
     const gltf = await loadCharacterModel();
     if (this.preview) this.preview.visible = false;
     this.hud.unmount();
 
     this.world = new World(this.scene, config.map, this.settings);
-    this.app.setLoading?.(55, 'Colocando estructuras y botín...');
+    this.app.setLoading?.(40, 'Cargando escena 3D completa...');
+    await this.world.load();
+    this.app.setLoading?.(55, 'Colocando botín y jugadores...');
 
     this.effects = new Effects(this.scene, this.settings);
     this.player = new Player(this.camera, new Character(gltf, { color: this.settings.get('playerColor') }), this.world, this.settings, this.input, this.audio);
@@ -290,7 +293,7 @@ export class Game {
     this.storm.onStormFinal = () => this.hud.toast('La tormenta ha terminado', 'good');
 
     this.bots = [];
-    const count = clamp(config.bots ?? this.settings.get('maxBots'), 0, 60);
+    const count = clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
     const spots = this.world.spawnPoints || [];
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
@@ -303,8 +306,6 @@ export class Game {
     }
 
     this.hud.mount(config.map.name);
-    const lockOverlay = this.hud.q('lock-prompt');
-    lockOverlay.addEventListener('click', () => this.input.requestLock());
     this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.4);
     this.hud.toast('Clic para fijar el ratón · ESPACIO para saltar del autobús', 'good');
     this.matchTime = 0;
@@ -475,7 +476,7 @@ export class Game {
     if (!this.paused) {
       if (this.mode === 'preview') {
         this.updatePreview(dt, elapsed);
-      } else if (this.world) {
+      } else if (this.world && this.player) {
         this.updateMatch(dt);
       }
     }

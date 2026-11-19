@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Sky } from 'three/addons/objects/Sky.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, fbm, hash2, hashString, lerp, makeRandom, noise2, rayAABB, smoothstep } from '../core/utils.js';
 
 const CHUNK_SIZE = 256;
@@ -205,49 +206,162 @@ export class World {
     this.scene = scene;
     this.map = map;
     this.settings = settings;
-    this.seed = map.seed >>> 0;
-    this.size = map.size || 4096;
+    this.seed = (map.seed || 1) >>> 0;
+    this.size = map.size || 432;
     this.half = this.size / 2;
-    this.waterLevel = map.waterLevel ?? 0;
-    this.biome = map.biome || {};
+    this.waterLevel = -100;
+    this.biome = {};
     this.theme = THEMES[map.theme] || THEMES.temperate;
     this.subBiomeColor = new THREE.Color(SUBBIOME[map.theme] || SUBBIOME.temperate);
-    this.mountainHeight = this.biome.mountainHeight ?? (map.theme === 'snow' ? 150 : map.theme === 'desert' ? 40 : 65);
     this.chunks = new Map();
     this.chunkQueue = new Map();
     this.colliders = [];
     this.colliderGrid = new Map();
     this.lootSpots = [];
-    this.poiFlatHeights = new Map();
+    this.spawnPoints = [];
+    this.pois = [];
+    this.jumpPads = [];
     this.disposables = [];
     this.root = new THREE.Group();
     this.scene.add(this.root);
     this.structures = new THREE.Group();
     this.root.add(this.structures);
 
-    for (const poi of map.pois || []) {
-      this.poiFlatHeights.set(poi.name, this.rawHeightAt(poi.x, poi.z));
-    }
-
     this.textures = [];
-    this.materials = this.createMaterials();
-    const trunkColor = 0x6a4a30;
-    this.sharedGeo = {
-      treePine: makeTreeGeometry('pine', trunkColor, this.theme.tree, this.theme.tree2),
-      treeRound: makeTreeGeometry('round', trunkColor, this.theme.tree, this.theme.tree2),
-      treePalm: makeTreeGeometry('palm', trunkColor, this.theme.tree, this.theme.tree2),
-      rock: new THREE.DodecahedronGeometry(1, 0),
-      bush: new THREE.IcosahedronGeometry(0.8, 0).translate(0, 0.5, 0),
-    };
-    this.disposables.push(...Object.values(this.sharedGeo), ...Object.values(this.materials), ...this.textures);
+    this.materials = {};
+    this.sharedGeo = {};
+    this.loaded = false;
+    this.model = null;
+    this.file = map.file || `${map.id}.glb`;
+    this.scale = Number(map.scale) || 6;
 
     this.setupSky();
     this.setupLights();
-    this.generateRoads();
-    this.generateStructures();
-    this.setupWater();
     this.setupClouds();
-    this.setupJumpPads();
+  }
+
+  /** Descarga y carga el GLB completo: no se genera ningún terreno por código. */
+  async load() {
+    const bundledUrl = `./maps/${this.file}`;
+    const installedUrl = `./installed-maps/${this.file}`;
+    const tryFetch = async (url, installed = false) => {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const type = res.headers.get('content-type') || '';
+        // El servidor devuelve index.html para archivos ausentes.
+        if (installed && !/gltf-binary|octet-stream/.test(type)) return null;
+        return res;
+      } catch { return null; }
+    };
+    const res = (await tryFetch(installedUrl, true)) || (await tryFetch(bundledUrl));
+    if (!res) throw new Error(`No se pudo descargar el mapa ${this.file}`);
+
+    const buffer = await res.arrayBuffer();
+    const loader = new GLTFLoader();
+    const gltf = await loader.parseAsync(buffer, '');
+    const model = gltf.scene;
+    model.name = 'map-model';
+    model.scale.setScalar(this.scale);
+    model.updateMatrixWorld(true);
+
+    // Algunos GLB tienen accessors con cotas centinela; se ignoran cajas gigantes.
+    const box = new THREE.Box3();
+    const tmp = new THREE.Box3();
+    const tmpSize = new THREE.Vector3();
+    const validBox = (b) => {
+      b.getSize(tmpSize);
+      return tmpSize.x < 1000 && tmpSize.y < 1000 && tmpSize.z < 1000;
+    };
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      tmp.setFromObject(o);
+      if (validBox(tmp)) box.union(tmp);
+    });
+    if (box.isEmpty()) throw new Error('El GLB no contiene geometría válida');
+
+    const center = box.getCenter(new THREE.Vector3());
+    model.position.set(-center.x, -box.min.y, -center.z);
+    model.updateMatrixWorld(true);
+    this.structures.add(model);
+    this.model = model;
+
+    const size = box.getSize(new THREE.Vector3());
+    this.size = Math.max(240, Math.ceil(Math.max(size.x, size.z) * 1.05));
+    this.half = this.size / 2;
+
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      const b = new THREE.Box3().setFromObject(o);
+      if (!validBox(b)) return;
+      const s = b.getSize(new THREE.Vector3());
+      // Losas finas y grandes son el suelo: no bloquean al jugador.
+      if (s.y < 1.2 && s.x * s.z > 60) return;
+      if (s.x < 0.25 && s.z < 0.25) return;
+      this.addCollider(b.min.x - 0.1, b.max.x + 0.1, b.min.y, b.max.y + 0.1, b.min.z - 0.1, b.max.z + 0.1);
+    });
+
+    const spots = [];
+    const loot = [];
+    const p = new THREE.Vector3();
+    model.traverse((o) => {
+      if (!o.name) return;
+      const n = o.name.toLowerCase();
+      o.getWorldPosition(p);
+      if (Math.abs(p.x) > this.half || Math.abs(p.z) > this.half) return;
+      const pos = { x: p.x, y: 0, z: p.z };
+      if (/loot|crate|supply|operator|vehicle/.test(n)) {
+        spots.push(pos);
+        loot.push(pos);
+      } else if (/pavement|runway|hangar|tower|shop/.test(n)) {
+        spots.push(pos);
+      }
+    });
+    const dedupe = (arr) => {
+      const seen = new Set();
+      return arr.filter((v) => {
+        const key = `${Math.round(v.x / 8)},${Math.round(v.z / 8)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+    this.spawnPoints = dedupe(spots);
+    this.lootSpots = dedupe(loot);
+    if (this.spawnPoints.length < 4) this.spawnPoints = this.makeFallbackSpots();
+    if (this.lootSpots.length < 4) this.lootSpots = this.spawnPoints.slice();
+
+    this.pois = [
+      this.poiFromNode(model, /control-tower/, 'Torre de control', 55),
+      this.poiFromNode(model, /hangar/, 'Hangar', 60),
+      this.poiFromNode(model, /shop-bay-awning/, 'Zona comercial', 65),
+      this.poiFromNode(model, /supply-drop/, 'Suministro', 45),
+    ].filter(Boolean);
+
+    this.loaded = true;
+  }
+
+  poiFromNode(model, pattern, name, radius) {
+    let found = null;
+    model.traverse((o) => {
+      if (!found && pattern.test(o.name || '')) found = o;
+    });
+    if (!found) return null;
+    const p = new THREE.Vector3();
+    found.getWorldPosition(p);
+    return { name, x: p.x, z: p.z, radius, type: 'landmark' };
+  }
+
+  makeFallbackSpots() {
+    const out = [];
+    const r = this.half * 0.55;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      out.push({ x: Math.cos(a) * r, y: 0, z: Math.sin(a) * r });
+    }
+    return out;
   }
 
   createMaterials() {
@@ -500,52 +614,15 @@ export class World {
 
   // ---------------------- Terreno ----------------------
 
+  // El mapa es un GLB completo: no se genera terreno por código.
+  // El modelo se centra con su base en y=0 y se escala en load().
   rawHeightAt(x, z) {
-    const b = this.biome;
-    const f = b.frequency || 0.00085;
-    const n = fbm(x * f, z * f, this.seed, 5);
-    const broad = fbm(x * f * 0.32 + 30, z * f * 0.32 - 20, this.seed + 991, 3);
-    const ridge = 1 - Math.abs(fbm(x * f * 1.7, z * f * 1.7, this.seed + 451, 3) * 2 - 1);
-    const detail = noise2(x * 0.012, z * 0.012, this.seed + 77) - 0.5;
-    let h = (b.baseHeight || 16) + (n - 0.5) * (b.amplitude || 34) * 2
-      + (broad - 0.5) * (b.amplitude || 34) * 1.1
-      + ridge * ridge * (b.roughness || 7) * 1.8 + detail * 2.4;
-
-    // Cordilleras: picos anchos y irregulares repartidos por el mapa.
-    const mountainField = fbm(x * f * 0.55 + 120, z * f * 0.55 - 85, this.seed + 3337, 3);
-    const peak = Math.pow(clamp((mountainField - 0.46) / 0.3, 0, 1), 1.4);
-    h += peak * this.mountainHeight;
-
-    // Isla / borde del mapa: el terreno baja hacia el agua.
-    if (this.map.island) {
-      const r = Math.hypot(x, z) / this.half;
-      const t = smoothstep(clamp((r - 0.58) / 0.32, 0, 1));
-      h = lerp(h, this.waterLevel - 24, t);
-      // Franja de playa poco profunda antes del acantilado submarino.
-      if (r > 0.52 && r < 0.7) h = Math.min(h, this.waterLevel + 3.4);
-    } else {
-      const edge = Math.max(Math.abs(x), Math.abs(z)) / this.half;
-      if (edge > 0.72) {
-        const t = smoothstep(clamp((edge - 0.72) / 0.28, 0, 1));
-        h = lerp(h, this.waterLevel - 22, t);
-      }
-    }
-    return h;
+    if (Math.abs(x) > this.half || Math.abs(z) > this.half) return -100;
+    return 0;
   }
 
   heightAt(x, z) {
-    let h = this.rawHeightAt(x, z);
-    for (const poi of this.map.pois || []) {
-      const dx = x - poi.x;
-      const dz = z - poi.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-      if (dist < poi.radius) {
-        const flat = this.poiFlatHeights.get(poi.name) ?? h;
-        const t = smoothstep(clamp((dist - poi.radius * 0.55) / (poi.radius * 0.45), 0, 1));
-        h = lerp(flat, h, t);
-      }
-    }
-    return h;
+    return this.rawHeightAt(x, z);
   }
 
   /** Suelo efectivo al caer: terreno + tejados/plataformas crossed. */
@@ -732,31 +809,6 @@ export class World {
   }
 
   update(playerPos) {
-    const pcx = Math.floor(playerPos.x / CHUNK_SIZE);
-    const pcz = Math.floor(playerPos.z / CHUNK_SIZE);
-    const range = this.settings.get('viewDistance');
-    const wanted = [];
-
-    for (let dz = -range; dz <= range; dz++) {
-      for (let dx = -range; dx <= range; dx++) {
-        if (dx * dx + dz * dz > (range + 0.5) ** 2) continue;
-        const cx = pcx + dx;
-        const cz = pcz + dz;
-        const key = `${cx},${cz}`;
-        if (!this.chunks.has(key) && !this.chunkQueue.has(key)) wanted.push({ cx, cz, key });
-      }
-    }
-    wanted.sort((a, b) => ((a.cx - pcx) ** 2 + (a.cz - pcz) ** 2) - ((b.cx - pcx) ** 2 + (b.cz - pcz) ** 2));
-    let created = 0;
-    for (const item of wanted) {
-      if (created >= 4) break;
-      if (this.createChunk(item.cx, item.cz)) created++;
-    }
-
-    for (const key of [...this.chunks.keys()]) {
-      const [cx, cz] = key.split(',').map(Number);
-      if (Math.abs(cx - pcx) > range + 1 || Math.abs(cz - pcz) > range + 1) this.removeChunk(key);
-    }
     this.updateSkyForPosition(playerPos);
     this.updateLightForPosition(playerPos);
     if (this.water) this.water.position.set(Math.round(playerPos.x / 100) * 100, this.waterLevel, Math.round(playerPos.z / 100) * 100);

@@ -1,0 +1,13 @@
+{
+  "id": "battle-royale-town-and-airfield",
+  "name": "Pueblo y Aeródromo",
+  "version": 1,
+  "type": "glb",
+  "file": "battle-royale-town-and-airfield.glb",
+  "size": 432,
+  "scale": 6,
+  "lootDensity": 1.35,
+  "theme": "temperate",
+  "source": "https://3dassets.dev/packs/battle-royale-town-and-airfield",
+  "license": "CC0 1.0 Universal"
+}

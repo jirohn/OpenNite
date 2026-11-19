@@ -1,97 +1,59 @@
 import * as THREE from 'three';
-import { clamp, formatTime } from '../core/utils.js';
+import { clamp } from '../core/utils.js';
+import { bridge } from '../ui/bridge.js';
+import { hudStore, pushHudToast } from '../ui/store.js';
 
-const TEMPLATE = `
-<div class="hud">
-  <div class="crosshair" id="crosshair"></div>
-  <button class="interactive lock-overlay" id="lock-prompt"><span>CLIC PARA FIJAR EL RATÓN</span><small>Si no se fija, mantén pulsado el CLIC IZQUIERDO y mueve el ratón para mirar</small></button>
-  <div class="hud-top-left">
-    <div class="map-label" id="hud-map">ISLAS VERDES</div>
-    <div class="kill-feed" id="kill-feed"></div>
-  </div>
-  <div class="hud-top-center">
-    <div class="alive-count"><span class="dot"></span><span id="alive-count">0</span> JUGADORES</div>
-    <div class="storm-timer" id="storm-timer"></div>
-  </div>
-  <div class="minimap-wrap"><canvas id="minimap" width="356" height="356"></canvas><div class="minimap-label">MAPA TÁCTICO</div></div>
-  <div class="hud-bottom-left">
-    <div class="vitals">
-      <div class="bar-row"><div class="bar-icon">🛡️</div><div class="bar shield" id="shield-bar"><div style="width:0%"></div></div><div class="bar-num" id="shield-num">0</div></div>
-      <div class="bar-row"><div class="bar-icon">❤️</div><div class="bar health" id="health-bar"><div style="width:100%"></div></div><div class="bar-num" id="health-num">100</div></div>
-    </div>
-    <div class="slots" id="slots"></div>
-  </div>
-  <div class="hud-bottom-right">
-    <div class="weapon-name" id="weapon-name">Pistola</div>
-    <div class="ammo-big"><span id="ammo-num">12</span><small id="ammo-reserve">/ 90</small></div>
-    <div class="reload-hint" id="reload-hint"></div>
-  </div>
-  <div class="pickup-prompt" id="pickup-prompt" style="display:none"><kbd>E</kbd><span id="pickup-text"></span></div>
-  <div class="banner" id="banner" style="display:none"><div class="banner-title" id="banner-title"></div><div class="banner-sub" id="banner-sub"></div></div>
-  <div class="toast-stack" id="toast-stack"></div>
-  <div class="floating-texts" id="floating-texts" style="position:absolute;inset:0;pointer-events:none"></div>
-  <div class="damage-vignette" id="damage-vignette"></div>
-  <div class="storm-vignette" id="storm-vignette"></div>
-  <div id="fps-counter" style="position:absolute;right:26px;bottom:100px;font-size:10px;color:rgba(255,255,255,0.55);font-variant-numeric:tabular-nums"></div>
-  <div id="pause-hint">ESC · pausa &nbsp;|&nbsp; SHIFT · correr &nbsp;|&nbsp; ESPACIO · saltar / abrir o cerrar planeador &nbsp;|&nbsp; CLIC DCHO · apuntar &nbsp;|&nbsp; R · recargar &nbsp;|&nbsp; E · recoger</div>
-</div>`;
-
+/** Estado del HUD: la vista React está en src/ui/Hud.jsx. */
 export class HUD {
   constructor(uiRoot, settings) {
     this.root = uiRoot;
     this.settings = settings;
-    this.el = null;
-    this.killFeed = [];
-    this.toasts = [];
+    this.input = null;
     this.bannerTime = 0;
     this.damageFlashAmount = 0;
     this.hitTime = 0;
-    this.lastSlotsKey = '';
     this.minimapCtx = null;
+    this.minimapCanvas = null;
     this.fpsSmooth = 60;
     this.frameCount = 0;
     this.fpsTimer = 0;
+    bridge.hud = this;
   }
 
   mount(mapName) {
     this.unmount();
-    const wrap = document.createElement('div');
-    wrap.innerHTML = TEMPLATE;
-    this.el = wrap.firstElementChild;
-    this.root.appendChild(this.el);
-    this.q = (id) => this.el.querySelector(`#${id}`);
-    this.q('hud-map').textContent = mapName;
-    this.minimapCtx = this.q('minimap').getContext('2d');
+    this.bannerTime = 0;
+    this.damageFlashAmount = 0;
+    this.hitTime = 0;
+    this.fpsSmooth = 60;
+    this.frameCount = 0;
+    this.fpsTimer = 0;
+    hudStore.setState({
+      mounted: true, mapName, showLockPrompt: false, fps: '',
+      hp: 100, shield: 0, lowHp: false, damageOpacity: 0, stormOpacity: 0,
+      slots: [], weaponName: 'Pistola', weaponColor: '#ffffff',
+      ammo: '12', reserve: '/ 90', reloadHint: '', alive: 1, stormTime: '',
+      hit: false, hiddenCrosshair: false, pickupVisible: false, pickupText: '',
+      bannerVisible: false, bannerTitle: '', bannerSub: '', toasts: [], kills: [],
+    });
   }
 
   unmount() {
-    if (this.el) this.el.remove();
-    this.el = null;
+    hudStore.setState({ mounted: false });
   }
 
   toast(text, type = '') {
-    this.toasts.push({ text, type, life: 3.4 });
-    if (this.toasts.length > 5) this.toasts.shift();
-    this.renderToasts();
-  }
-
-  renderToasts() {
-    if (!this.el) return;
-    this.q('toast-stack').innerHTML = this.toasts.map((t) => `<div class="toast ${t.type}">${t.text}</div>`).join('');
+    pushHudToast(text, type);
   }
 
   kill(killer, victim, weapon = '') {
-    this.killFeed.unshift({ killer, victim, weapon, life: 6 });
-    if (this.killFeed.length > 5) this.killFeed.pop();
-    if (this.el) this.q('kill-feed').innerHTML = this.killFeed.map((k) =>
-      `<div class="kill-entry"><b>${k.killer}</b> ${k.weapon ? `【${k.weapon}】` : '✕'} ${k.victim}</div>`).join('');
+    hudStore.setState((s) => ({
+      kills: [{ killer, victim, weapon }, ...s.kills].slice(0, 5),
+    }));
   }
 
   banner(title, sub = '', duration = 2.4) {
-    if (!this.el) return;
-    this.q('banner-title').textContent = title;
-    this.q('banner-sub').textContent = sub;
-    this.q('banner').style.display = 'block';
+    hudStore.setState({ bannerTitle: title, bannerSub: sub, bannerVisible: true });
     this.bannerTime = duration;
   }
 
@@ -100,13 +62,11 @@ export class HUD {
   damageFlash(amount = 0.5) { this.damageFlashAmount = Math.min(1, this.damageFlashAmount + amount); }
 
   update(game, dt) {
-    if (!this.el) return;
-    const { player, world, storm, bots, loot, camera } = game;
-
-    const lockPrompt = this.q('lock-prompt');
-    if (lockPrompt) {
-      lockPrompt.style.display = (!game.input.locked && game.input.autoLock && !game.paused) ? 'block' : 'none';
-    }
+    if (!hudStore.getState().mounted) return;
+    const { player, storm, bots, loot } = game;
+    const patch = {
+      showLockPrompt: !game.input.locked && game.input.autoLock && !game.paused,
+    };
 
     // FPS
     this.frameCount++;
@@ -115,74 +75,78 @@ export class HUD {
       this.fpsSmooth = this.frameCount / this.fpsTimer;
       this.frameCount = 0;
       this.fpsTimer = 0;
-      if (this.settings.get('showFPS')) this.q('fps-counter').textContent = `${Math.round(this.fpsSmooth)} FPS`;
-      else this.q('fps-counter').textContent = '';
+      patch.fps = this.settings.get('showFPS') ? `${Math.round(this.fpsSmooth)} FPS` : '';
     }
 
     // Vida y escudo
     const hp = Math.round(player.hp);
     const sh = Math.round(player.shield);
-    this.q('health-num').textContent = hp;
-    this.q('shield-num').textContent = sh;
-    this.q('health-bar').firstElementChild.style.width = `${clamp(hp, 0, 100)}%`;
-    this.q('shield-bar').firstElementChild.style.width = `${clamp(sh, 0, 100)}%`;
-    this.q('health-bar').classList.toggle('low', hp <= 30);
-    this.q('damage-vignette').style.opacity = Math.max(hp < 35 ? (1 - hp / 35) * 0.35 : 0, this.damageFlashAmount).toFixed(2);
+    patch.hp = hp;
+    patch.shield = sh;
+    patch.lowHp = hp <= 30;
+    patch.damageOpacity = Math.max(hp < 35 ? (1 - hp / 35) * 0.35 : 0, this.damageFlashAmount).toFixed(2);
     this.damageFlashAmount = Math.max(0, this.damageFlashAmount - dt * 2.2);
 
     const outside = storm.distanceOutside(player.position);
-    this.q('storm-vignette').style.opacity = outside > 0 ? clamp(outside / 260 + 0.25, 0, 0.9).toFixed(2) : '0';
+    patch.stormOpacity = outside > 0 ? clamp(outside / 260 + 0.25, 0, 0.9).toFixed(2) : '0';
 
     // Inventario
     const inv = player.inventory;
-    const slotsKey = inv.slots.map((s) => s ? `${s.type}${s.rarity}${s.ammo}` : '-').join('|') + inv.active;
-    if (slotsKey !== this.lastSlotsKey) {
-      this.lastSlotsKey = slotsKey;
-      this.q('slots').innerHTML = inv.slots.map((s, i) => `
-        <div class="slot ${i === inv.active ? 'active' : ''} ${s ? '' : 'empty'}">
-          <span class="n">${i + 1}</span><span>${s ? s.def.icon : ''}</span>
-          <span class="ammo">${s ? (s.def.melee ? '∞' : s.ammo) : ''}</span>
-        </div>`).join('');
-    }
+    patch.slots = inv.slots.map((s, i) => ({
+      active: i === inv.active,
+      item: !!s,
+      icon: s ? s.def.icon : '',
+      ammo: s ? (s.def.melee ? '∞' : s.ammo) : '',
+    }));
     const cur = inv.current();
-    this.q('weapon-name').textContent = cur ? cur.name : 'Sin arma';
-    if (cur) this.q('weapon-name').style.color = cur.color;
-    this.q('ammo-num').textContent = cur ? (cur.def.melee ? '∞' : cur.ammo) : '0';
-    this.q('ammo-reserve').textContent = cur && cur.def.ammo ? `/ ${inv.ammo[cur.def.ammo] ?? 0}` : '';
-    this.q('reload-hint').textContent = inv.reloading ? 'RECARGANDO...' : cur && !cur.def.melee && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
+    patch.weaponName = cur ? cur.name : 'Sin arma';
+    patch.weaponColor = cur ? cur.color : '#ffffff';
+    patch.ammo = cur ? (cur.def.melee ? '∞' : cur.ammo) : '0';
+    patch.reserve = cur && cur.def.ammo ? `/ ${inv.ammo[cur.def.ammo] ?? 0}` : '';
+    patch.reloadHint = inv.reloading ? 'RECARGANDO...' : cur && !cur.def.melee && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
 
     // Contadores
-    const alive = 1 + bots.filter((b) => b.alive).length;
-    this.q('alive-count').textContent = alive;
-    this.q('storm-timer').textContent = storm.timeText;
+    patch.alive = 1 + bots.filter((b) => b.alive).length;
+    patch.stormTime = storm.timeText;
 
     // Crosshair
     this.hitTime -= dt;
-    this.q('crosshair').classList.toggle('hit', this.hitTime > 0);
-    this.q('crosshair').style.opacity = player.ads && cur?.def.scope ? '0' : '1';
+    patch.hit = this.hitTime > 0;
+    patch.hiddenCrosshair = player.ads && !!cur?.def.scope;
 
     // Prompt de recogida
     const near = loot.findNear(player.position, 3.4);
-    this.q('pickup-prompt').style.display = near && player.alive ? 'block' : 'none';
-    if (near) this.q('pickup-text').textContent = near.isChest ? 'Abrir cofre' : near.item.name;
+    patch.pickupVisible = !!near && player.alive;
+    if (near) patch.pickupText = near.isChest ? 'Abrir cofre' : near.item.name;
 
     // Banner / toasts
     if (this.bannerTime > 0) {
       this.bannerTime -= dt;
-      if (this.bannerTime <= 0) this.q('banner').style.display = 'none';
+      if (this.bannerTime <= 0) patch.bannerVisible = false;
     }
+    const state = hudStore.getState();
     let changed = false;
-    for (let i = this.toasts.length - 1; i >= 0; i--) {
-      this.toasts[i].life -= dt;
-      if (this.toasts[i].life <= 0) { this.toasts.splice(i, 1); changed = true; }
+    const toasts = [];
+    for (const t of state.toasts) {
+      const life = t.life - dt;
+      if (life <= 0) { changed = true; continue; }
+      if (life !== t.life) changed = true;
+      toasts.push({ ...t, life });
     }
-    if (changed) this.renderToasts();
+    if (changed) patch.toasts = toasts;
 
+    hudStore.setState(patch);
     this.drawMinimap(game);
     this.drawFloatingTexts(game);
   }
 
   drawMinimap(game) {
+    const canvas = bridge.refs.minimap;
+    if (!canvas) return;
+    if (!this.minimapCtx || this.minimapCanvas !== canvas) {
+      this.minimapCtx = canvas.getContext('2d');
+      this.minimapCanvas = canvas;
+    }
     const ctx = this.minimapCtx;
     if (!ctx) return;
     const { player, world, storm, bots } = game;
@@ -215,7 +179,7 @@ export class HUD {
     const toY = (wz) => C + (wz - player.position.z) * scale;
 
     // Carreteras
-    const pois = world.map.pois || [];
+    const pois = world.pois || world.map.pois || [];
     ctx.strokeStyle = 'rgba(230,225,200,0.28)';
     ctx.lineWidth = 3;
     for (const [a, b] of world.map.roads || []) {
@@ -281,8 +245,8 @@ export class HUD {
   }
 
   drawFloatingTexts(game) {
-    if (!this.el) return;
-    const container = this.q('floating-texts');
+    const container = bridge.refs.floating;
+    if (!container) return;
     const camera = game.camera;
     const v = new THREE.Vector3();
     let html = '';
