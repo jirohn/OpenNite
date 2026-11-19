@@ -2,13 +2,14 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 import { settings } from './core/settings.js';
+import { account } from './core/account.js';
 import { AudioEngine } from './core/audio.js';
 import { Input } from './core/input.js';
 import { MapManager } from './core/map-manager.js';
 import { Game } from './game/game.js';
 import { UI } from './ui/ui.js';
 import { App } from './ui/App.jsx';
-import { pushHudToast, uiStore } from './ui/store.js';
+import { accountStore, pushHudToast, uiStore } from './ui/store.js';
 
 class AppController {
   constructor() {
@@ -26,12 +27,16 @@ class AppController {
     await settings.load();
     settings.onChange(() => this.audio?.applyVolumes());
 
+    this.setLoading(12, 'Preparando cuenta...');
+    account.subscribe((snapshot) => accountStore.setState(snapshot));
+    await account.init();
+
     this.setLoading(18, 'Leyendo mapas...');
     this.maps = await new MapManager().init();
 
     this.audio = new AudioEngine(settings);
     this.input = new Input(this.canvas);
-    this.ui = new UI(this.uiRoot, this, settings, this.maps, this.audio);
+    this.ui = new UI(this.uiRoot, this, settings, this.maps, this.audio, account);
     this.game = new Game(this.canvas, this.uiRoot, settings, this.audio, this.input, this);
 
     if (window.opennite?.app?.getVersion) {
@@ -119,6 +124,24 @@ class AppController {
   onMatchEnd(result) {
     if (this.game) this.game.paused = true;
     this.ui.showResults(result);
+    this.awardMatch(result);
+  }
+
+  async awardMatch(result) {
+    const matchId = result.matchId || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    result.matchId = matchId;
+    try {
+      const reward = await account.awardMatch({ ...result, matchId });
+      if (reward.alreadyAwarded) return;
+      if (reward.levelsGained > 0) {
+        this.toast(`Pase de batalla: nivel ${account.profile.battlePass.level} desbloqueado`, 'good');
+      } else {
+        this.toast(`+${reward.xp} XP de partida`, 'good');
+      }
+    } catch (error) {
+      console.warn('No se pudo registrar la partida:', error);
+      this.toast('Progreso no sincronizado. Revisa tu cuenta.', 'warn');
+    }
   }
 
   async checkUpdates(manual = false) {

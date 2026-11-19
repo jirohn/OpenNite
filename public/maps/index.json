@@ -5,18 +5,17 @@
   "baseUrl": "https://raw.githubusercontent.com/jirohn/OpenNite/main/public/maps/",
   "maps": [
     {
-      "id": "battle-royale-town-and-airfield",
-      "name": "Pueblo y Aeródromo",
-      "description": "Mapa único de OpenNite: pueblo abandonado, gasolinera, torre de control, hangar y pista. Escena 3D completa descargada desde GitHub (CC0).",
-      "file": "battle-royale-town-and-airfield.glb",
+      "id": "san-borondon",
+      "name": "San Borondon",
+      "description": "Isla pequeña creada a medida y decorada con árboles, rocas, hierbas y flores del Stylized Nature MegaKit (CC0). Cinco zonas, puerto, faro y caminos en 360 m.",
+      "file": "san-borondon.json",
       "version": 1,
-      "size": 432,
-      "scale": 6,
-      "type": "glb",
+      "size": 360,
+      "type": "island",
       "theme": "temperate",
-      "gradient": "linear-gradient(135deg,#5b6b70,#a8b39c 50%,#d2c39a)",
-      "tags": ["CC0", "GLB", "Pueblo", "Aeródromo"],
-      "source": "https://3dassets.dev/packs/battle-royale-town-and-airfield",
+      "gradient": "linear-gradient(135deg,#2e6f82,#67a86d 45%,#e3d19a)",
+      "tags": ["CC0", "Isla", "Quaternius", "Naturaleza"],
+      "source": "https://quaternius.itch.io/stylized-nature-megakit",
       "license": "CC0 1.0 Universal"
     }
   ]

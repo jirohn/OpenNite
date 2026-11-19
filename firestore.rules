@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+
+      // El cliente solo crea su perfil inicial con los valores por defecto.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.credits == 2000
+        && request.resource.data.adminGrant2000 == true
+        && request.resource.data.xp == 0
+        && request.resource.data.level == 1
+        && request.resource.data.battlePass.premium == false
+        && request.resource.data.battlePass.claimed.size() == 0
+        && request.resource.data.owned == ['preset_islander']
+        && request.resource.data.stats.matches == 0
+        && request.resource.data.awardedMatches.size() == 0;
+
+      // La economía (créditos, XP, inventario, recompensas) la controlan las
+      // Cloud Functions con Admin SDK. El cliente solo edita aspecto y datos
+      // personales visibles.
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['equipped', 'displayName', 'photoURL', 'updatedAt'])
+
+      allow delete: if false;
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { distance2D, makeRandom, shuffle } from '../core/utils.js';
 import { randomLoot } from './weapons.js';
 
@@ -33,27 +34,72 @@ export class LootManager {
     this.beamGeo = new THREE.CylinderGeometry(0.32, 0.5, 3.2, 8, 1, true);
     this.boxGeo = new THREE.BoxGeometry(0.62, 0.42, 0.38);
     this.chestGeo = new THREE.BoxGeometry(1.25, 0.75, 0.85);
+    this.chestParts = null;
+    this.shared = new Set([this.beamGeo, this.boxGeo, this.chestGeo]);
     this.disposables.push(this.beamGeo, this.boxGeo, this.chestGeo);
+  }
+
+  /** Carga el cofre de madera CC0 del Fantasy Props MegaKit de Quaternius. */
+  async load() {
+    try {
+      const gltf = await new GLTFLoader().loadAsync('./models/quaternius/props/glTF/Chest_Wood.gltf');
+      gltf.scene.updateMatrixWorld(true);
+      this.chestParts = [];
+      gltf.scene.traverse((o) => {
+        if (!o.isMesh) return;
+        const geometry = o.geometry.clone();
+        geometry.applyMatrix4(o.matrixWorld);
+        this.chestParts.push({ geometry, material: o.material });
+        this.shared.add(geometry);
+        this.disposables.push(geometry);
+      });
+      for (const mat of new Set(this.chestParts.map((p) => p.material))) {
+        this.shared.add(mat);
+        this.disposables.push(mat);
+        if (mat.map) { this.shared.add(mat.map); this.disposables.push(mat.map); }
+        if (mat.normalMap) { this.shared.add(mat.normalMap); this.disposables.push(mat.normalMap); }
+      }
+    } catch (error) {
+      console.warn('No se pudo cargar el modelo del cofre CC0:', error);
+      this.chestParts = null;
+    }
   }
 
   createEntity(pos, item, isChest = false) {
     const group = new THREE.Group();
     const color = new THREE.Color(isChest ? 0xffc14d : item.color || 0xffffff);
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color, emissive: color, emissiveIntensity: isChest ? 0.35 : 0.55,
-      metalness: 0.45, roughness: 0.35,
-    });
-    const body = new THREE.Mesh(isChest ? this.chestGeo : this.boxGeo, bodyMat);
-    body.position.y = isChest ? 0.42 : 0.45;
-    body.castShadow = true;
+    const realChest = isChest && this.chestParts?.length > 0;
+    let body;
+    let baseY = isChest ? 0.42 : 0.45;
+    if (realChest) {
+      body = new THREE.Group();
+      for (const part of this.chestParts) {
+        const mesh = new THREE.Mesh(part.geometry, part.material);
+        mesh.castShadow = true;
+        body.add(mesh);
+      }
+      body.scale.setScalar(1.65);
+      baseY = 0;
+    } else {
+      const bodyMat = new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: isChest ? 0.35 : 0.55,
+        metalness: 0.45, roughness: 0.35,
+      });
+      body = new THREE.Mesh(isChest ? this.chestGeo : this.boxGeo, bodyMat);
+      body.position.y = baseY;
+      body.castShadow = true;
+    }
     group.add(body);
 
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(isChest ? this.chestGeo : this.boxGeo),
-      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
-    );
-    edges.position.copy(body.position);
-    group.add(edges);
+    let edges = new THREE.Object3D();
+    if (!realChest) {
+      edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(isChest ? this.chestGeo : this.boxGeo),
+        new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }),
+      );
+      edges.position.copy(body.position);
+      group.add(edges);
+    }
 
     const beamMat = new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: 0.14, depthWrite: false,
@@ -70,7 +116,7 @@ export class LootManager {
     group.position.copy(pos);
     group.position.y = this.world.heightAt(pos.x, pos.z);
     this.root.add(group);
-    const entity = { group, body, edges, beam, sprite, item, isChest, pos: group.position, phase: this.rnd() * 6.28, life: isChest ? Infinity : 150 };
+    const entity = { group, body, edges, beam, sprite, item, isChest, baseY, pos: group.position, phase: this.rnd() * 6.28, life: isChest ? Infinity : 150 };
     this.items.push(entity);
     return entity;
   }
@@ -100,11 +146,11 @@ export class LootManager {
     const idx = this.items.indexOf(entity);
     if (idx >= 0) this.items.splice(idx, 1);
     entity.group.traverse((obj) => {
-      if (obj.material && obj.material !== this.beamMat) {
+      if (obj.material && !this.shared.has(obj.material)) {
         obj.material.dispose?.();
         if (obj.material.map) obj.material.map.dispose?.();
       }
-      if (obj.geometry && obj.geometry !== this.beamGeo && obj.geometry !== this.boxGeo && obj.geometry !== this.chestGeo) obj.geometry.dispose?.();
+      if (obj.geometry && !this.shared.has(obj.geometry)) obj.geometry.dispose?.();
     });
     entity.group.removeFromParent();
   }
@@ -159,7 +205,7 @@ export class LootManager {
       e.phase += dt;
       e.body.rotation.y += dt * 0.9;
       e.edges.rotation.y = e.body.rotation.y;
-      e.body.position.y = (e.isChest ? 0.42 : 0.45) + Math.sin(e.phase * 2) * 0.07;
+      e.body.position.y = e.baseY + Math.sin(e.phase * 2) * (e.isChest ? 0.035 : 0.07);
       e.edges.position.y = e.body.position.y;
       e.beam.material.opacity = 0.1 + Math.sin(e.phase * 2.5) * 0.04;
       e.sprite.position.y = (e.isChest ? 1.9 : 1.75) + Math.sin(e.phase * 2) * 0.1;

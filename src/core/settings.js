@@ -29,14 +29,17 @@ export const DEFAULT_SETTINGS = {
   fov: 78,
   sensitivity: 0.0022,
   invertY: false,
+  cameraShoulder: 1.15,
+  cameraDistance: 3.6,
   masterVolume: 0.75,
   sfxVolume: 0.9,
   musicVolume: 0.4,
   showFPS: true,
   maxBots: 19,
   botDifficulty: 'normal',
-  mapId: 'verdant-isles',
+  mapId: 'san-borondon',
   playerColor: 0xffb45c,
+  playerPreset: 'islander',
   showDamageNumbers: true,
   crosshairColor: '#ffffff',
 };
@@ -48,8 +51,11 @@ function sanitize(raw) {
   out.viewDistance = Math.min(10, Math.max(2, Math.floor(Number(out.viewDistance) || 6)));
   out.fov = Math.min(110, Math.max(60, Number(out.fov) || 78));
   out.sensitivity = Math.min(0.01, Math.max(0.0003, Number(out.sensitivity) || 0.0022));
+  out.cameraShoulder = Math.min(2.4, Math.max(0.25, Number(out.cameraShoulder) || 1.15));
+  out.cameraDistance = Math.min(6, Math.max(1.8, Number(out.cameraDistance) || 3.6));
   out.maxBots = Math.min(19, Math.max(0, Math.floor(Number(out.maxBots) || 19)));
   out.playerColor = Number(out.playerColor) || 0xffb45c;
+  out.playerPreset = /^[a-z0-9-]{2,32}$/i.test(String(out.playerPreset || '')) ? out.playerPreset : 'islander';
   for (const key of ['masterVolume', 'sfxVolume', 'musicVolume']) {
     out[key] = Math.min(1, Math.max(0, Number(out[key] ?? 0.75)));
   }

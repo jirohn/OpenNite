@@ -1,12 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { QUALITY_PRESETS } from '../core/settings.js';
+import {
+  BATTLE_PASS_LEVELS, BATTLE_PASS_PRICE, FREE_TIER_CREDITS, PREMIUM_TIER_CREDITS,
+  PRESETS, SHOP_ITEMS, XP_PER_LEVEL, matchXp, passRewards, xpProgress,
+} from '../core/economy.js';
 import { formatTime } from '../core/utils.js';
 import { bridge, click, hover } from './bridge.js';
-import { bumpUi, useUi } from './store.js';
+import { bumpUi, useAccount, useUi } from './store.js';
 
-const SKINS = [0xffb45c, 0x4ecdc4, 0xff6b9d, 0x9b6dff, 0x6bd97f, 0x5aa9ff, 0xf2e35a, 0xf2f2f2];
-const SKIN_NAMES = ['Ámbar', 'Cian', 'Rosa', 'Violeta', 'Esmeralda', 'Azul', 'Oro', 'Blanco'];
+const SKINS = [0xffb45c, 0x6f8a5b, 0x5f83a6, 0xa35f52, 0x7a6b4e, 0x4e6470, 0xb59a5e, 0x8b7a6a];
+const SKIN_NAMES = ['Ámbar', 'Musgo', 'Acero', 'Teja', 'Arena', 'Pizarra', 'Oro viejo', 'Piedra'];
 const hexColor = (c) => `#${Number(c).toString(16).padStart(6, '0')}`;
+const creditsLabel = (n) => new Intl.NumberFormat('es-ES').format(n || 0);
+const presetName = (id) => PRESETS.find((p) => p.id === id)?.name || id;
 
 const Button = ({ children, className = '', onClick, ...rest }) => (
   <button type="button" className={`btn interactive ${className}`} onMouseEnter={hover} onClick={click(onClick)} {...rest}>
@@ -34,13 +40,29 @@ function Toggle({ label, value, onChange }) {
   );
 }
 
+async function accountAction(action, successMessage) {
+  try {
+    const result = await action();
+    if (successMessage) bridge.app.toast(successMessage, 'good');
+    return result;
+  } catch (error) {
+    bridge.app.toast(error.message || 'No se pudo completar la operación', 'warn');
+    return null;
+  }
+}
+
 export function MenuScreen({ version }) {
   const { updateStatus } = useUi();
+  const { profile, status, cloud } = useAccount();
 
   useEffect(() => {
     const onKey = (e) => {
       if (e.code === 'KeyM') bridge.ui.showMaps();
       if (e.code === 'KeyO') bridge.ui.showSettings();
+      if (e.code === 'KeyT') bridge.ui.showTienda();
+      if (e.code === 'KeyL') bridge.ui.showTaquilla();
+      if (e.code === 'KeyB') bridge.ui.showBattlePass();
+      if (e.code === 'KeyC') bridge.ui.showAccount();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -53,24 +75,35 @@ export function MenuScreen({ version }) {
           <div className="brand-name">OPENNITE</div>
           <div className="brand-tag">Battle Royale · código abierto</div>
         </div></div>
+        <Button className="account-chip interactive" onClick={() => bridge.ui.showAccount()}>
+          <span className="account-chip-avatar">{(profile?.displayName || 'J').slice(0, 1).toUpperCase()}</span>
+          <span className="account-chip-text">
+            <strong>{creditsLabel(profile?.credits)} ¢</strong>
+            <small>{cloud ? profile?.displayName : status === 'connecting' ? 'Conectando...' : 'Modo offline'}</small>
+          </span>
+          <span className="key">C</span>
+        </Button>
         <div className="menu-version">v{version} · ALPHA</div>
       </div>
       <div className="menu-body">
         <div className="menu-eyebrow">Sin construcción. Solo supervivencia.</div>
         <div className="menu-title">CAE.<br /><span>SOBREVIVE.</span></div>
-        <div className="menu-sub">Un battle royale libre para PC con mapas enormes, modelos y animaciones CC0, gráficos escalables y actualizaciones automáticas desde GitHub.</div>
-        <div className="menu-actions">
-          <Button className="primary" onClick={() => bridge.ui.showLobby()}><span className="btn-icon">▶</span> JUGAR AHORA</Button>
+        <div className="menu-sub">Un battle royale libre para PC en la isla de San Borondon: naturaleza y cofres CC0, gráficos escalables y actualizaciones automáticas desde GitHub.</div>
+        <div className="menu-actions menu-actions-extended">
+          <Button className="primary wide" onClick={() => bridge.ui.showLobby()}><span className="btn-icon">▶</span> JUGAR AHORA</Button>
+          <Button onClick={() => bridge.ui.showTienda()}><span className="btn-icon">🛒</span> TIENDA <span className="key">T</span></Button>
+          <Button onClick={() => bridge.ui.showTaquilla()}><span className="btn-icon">🎽</span> TAQUILLA <span className="key">L</span></Button>
+          <Button onClick={() => bridge.ui.showBattlePass()}><span className="btn-icon">🏆</span> PASE DE BATALLA <span className="key">B</span></Button>
           <Button onClick={() => bridge.ui.showMaps()}><span className="btn-icon">🗺️</span> MAPAS <span className="key">M</span></Button>
           <Button onClick={() => bridge.ui.showSettings()}><span className="btn-icon">⚙️</span> CONFIGURACIÓN <span className="key">O</span></Button>
           <Button onClick={() => bridge.ui.showCredits()}><span className="btn-icon">ℹ️</span> CRÉDITOS</Button>
-          <Button onClick={() => bridge.app.checkUpdates(true)}><span className="btn-icon">⬆️</span> BUSCAR ACTUALIZACIONES</Button>
-          <Button onClick={() => bridge.app.quit()}><span className="btn-icon">⏻</span> SALIR</Button>
+          <Button onClick={() => bridge.app.checkUpdates(true)}><span className="btn-icon">⬆️</span> ACTUALIZACIONES</Button>
+          <Button className="wide" onClick={() => bridge.app.quit()}><span className="btn-icon">⏻</span> SALIR</Button>
         </div>
       </div>
       <div className="menu-footer">
-        <span>Modelos: RobotExpressive (CC0 · Quaternius)</span><span>·</span>
-        <span>Mapa: Battle Royale Town and Airfield (CC0 · 3DAssets.dev)</span><span>·</span>
+        <span>Personajes: NoLimitNexus + KayKit (CC0)</span><span>·</span>
+        <span>Mapa y cofres: San Borondon (CC0 · Quaternius)</span><span>·</span>
         <span id="update-status">{updateStatus}</span>
       </div>
     </div>
@@ -200,6 +233,12 @@ export function SettingsScreen({ back = 'menu' }) {
               <Toggle label="Oclusión ambiental (SSAO)" value={s.ssao} onChange={(v) => set('ssao', v)} />
             </div>
             <div>
+              <p className="section-title">Cámara (hombro derecho)</p>
+              <Slider label="Desplazamiento lateral" min={0.25} max={2.4} step={0.05} value={s.cameraShoulder}
+                format={(v) => `${Number(v).toFixed(2)} m`} onChange={(v) => set('cameraShoulder', v)} />
+              <Slider label="Distancia de cámara" min={1.8} max={6} step={0.1} value={s.cameraDistance}
+                format={(v) => `${Number(v).toFixed(1)} m`} onChange={(v) => set('cameraDistance', v)} />
+              <p className="hint" style={{ margin: '-2px 0 14px' }}>La cámara va a la derecha del personaje para que la cabeza no tape la mira. Ajusta estos dos valores a tu gusto.</p>
               <p className="section-title">Juego y audio</p>
               <Slider label="Campo de visión" min={60} max={110} step={1} value={s.fov} format={(v) => `${v}°`} onChange={(v) => set('fov', v)} />
               <Slider label="Sensibilidad del ratón" min={0.0004} max={0.006} step={0.0001} value={s.sensitivity} format={(v) => (v * 1000).toFixed(1)} onChange={(v) => set('sensitivity', v)} />
@@ -300,6 +339,296 @@ export function MapsScreen({ back = 'menu' }) {
   );
 }
 
+export function TiendaScreen() {
+  const { profile } = useAccount();
+  const [busy, setBusy] = useState(null);
+  const [category, setCategory] = useState('Todos');
+  const categories = ['Todos', 'Trajes', 'Colores'];
+  const credits = profile?.credits || 0;
+  const owned = profile?.owned || [];
+  const items = SHOP_ITEMS.filter((item) => category === 'Todos' || item.category === category);
+
+  const buy = async (item) => {
+    setBusy(item.id);
+    await accountAction(
+      () => bridge.account.purchaseItem(item.id),
+      `${item.name} añadido a tu taquilla`,
+    );
+    setBusy(null);
+  };
+
+  return (
+    <div className="screen panel-screen economy-screen">
+      <div className="panel">
+        <div className="panel-head">
+          <Button className="small close-x" onClick={() => bridge.ui.showMenu()}>✕</Button>
+          <h2>Tienda</h2><div className="spacer" />
+          <span className="credit-pill">¢ {creditsLabel(credits)}</span>
+        </div>
+        <div className="panel-body">
+          <p className="hint" style={{ marginBottom: 16 }}>
+            Gana créditos con las recompensas del pase de batalla. Los artículos se guardan en tu taquilla y se aplican al instante en la galería 3D.
+          </p>
+          <div className="preset-row">
+            {categories.map((name) => (
+              <Button key={name} className={`small ${category === name ? 'primary' : ''}`}
+                style={{ justifyContent: 'center' }} onClick={() => setCategory(name)}>{name}</Button>
+            ))}
+          </div>
+          <div className="shop-grid">
+            {items.map((item) => {
+              const isOwned = owned.includes(item.id);
+              const loading = busy === item.id;
+              return (
+                <div key={item.id} className="shop-card">
+                  <div className="shop-art" style={{ background: `linear-gradient(145deg, ${hexColor(item.color)}, #111722 78%)` }}>
+                    <span className="shop-kind">{item.category}</span>
+                    <span className="shop-swatch" style={{ background: hexColor(item.color) }} />
+                  </div>
+                  <div className="shop-info">
+                    <h3>{item.name}</h3>
+                    <p>{item.description}</p>
+                    {item.preset && <span className="status-pill">{presetName(item.preset)}</span>}
+                  </div>
+                  <div className="shop-foot">
+                    <span className="price">{isOwned ? 'EN TU TAQUILLA' : <>¢ {creditsLabel(item.price)}</>}</span>
+                    <Button className={`small ${!isOwned ? 'primary' : ''}`} disabled={isOwned || loading || credits < item.price}
+                      onClick={() => buy(item)}>
+                      {loading ? <><span className="loading-inline" /> Comprando...</> : isOwned ? 'ADQUIRIDO' : 'COMPRAR'}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="panel-foot"><Button className="primary" onClick={() => bridge.ui.showTaquilla()}>IR A MI TAQUILLA →</Button></div>
+      </div>
+    </div>
+  );
+}
+
+export function TaquillaScreen() {
+  const { profile } = useAccount();
+  const [busy, setBusy] = useState(null);
+  const owned = profile?.owned || [];
+  const equipped = profile?.equipped || { preset: 'islander', color: 0xffb45c };
+  const presets = PRESETS.filter((p) => p.id === 'islander' || owned.includes(`preset_${p.id}`));
+  const colors = SHOP_ITEMS.filter((item) => item.category === 'Colores' && owned.includes(item.id));
+
+  const equip = async (key, options) => {
+    setBusy(key);
+    await accountAction(() => bridge.account.equip(options), 'Aspecto equipado');
+    setBusy(null);
+  };
+
+  return (
+    <div className="screen panel-screen economy-screen">
+      <div className="panel">
+        <div className="panel-head">
+          <Button className="small close-x" onClick={() => bridge.ui.showMenu()}>✕</Button>
+          <h2>Taquilla</h2><div className="spacer" />
+          <span className="status-pill">{presets.length} trajes · {colors.length + 1} colores</span>
+        </div>
+        <div className="panel-body">
+          <div className="equipped-banner">
+            <div className="equipped-avatar" style={{ background: `linear-gradient(145deg, ${hexColor(equipped.color)}, #18202c)` }} />
+            <div><small>EQUIPADO AHORA</small><h3>{presetName(equipped.preset)}</h3><p>Color {hexColor(equipped.color)}</p></div>
+          </div>
+          <p className="section-title" style={{ marginTop: 22 }}>Trajes</p>
+          <div className="locker-grid">
+            {presets.map((preset) => {
+              const id = `preset_${preset.id}`;
+              const active = equipped.preset === preset.id;
+              return (
+                <div key={preset.id} className={`locker-card ${active ? 'active' : ''}`}>
+                  <div className="locker-art" style={{ background: `linear-gradient(150deg, ${hexColor(preset.color)}, #151b26)` }}>
+                    <span className="locker-figure">♟</span>
+                  </div>
+                  <div className="locker-info"><h4>{preset.name}</h4><span>{active ? 'EN USO' : 'DISPONIBLE'}</span></div>
+                  <Button className="small" style={{ justifyContent: 'center' }} disabled={active || busy === id}
+                    onClick={() => equip(id, { preset: preset.id })}>{active ? 'EQUIPADO' : 'EQUIPAR'}</Button>
+                </div>
+              );
+            })}
+          </div>
+          <p className="section-title" style={{ marginTop: 24 }}>Colores</p>
+          <div className="color-row">
+            <button type="button" className={`color-chip interactive ${equipped.color === 0xffb45c ? 'selected' : ''}`}
+              onMouseEnter={hover} onClick={click(() => equip('default', { color: 0xffb45c }))}
+              title="Color original">
+              <span style={{ background: hexColor(0xffb45c) }} /><small>ORIGINAL</small>
+            </button>
+            {colors.map((item) => (
+              <button key={item.id} type="button" className={`color-chip interactive ${equipped.color === item.color ? 'selected' : ''}`}
+                onMouseEnter={hover} onClick={click(() => equip(item.id, { color: item.color }))}
+                title={item.name}>
+                <span style={{ background: hexColor(item.color) }} /><small>{item.name.replace('Color · ', '').toUpperCase()}</small>
+              </button>
+            ))}
+          </div>
+          {colors.length === 0 && <p className="hint">Aún no tienes colores. Cómpralos en la tienda con tus créditos.</p>}
+        </div>
+        <div className="panel-foot">
+          <Button onClick={() => bridge.ui.showTienda()}>IR A LA TIENDA</Button>
+          <Button className="primary" onClick={() => bridge.ui.showLobby()}>VOLVER AL LOBBY</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function BattlePassScreen() {
+  const { profile } = useAccount();
+  const [busy, setBusy] = useState(null);
+  const credits = profile?.credits || 0;
+  const pass = profile?.battlePass || { premium: false, level: 1, claimed: [] };
+  const progress = xpProgress(profile?.xp || 0);
+  const rewards = passRewards();
+
+  const buyPass = async () => {
+    setBusy('pass');
+    await accountAction(() => bridge.account.purchaseBattlePass(), 'Pase premium activado');
+    setBusy(null);
+  };
+  const claim = async (track, level) => {
+    const key = `${track}${level}`;
+    setBusy(key);
+    await accountAction(() => bridge.account.claimReward(track, level), `+${track === 'premium' ? PREMIUM_TIER_CREDITS : FREE_TIER_CREDITS} créditos`);
+    setBusy(null);
+  };
+
+  return (
+    <div className="screen panel-screen economy-screen">
+      <div className="panel pass-panel">
+        <div className="panel-head">
+          <Button className="small close-x" onClick={() => bridge.ui.showMenu()}>✕</Button>
+          <h2>Pase de batalla</h2><div className="spacer" />
+          <span className="credit-pill">¢ {creditsLabel(credits)}</span>
+        </div>
+        <div className="panel-body">
+          <div className="pass-summary">
+            <div className="pass-level"><small>NIVEL</small><strong>{pass.level}</strong><span>de {BATTLE_PASS_LEVELS}</span></div>
+            <div className="pass-progress">
+              <div className="pass-progress-head"><b>{pass.premium ? 'PASE PREMIUM' : 'PASE GRATUITO'}</b><span>{progress.current} / {XP_PER_LEVEL} XP</span></div>
+              <div className="xp-bar"><div style={{ width: `${progress.percent}%` }} /></div>
+              <p className="hint">Sube de nivel jugando: cada partida da XP por supervivencia, eliminaciones y puesto final.</p>
+            </div>
+            {!pass.premium && (
+              <Button className="primary buy-pass" disabled={busy === 'pass' || credits < BATTLE_PASS_PRICE} onClick={buyPass}>
+                {busy === 'pass' ? <><span className="loading-inline" /> Procesando...</> : <>COMPRAR POR ¢ {creditsLabel(BATTLE_PASS_PRICE)}</>}
+              </Button>
+            )}
+          </div>
+          <p className="hint" style={{ margin: '18px 0 10px' }}>
+            Recompensa gratuita: <b>{creditsLabel(FREE_TIER_CREDITS)} × {BATTLE_PASS_LEVELS} = 200 ¢</b>.
+            Recompensa premium: <b>{creditsLabel(PREMIUM_TIER_CREDITS)} × {BATTLE_PASS_LEVELS} = 1000 ¢</b>. El pase cuesta <b>800 ¢</b>.
+          </p>
+          <div className="pass-grid">
+            {rewards.map((row) => {
+              const claimFree = pass.claimed.includes(row.free.id);
+              const claimPremium = pass.claimed.includes(row.premium.id);
+              const unlocked = row.level <= pass.level;
+              return (
+                <div key={row.level} className={`pass-row ${unlocked ? 'unlocked' : ''}`}>
+                  <div className="pass-tier">{row.level}</div>
+                  <div className="reward-card free">
+                    <span>GRATIS</span><b>¢ {FREE_TIER_CREDITS}</b>
+                    <Button className="small" disabled={claimFree || !unlocked || busy === `free${row.level}`}
+                      onClick={() => claim('free', row.level)}>
+                      {busy === `free${row.level}` ? '...' : claimFree ? 'RECLAMADO' : unlocked ? 'RECLAMAR' : 'BLOQUEADO'}
+                    </Button>
+                  </div>
+                  <div className={`reward-card premium ${pass.premium ? '' : 'locked'}`}>
+                    <span>PREMIUM</span><b>¢ {PREMIUM_TIER_CREDITS}</b>
+                    <Button className="small" disabled={!pass.premium || claimPremium || !unlocked || busy === `premium${row.level}`}
+                      onClick={() => claim('premium', row.level)}>
+                      {busy === `premium${row.level}` ? '...' : claimPremium ? 'RECLAMADO' : !pass.premium ? 'SIN PASE' : unlocked ? 'RECLAMAR' : 'BLOQUEADO'}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="panel-foot"><Button className="primary" onClick={() => bridge.ui.showMenu()}>VOLVER</Button></div>
+      </div>
+    </div>
+  );
+}
+
+export function AccountScreen() {
+  const { profile, status, cloud, configured, error, projectId } = useAccount();
+  const [busy, setBusy] = useState(false);
+
+  const signIn = async () => {
+    setBusy(true);
+    await accountAction(() => bridge.account.signIn(), 'Sesión iniciada con Google');
+    setBusy(false);
+  };
+  const signOut = async () => {
+    setBusy(true);
+    await accountAction(() => bridge.account.signOut(), 'Sesión cerrada');
+    setBusy(false);
+  };
+
+  const statusText = status === 'signed-in' ? 'Conectado con Google'
+    : status === 'connecting' ? 'Conectando con Firebase...'
+      : configured ? 'Sin sesión iniciada' : 'Modo offline (guardado en este equipo)';
+
+  return (
+    <div className="screen panel-screen economy-screen">
+      <div className="panel account-panel">
+        <div className="panel-head">
+          <Button className="small close-x" onClick={() => bridge.ui.showMenu()}>✕</Button>
+          <h2>Mi cuenta</h2><div className="spacer" /><span className="status-pill">{cloud ? 'FIREBASE' : 'LOCAL'}</span>
+        </div>
+        <div className="panel-body">
+          <div className="account-hero">
+            <div className="account-avatar">{profile?.photoURL
+              ? <img src={profile.photoURL} alt="" />
+              : (profile?.displayName || 'J').slice(0, 1).toUpperCase()}</div>
+            <div><h3>{profile?.displayName || 'Jugador local'}</h3>
+              <p>{profile?.email || statusText}</p>
+              <span className="status-pill">{statusText}</span></div>
+          </div>
+          {error && <p className="hint error-text">{error}</p>}
+          {!configured && (
+            <p className="hint offline-note">
+              Para sincronizar tu progreso entre equipos, copia <code>.env.example</code> a <code>.env.local</code>,
+              rellena los datos de tu proyecto Firebase y despliega las reglas y funciones de <code>functions/</code>.
+              Mientras tanto, créditos, pase y taquilla se guardan localmente.
+            </p>
+          )}
+          <div className="account-stats">
+            <div><b>¢ {creditsLabel(profile?.credits)}</b><span>Créditos</span></div>
+            <div><b>{profile?.level || 1}</b><span>Nivel del pase</span></div>
+            <div><b>{profile?.stats?.matches || 0}</b><span>Partidas</span></div>
+            <div><b>{profile?.stats?.wins || 0}</b><span>Victorias</span></div>
+            <div><b>{profile?.stats?.kills || 0}</b><span>Eliminaciones</span></div>
+            <div><b>{profile?.xp || 0}</b><span>XP total</span></div>
+          </div>
+          {configured && !cloud && status !== 'connecting' && (
+            <Button className="primary google-button" disabled={busy} onClick={signIn}>
+              {busy ? <><span className="loading-inline" /> Conectando...</> : <><span className="btn-icon">G</span> INICIAR SESIÓN CON GOOGLE</>}
+            </Button>
+          )}
+          {cloud && (
+            <Button className="google-button" disabled={busy} onClick={signOut}>
+              {busy ? 'Cerrando sesión...' : 'CERRAR SESIÓN'}
+            </Button>
+          )}
+          {projectId && <p className="hint" style={{ marginTop: 12 }}>Proyecto Firebase: <code>{projectId}</code></p>}
+        </div>
+        <div className="panel-foot">
+          <Button onClick={() => bridge.ui.showBattlePass()}>VER PASE DE BATALLA</Button>
+          <Button className="primary" onClick={() => bridge.ui.showMenu()}>VOLVER</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function CreditsScreen() {
   return (
     <div className="screen panel-screen">
@@ -309,9 +638,10 @@ export function CreditsScreen() {
           <p className="section-title">Código</p>
           <p className="hint">OpenNite es software libre bajo licencia MIT. Interfaz: <b>React</b> (MIT) · Motor: <b>Three.js</b> (MIT) · Empaquetado: <b>Electron</b> (MIT) · Construcción: <b>Vite</b> (MIT).</p>
           <p className="section-title" style={{ marginTop: 22 }}>Modelos y animaciones</p>
-          <p className="hint"><b>RobotExpressive</b> por Tomás Laulhé / Quaternius — dominio público CC0 1.0. Incluye animaciones Idle, Walking, Running, Jump, Death, Dance, Wave, Punch y más. <a href="https://quaternius.com" target="_blank" rel="noreferrer">quaternius.com</a></p>
+          <p className="hint"><b>Personajes humanoides modulares</b> de <a href="https://github.com/NoLimitNexus/game-models" target="_blank" rel="noreferrer">NoLimitNexus/game-models</a> — CC0. Cuerpo y 19 piezas intercambiables; esqueleto y <b>132 animaciones KayKit</b> de <a href="https://kaylousberg.com" target="_blank" rel="noreferrer">Kay Lousberg</a> — CC0 1.0. Licencia incluida en <code>public/models/opennite/library/licenses/</code>.</p>
           <p className="section-title" style={{ marginTop: 22 }}>Mapa</p>
-          <p className="hint"><b>Battle Royale Town and Airfield</b> por <b>3DAssets.dev</b> — CC0 1.0 Universal. Escena 3D completa (GLB) con pueblo, aeródromo, pista, hangar y objetos de botín. No hay generación procedural de terreno: el archivo se descarga completo desde GitHub. <a href="https://3dassets.dev/packs/battle-royale-town-and-airfield" target="_blank" rel="noreferrer">Ver pack original</a></p>
+          <p className="hint"><b>San Borondon</b> es una isla pequeña de 360 m creada para OpenNite: costa irregular con ensenadas y acantilados, playas, caminos, puerto con muelles, faro, caserío denso y ruinas propios. Árboles, césped, flores y rocas del <b>Stylized Nature MegaKit</b> de <b>Quaternius</b> — CC0 1.0 Universal. <a href="https://quaternius.itch.io/stylized-nature-megakit" target="_blank" rel="noreferrer">Ver pack original</a></p>
+          <p className="hint">Los <b>cofres reales</b>, cajas, barriles, puestos de mercado, mesas, bancos y antorchas proceden del <b>Fantasy Props MegaKit</b> de <b>Quaternius</b> — CC0 1.0 Universal. <a href="https://quaternius.itch.io/fantasy-props-megakit" target="_blank" rel="noreferrer">Ver pack original</a></p>
           <p className="section-title" style={{ marginTop: 22 }}>Efectos y audio</p>
           <p className="hint">Armas y vehículos generados por código (geometría procedural propia). Partículas, trazadoras, impactos y cielo generados en tiempo real. Todos los sonidos se sintetizan con WebAudio: no hay archivos de audio de terceros.</p>
           <p className="section-title" style={{ marginTop: 22 }}>Aviso</p>
@@ -340,6 +670,8 @@ export function PauseScreen() {
 }
 
 export function ResultsScreen({ result }) {
+  useAccount();
+  const xp = matchXp(result);
   return (
     <div className="screen panel-screen">
       <div className="panel result-card" style={{ width: 'min(560px,92vw)' }}>
@@ -352,9 +684,11 @@ export function ResultsScreen({ result }) {
             <div className="result-stat"><b>{formatTime(result.time)}</b><span>Supervivencia</span></div>
           </div>
           <p className="hint">Mapa: {result.map}</p>
+          <div className="reward-line"><b>+{xp} XP</b><span>Reclamable en el pase de batalla</span></div>
         </div>
         <div className="panel-foot" style={{ justifyContent: 'center' }}>
           <Button className="primary" style={{ justifyContent: 'center', minWidth: 180 }} onClick={() => bridge.app.startMatch(bridge.ui.selectedMap)}>JUGAR OTRA VEZ</Button>
+          <Button style={{ justifyContent: 'center' }} onClick={() => bridge.ui.showBattlePass()}>VER PASE</Button>
           <Button style={{ justifyContent: 'center' }} onClick={() => bridge.app.returnToMenu()}>MENÚ</Button>
         </div>
       </div>

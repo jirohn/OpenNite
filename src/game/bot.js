@@ -13,6 +13,8 @@ const BOT_COLORS = [
   0x9bd3ff, 0xd6a25a, 0x8fd694, 0xd975d9,
 ];
 
+const WATER_FLOAT = 0.45;
+
 const DIFFICULTY = {
   easy: { accuracy: 0.075, reaction: 0.75, rpm: 300, damage: 0.75, view: 95 },
   normal: { accuracy: 0.038, reaction: 0.48, rpm: 420, damage: 1, view: 130 },
@@ -43,6 +45,7 @@ export class Bot {
     this.yaw = Math.random() * Math.PI * 2;
     this.dropping = true;
     this.grounded = false;
+    this.swimming = false;
     this.target = null;
     this.thinkTimer = Math.random() * 0.5;
     this.fireCooldown = Math.random();
@@ -205,6 +208,10 @@ export class Bot {
     }
 
     const floor = this.world.heightAt(this.position.x, this.position.z);
+    const waterY = this.world.waterLevel ?? -100;
+    const deepWater = waterY > -20 && floor < waterY - 0.55;
+    this.swimming = deepWater && this.position.y < waterY + 0.25;
+
     if (this.dropping) {
       this.velocity.y = Math.max(this.velocity.y - 6 * dt, -7);
       const destDir = this.destination.clone().sub(this.position);
@@ -215,11 +222,12 @@ export class Bot {
         this.velocity.z = lerp(this.velocity.z, destDir.z * 9, dt * 2);
       }
       this.character.play('jump');
-      if (this.position.y <= floor + 1.8) {
-        this.position.y = floor;
+      const landY = this.swimming ? waterY - WATER_FLOAT : floor;
+      if (this.position.y <= landY + (this.swimming ? 0.12 : 1.8)) {
+        this.position.y = landY;
         this.velocity.y = 0;
         this.dropping = false;
-        this.grounded = true;
+        this.grounded = !this.swimming;
         this.newDestination();
       }
     } else {
@@ -264,11 +272,22 @@ export class Bot {
         this.yaw = Math.atan2(-moveDir.x, -moveDir.z);
       }
 
+      if (this.swimming) {
+        // Los bots nadan hacia la orilla en lugar de hundirse.
+        const toShore = new THREE.Vector3(-this.position.x, 0, -this.position.z);
+        if (toShore.lengthSq() > 1) moveDir.lerp(toShore.normalize(), 0.75);
+      }
       if (moveDir.lengthSq() > 0) moveDir.normalize();
-      const speed = this.target ? 4.7 : 3.6;
+      const speed = this.swimming ? 3.2 : this.target ? 4.7 : 3.6;
       this.velocity.x = lerp(this.velocity.x, moveDir.x * speed, clamp(dt * 5, 0, 1));
       this.velocity.z = lerp(this.velocity.z, moveDir.z * speed, clamp(dt * 5, 0, 1));
-      this.velocity.y -= 22 * dt;
+      if (this.swimming) {
+        const targetY = waterY - WATER_FLOAT;
+        const desiredV = clamp((targetY - this.position.y) * 4.5, -3.2, 3.2);
+        this.velocity.y = lerp(this.velocity.y, desiredV, clamp(dt * 6, 0, 1));
+      } else {
+        this.velocity.y -= 22 * dt;
+      }
     }
 
     this.position.x += this.velocity.x * dt;
@@ -280,14 +299,14 @@ export class Bot {
     if (this.position.y <= floor2) {
       this.position.y = floor2;
       this.velocity.y = 0;
-      this.grounded = true;
+      this.grounded = !this.swimming;
       this.dropping = false;
     }
 
     this.character.group.position.copy(this.position);
     // El GLB mira hacia +Z; el frente del bot es -Z.
     this.character.group.rotation.y = this.yaw + Math.PI;
-    if (!this.dropping) this.character.setLocomotion(Math.hypot(this.velocity.x, this.velocity.z), this.grounded);
+    if (!this.dropping) this.character.setLocomotion(this.swimming ? 0 : Math.hypot(this.velocity.x, this.velocity.z), this.grounded);
     if (!this.dropping && Math.random() < dt * 0.5) this.character.play('idle');
     this.character.update(dt);
     this.character.group.visible = distance2D(this.position, player.position) < 320;

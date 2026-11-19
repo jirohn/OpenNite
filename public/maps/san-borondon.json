@@ -1,0 +1,35 @@
+{
+  "id": "san-borondon",
+  "name": "San Borondon",
+  "version": 1,
+  "type": "island",
+  "seed": 20261119,
+  "size": 360,
+  "waterLevel": 0,
+  "theme": "temperate",
+  "island": true,
+  "useKitAssets": true,
+  "modelBase": "./models/quaternius/glTF/",
+  "propBase": "./models/quaternius/props/glTF/",
+  "biome": {
+    "baseHeight": 10,
+    "amplitude": 9,
+    "frequency": 0.012,
+    "roughness": 3.5,
+    "treeDensity": 0.62,
+    "rockDensity": 0.32,
+    "grassDensity": 0.8,
+    "mountainHeight": 26
+  },
+  "lootDensity": 1.25,
+  "pois": [
+    { "name": "Puerto Viejo", "type": "harbor", "x": -92, "z": 58, "radius": 30 },
+    { "name": "Caserío de San Borondon", "type": "town", "x": 8, "z": 6, "radius": 36 },
+    { "name": "Faro del Cabo", "type": "tower", "x": 72, "z": 86, "radius": 24 },
+    { "name": "Ruinas de la Ermita", "type": "ruins", "x": -48, "z": -92, "radius": 28 },
+    { "name": "Cala de las Palmeras", "type": "outpost", "x": 104, "z": -58, "radius": 26 }
+  ],
+  "roads": [[1, 0], [1, 2], [1, 3], [1, 4], [0, 3], [0, 2], [3, 4], [2, 4]],
+  "source": "https://quaternius.itch.io/stylized-nature-megakit",
+  "license": "CC0 1.0 Universal"
+}

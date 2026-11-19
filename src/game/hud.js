@@ -32,7 +32,8 @@ export class HUD {
       mounted: true, mapName, showLockPrompt: false, fps: '',
       hp: 100, shield: 0, lowHp: false, damageOpacity: 0, stormOpacity: 0,
       slots: [], weaponName: 'Pistola', weaponColor: '#ffffff',
-      ammo: '12', reserve: '/ 90', reloadHint: '', alive: 1, stormTime: '',
+      ammo: '12', reserve: '/ 90', reloadHint: '', alive: 1, kills: 0, killFeed: [],
+      heading: 0, headingLabel: 'N', stormTime: '',
       hit: false, hiddenCrosshair: false, pickupVisible: false, pickupText: '',
       bannerVisible: false, bannerTitle: '', bannerSub: '', toasts: [], kills: [],
     });
@@ -48,7 +49,7 @@ export class HUD {
 
   kill(killer, victim, weapon = '') {
     hudStore.setState((s) => ({
-      kills: [{ killer, victim, weapon }, ...s.kills].slice(0, 5),
+      killFeed: [{ killer, victim, weapon }, ...s.killFeed].slice(0, 5),
     }));
   }
 
@@ -105,8 +106,12 @@ export class HUD {
     patch.reserve = cur && cur.def.ammo ? `/ ${inv.ammo[cur.def.ammo] ?? 0}` : '';
     patch.reloadHint = inv.reloading ? 'RECARGANDO...' : cur && !cur.def.melee && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
 
-    // Contadores
+    // Contadores y brújula (la vista gira con el mismo yaw que la cámara).
     patch.alive = 1 + bots.filter((b) => b.alive).length;
+    patch.kills = player.kills || 0;
+    const heading = (THREE.MathUtils.radToDeg(Math.atan2(-Math.sin(player.yaw), Math.cos(player.yaw))) + 360) % 360;
+    patch.heading = Math.round(heading);
+    patch.headingLabel = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(heading / 45) % 8];
     patch.stormTime = storm.timeText;
 
     // Crosshair

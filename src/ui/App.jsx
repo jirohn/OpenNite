@@ -4,6 +4,7 @@ import { Hud } from './Hud.jsx';
 import {
   MenuScreen, LobbyScreen, SettingsScreen, MapsScreen,
   CreditsScreen, PauseScreen, ResultsScreen, UpdateScreen,
+  TiendaScreen, TaquillaScreen, BattlePassScreen, AccountScreen,
 } from './screens.jsx';
 
 const SCREENS = {
@@ -15,6 +16,10 @@ const SCREENS = {
   pause: PauseScreen,
   results: ResultsScreen,
   update: UpdateScreen,
+  tienda: TiendaScreen,
+  taquilla: TaquillaScreen,
+  battlepass: BattlePassScreen,
+  account: AccountScreen,
 };
 
 function Loading({ loading }) {

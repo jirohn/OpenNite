@@ -195,16 +195,29 @@ export class Effects {
   }
 
   muzzle(pos, dir, color = 0xffc158) {
-    const item = this.flashPool[this.flashCursor++ % this.flashPool.length];
-    item.mesh.position.copy(pos).addScaledVector(dir, 0.12);
-    item.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
-    const s = (0.35 + Math.random() * 0.3) * (0.5 + this.scale * 0.5);
-    item.mesh.scale.set(s, s, s);
-    item.mesh.material.color.set(color);
-    item.mesh.material.opacity = 1;
-    item.mesh.visible = true;
-    item.life = item.max;
-    this.burst(pos, 5, color, { speed: 2.5, size: 0.13, life: 0.16, gravity: 2 });
+    const facing = new THREE.Vector3(0, 0, 1);
+    const s = (0.42 + Math.random() * 0.32) * (0.5 + this.scale * 0.5);
+    // Núcleo blanco caliente + cola ámbar: el disparo se lee incluso de día.
+    const core = this.flashPool[this.flashCursor++ % this.flashPool.length];
+    core.mesh.position.copy(pos).addScaledVector(dir, 0.14);
+    core.mesh.quaternion.setFromUnitVectors(facing, dir);
+    core.mesh.scale.set(s * 0.72, s * 0.72, s * 0.72);
+    core.mesh.material.color.set(0xfff3cf);
+    core.mesh.material.opacity = 1;
+    core.mesh.visible = true;
+    core.life = core.max;
+
+    const tail = this.flashPool[this.flashCursor++ % this.flashPool.length];
+    tail.mesh.position.copy(pos).addScaledVector(dir, 0.36);
+    tail.mesh.quaternion.setFromUnitVectors(facing, dir);
+    tail.mesh.scale.set(s * 1.6, s * 0.95, s);
+    tail.mesh.material.color.set(color);
+    tail.mesh.material.opacity = 0.88;
+    tail.mesh.visible = true;
+    tail.life = tail.max * 0.8;
+
+    this.burst(pos, 9, [color, 0xfff0b0], { speed: 4.2, size: 0.12, life: 0.14, gravity: 2 });
+    this.burst(pos, 4, 0x6b6258, { speed: 1.1, size: 0.22, life: 0.28, gravity: -0.3 });
   }
 
   impact(pos, normal, surface = 'stone') {
@@ -216,7 +229,21 @@ export class Effects {
       flesh: [0xff4d5e, 0xd42c45, 0xff8a8a],
       shield: [0x4dc8ff, 0xa2e8ff, 0x2a8dff],
     }[surface] || [0xbfb7a5];
-    this.burst(pos, surface === 'flesh' ? 14 : 10, colors, { speed: surface === 'flesh' ? 3 : 5, size: 0.13, life: 0.45, gravity: 12 });
+    this.burst(pos, surface === 'flesh' ? 16 : 12, colors, { speed: surface === 'flesh' ? 3 : 5.5, size: 0.13, life: 0.45, gravity: 12 });
+    if (surface === 'metal' || surface === 'stone') {
+      // Chispas breves y destello en impactos duros.
+      this.burst(pos, 8, [0xfff2b0, 0xffa83c], { speed: 7, size: 0.07, life: 0.16, gravity: 18 });
+      const glow = this.flashPool[this.flashCursor++ % this.flashPool.length];
+      glow.mesh.position.copy(pos).addScaledVector(normal, 0.06);
+      glow.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+      glow.mesh.scale.setScalar(0.3 + this.scale * 0.16);
+      glow.mesh.material.color.set(surface === 'metal' ? 0xffd98a : 0xd8c8a8);
+      glow.mesh.material.opacity = 0.75;
+      glow.mesh.visible = true;
+      glow.life = glow.max * 0.55;
+    } else if (surface === 'terrain') {
+      this.burst(pos, 10, [0x9c8b68, 0x75835c], { speed: 2.4, size: 0.3, life: 0.6, gravity: 3 });
+    }
     if (surface !== 'flesh' && surface !== 'shield') {
       const item = this.decalPool[this.decalCursor++ % this.decalPool.length];
       item.mesh.position.copy(pos).addScaledVector(normal, 0.035);
@@ -231,15 +258,34 @@ export class Effects {
   }
 
   explosion(pos, radius = 5) {
-    this.burst(pos, 90 * this.scale, [0xffdd66, 0xff8a2b, 0xff4b25, 0x555555], { speed: 11, size: 0.55, life: 0.9, gravity: 7 });
-    this.burst(pos, 40 * this.scale, [0x777777, 0x444444], { speed: 4, size: 1.1, life: 1.8, gravity: -0.4 });
-    const item = this.wavePool[this.waveCursor++ % this.wavePool.length];
-    item.mesh.position.copy(pos);
-    item.mesh.rotation.set(-Math.PI / 2, 0, 0);
-    item.mesh.visible = true;
-    item.mesh.material.opacity = 0.9;
-    item.life = item.max;
-    item.size = radius;
+    // Bola de fuego, humo, escombros y dos ondas de choque concéntricas.
+    this.burst(pos, 110 * this.scale, [0xfff4c0, 0xffdd66, 0xff8a2b], { speed: 14, size: 0.5, life: 0.55, gravity: 5 });
+    this.burst(pos, 70 * this.scale, [0xff8a2b, 0xff4b25, 0x7a2c18], { speed: 8, size: 0.75, life: 1.1, gravity: 7 });
+    this.burst(pos, 55 * this.scale, [0x6c6a64, 0x3d3b39], { speed: 3.4, size: 1.3, life: 2.2, gravity: -0.25 });
+    this.burst(pos, 45 * this.scale, [0x8f7355, 0x5e4a35], { speed: 9, size: 0.22, life: 1.4, gravity: 16 });
+
+    for (const [key, size, color, opacity] of [
+      ['outer', radius, 0xffb45a, 0.95],
+      ['inner', radius * 0.55, 0xfff0c0, 0.8],
+    ]) {
+      const item = this.wavePool[this.waveCursor++ % this.wavePool.length];
+      item.mesh.position.copy(pos);
+      item.mesh.rotation.set(-Math.PI / 2, 0, 0);
+      item.mesh.material.color.set(color);
+      item.mesh.visible = true;
+      item.mesh.material.opacity = opacity;
+      item.life = item.max * (key === 'inner' ? 0.7 : 1);
+      item.size = size;
+    }
+
+    const core = this.flashPool[this.flashCursor++ % this.flashPool.length];
+    core.mesh.position.copy(pos);
+    core.mesh.quaternion.identity();
+    core.mesh.scale.setScalar(radius * 0.65);
+    core.mesh.material.color.set(0xfff2c0);
+    core.mesh.material.opacity = 0.9;
+    core.mesh.visible = true;
+    core.life = core.max * 1.6;
   }
 
   floatingText(pos, text, color = '#ffffff') {

@@ -15,7 +15,7 @@ import { Storm } from './storm.js';
 import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
 
-const SKIN_COLORS = [0xffb45c, 0x4ecdc4, 0xff6b9d, 0x9b6dff, 0x6bd97f, 0x5aa9ff, 0xf2e35a, 0xf2f2f2];
+const SKIN_COLORS = [0xffb45c, 0x6f8a5b, 0x5f83a6, 0xa35f52, 0x7a6b4e, 0x4e6470, 0xb59a5e, 0x8b7a6a];
 const SKIN_ANIMS = ['dance', 'wave', 'idle', 'yes', 'dance', 'no', 'wave', 'idle'];
 
 export class Game {
@@ -61,12 +61,19 @@ export class Game {
     this.hud.input = this.input;
     this.settings.onChange(() => {
       this.applyQuality();
+      const color = this.settings.get('playerColor');
+      const preset = this.settings.get('playerPreset');
       if (this.previewCharacter && this.mode === 'preview') {
-        this.previewCharacter.setColor(this.settings.get('playerColor'));
+        if (preset !== this.previewPreset) {
+          this.previewPreset = preset;
+          this.previewCharacter.setAppearance({ preset, color }).catch((error) => {
+            console.warn('No se pudo cambiar el aspecto:', error);
+          });
+        } else this.previewCharacter.setColor(color);
       }
-      if (this.mode === 'preview') this.setPreviewSkin(this.settings.get('playerColor'));
+      if (this.mode === 'preview') this.setPreviewSkin(color);
       if (this.player?.character && (this.mode === 'playing' || this.mode === 'paused')) {
-        this.player.character.setColor(this.settings.get('playerColor'));
+        this.player.character.setColor(color);
       }
     });
     window.addEventListener('resize', () => this.resize());
@@ -160,28 +167,27 @@ export class Game {
     this.previewRing = ring;
 
     try {
-      const gltf = await loadCharacterModel();
+      const kit = await loadCharacterModel();
       if (this.mode !== 'preview') return;
-      const ch = new Character(gltf, { color: this.settings.get('playerColor') });
+      const ch = await Character.create(kit, {
+        color: this.settings.get('playerColor'),
+        preset: this.settings.get('playerPreset'),
+      });
       ch.group.position.set(0, 0, 0);
       ch.group.rotation.y = -0.5;
       ch.play('dance');
       attachWeapon(ch, 'ar');
       this.preview.add(ch.group);
       this.previewCharacter = ch;
+      this.previewPreset = this.settings.get('playerPreset');
 
-      // Ocho maniquíes 3D animados, uno por skin, para elegir aspecto en el lobby.
-      SKIN_COLORS.forEach((color, i) => {
-        const skin = new Character(gltf, { color });
+      // Ocho maniquíes 3D animados, uno por aspecto, para elegir en el lobby.
+      const skins = await Promise.all(SKIN_COLORS.map(async (color, i) => {
+        const skin = await Character.create(kit, { color, presetIndex: i });
         skin.group.position.set(3.85 + i * 0.5, 0, 0);
         skin.group.rotation.y = -0.35;
         skin.group.scale.setScalar(1.05);
         skin.play(SKIN_ANIMS[i]);
-        const galleryAction = skin.actions[SKIN_ANIMS[i]];
-        if (galleryAction) {
-          galleryAction.setLoop(THREE.LoopRepeat, Infinity);
-          galleryAction.clampWhenFinished = false;
-        }
         attachWeapon(skin, i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
         const disc = new THREE.Mesh(
           new THREE.CylinderGeometry(0.66, 0.72, 0.09, 24),
@@ -192,8 +198,9 @@ export class Game {
         skin.group.userData.color = color;
         skin.group.userData.disc = disc;
         this.preview.add(skin.group);
-        this.previewSkins.push(skin);
-      });
+        return skin;
+      }));
+      this.previewSkins = skins;
       this.setSkinPreview(this.skinPreviewMode);
       this.app.onAssetsReady?.();
     } catch (error) {
@@ -254,17 +261,21 @@ export class Game {
     this.mode = 'loading';
     this.app.setLoading?.(20, 'Descargando mapa desde GitHub...');
 
-    const gltf = await loadCharacterModel();
+    const kit = await loadCharacterModel();
     if (this.preview) this.preview.visible = false;
     this.hud.unmount();
 
     this.world = new World(this.scene, config.map, this.settings);
-    this.app.setLoading?.(40, 'Cargando escena 3D completa...');
+    this.app.setLoading?.(40, config.map.type === 'glb' ? 'Cargando escena 3D completa...' : 'Creando San Borondon y colocando la naturaleza...');
     await this.world.load();
     this.app.setLoading?.(55, 'Colocando botín y jugadores...');
 
     this.effects = new Effects(this.scene, this.settings);
-    this.player = new Player(this.camera, new Character(gltf, { color: this.settings.get('playerColor') }), this.world, this.settings, this.input, this.audio);
+    const playerCharacter = await Character.create(kit, {
+      color: this.settings.get('playerColor'),
+      preset: this.settings.get('playerPreset'),
+    });
+    this.player = new Player(this.camera, playerCharacter, this.world, this.settings, this.input, this.audio);
     this.player.onFallDamage = (damage) => {
       if (damage >= 99) this.hud.toast('¡Caída mortal!', 'warn');
       this.onBotHit(this.player, damage, 'body', { name: 'la caída' }, null);
@@ -287,6 +298,7 @@ export class Game {
     this.scene.add(this.bus);
 
     this.loot = new LootManager(this.scene, this.world, this);
+    await this.loot.load();
     this.loot.spawn(Math.round(78 * (config.map.lootDensity || 1)));
     this.storm = new Storm(this.scene, this.world, this);
     this.storm.onStormEvent = (text, type) => this.hud.toast(text, type);
@@ -298,7 +310,10 @@ export class Game {
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
       const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
-      const ch = new Character(gltf, { color: botColors[i % botColors.length] });
+      const ch = await Character.create(kit, {
+        color: botColors[i % botColors.length],
+        presetIndex: i + 1,
+      });
       this.scene.add(ch.group);
       const bot = new Bot(ch, this.world, this, i, sp);
       attachWeapon(ch, 'ar');
@@ -476,7 +491,7 @@ export class Game {
     if (!this.paused) {
       if (this.mode === 'preview') {
         this.updatePreview(dt, elapsed);
-      } else if (this.world && this.player) {
+      } else if (this.mode === 'playing' && this.world && this.player) {
         this.updateMatch(dt);
       }
     }

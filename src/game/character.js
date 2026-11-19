@@ -1,108 +1,135 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { Character as KitCharacter, Library, catalogFromFiles } from './kit-character.js';
 
-let cachedGLTF = null;
-let loadingPromise = null;
+let kitPromise = null;
 
-/** Modelo RobotExpressive — Tomás Laulhé / Quaternius, CC0 1.0. */
+/**
+ * Personajes humanoides animados (cuerpo + piezas CC0 de NoLimitNexus/Quaternius
+ * y animaciones KayKit CC0). Se carga una sola vez y se comparte entre los 20
+ * jugadores; cada personaje clona el esqueleto y recoloriza sus materiales.
+ */
 export function loadCharacterModel() {
-  if (cachedGLTF) return Promise.resolve(cachedGLTF);
-  if (loadingPromise) return loadingPromise;
-  loadingPromise = new Promise((resolve, reject) => {
-    new GLTFLoader().load('./models/RobotExpressive.glb', (gltf) => {
-      cachedGLTF = gltf;
-      resolve(gltf);
-    }, undefined, (error) => {
-      loadingPromise = null;
-      reject(error);
-    });
+  if (kitPromise) return kitPromise;
+  kitPromise = (async () => {
+    const catalog = await catalogFromFiles('./models/opennite/');
+    // Solo los clips que usa OpenNite: menos descarga en equipos modestos.
+    catalog.animations = [
+      { group: 'General', file: 'Rig_Medium_General.glb' },
+      { group: 'Movement Basic', file: 'Rig_Medium_MovementBasic.glb' },
+      { group: 'Movement Advanced', file: 'Rig_Medium_MovementAdvanced.glb' },
+      { group: 'Combat Melee', file: 'Rig_Medium_CombatMelee.glb' },
+      { group: 'Combat Ranged', file: 'Rig_Medium_CombatRanged.glb' },
+      { group: 'Simulation', file: 'Rig_Medium_Simulation.glb' },
+      { group: 'Ours', file: 'Rig_Medium_Ours.glb' },
+    ].map((f) => ({ ...f, url: `library/animations/${f.file}` }));
+    catalog.roles = {};
+    const library = new Library(catalog);
+    // Precarga compartida: Body, piezas de los presets y todos los clips.
+    await Promise.all([
+      library.clips(),
+      library.glb(catalog.base.url),
+      ...catalog.parts.map((p) => library.glb(p.url)),
+    ]);
+    return { library, presets: catalog.presets || [] };
+  })().catch((error) => {
+    kitPromise = null;
+    throw error;
   });
-  return loadingPromise;
+  return kitPromise;
 }
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 
+/** Animaciones del motor mapeadas a clips reales del kit. */
 const ANIM_MAP = {
-  idle: 'Idle',
-  walk: 'Walking',
-  run: 'Running',
-  jump: 'Jump',
-  death: 'Death',
-  dance: 'Dance',
-  punch: 'Punch',
-  wave: 'Wave',
-  sit: 'Sitting',
-  stand: 'Standing',
-  yes: 'Yes',
-  no: 'No',
+  idle: 'Idle_A',
+  walk: 'Walking_A',
+  run: 'Running_A',
+  jump: 'Jump_Full_Short',
+  death: 'Death_A',
+  dance: 'Cheering',
+  punch: 'Melee_Unarmed_Attack_Punch_A',
+  wave: 'Waving',
+  sit: 'Sit_Chair_Idle',
+  stand: 'Sit_Chair_StandUp',
+  yes: 'Cheering',
+  no: 'Hit_A',
+  hit: 'Hit_A',
+  pickup: 'PickUp',
+  interact: 'Interact',
+  fire: 'Ranged_1H_Shoot',
+  fire2: 'Ranged_2H_Shoot',
+};
+const ONCE_ANIMS = new Set(['death', 'punch', 'fire', 'fire2', 'jump', 'pickup', 'interact']);
+
+const presetFor = (kit, options = {}) => {
+  const presets = kit?.presets || [];
+  if (!presets.length) return { parts: {}, colors: {} };
+  if (typeof options.preset === 'string') {
+    const found = presets.find((p) => p.id === options.preset || p.name === options.preset);
+    if (found) return found.appearance;
+  }
+  const index = Number.isInteger(options.presetIndex)
+    ? options.presetIndex
+    : Math.abs(Math.round((options.color ?? 0) >>> 0)) % presets.length;
+  return presets[index % presets.length].appearance;
 };
 
+/** Envoltorio con la API que ya usa el motor (group/play/fire/hitboxes...). */
 export class Character {
-  constructor(gltf, options = {}) {
+  constructor(kit, options = {}) {
+    this.kit = kit;
     this.options = options;
-    this.group = new THREE.Group();
-    this.model = cloneSkeleton(gltf.scene);
-    this.model.traverse((obj) => {
-      if (obj.isMesh) {
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-        obj.material = obj.material.clone();
-        obj.frustumCulled = false;
-      }
+    this.current = 'idle';
+    this.weaponKick = 0;
+    this.fireTimer = 0;
+    this.supportBase = 0;
+    this.supportBoost = 0;
+    this.storedSpeed = 0;
+    this.storedGrounded = true;
+    this.dead = false;
+    this.height = 1.9;
+  }
+
+  static async create(kit, options = {}) {
+    const self = new Character(kit, options);
+    await self.init();
+    return self;
+  }
+
+  async init() {
+    const preset = presetFor(this.kit, this.options);
+    const appearance = {
+      parts: { ...(preset.parts || {}) },
+      colors: { ...(preset.colors || {}) },
+      tool: null,
+    };
+    this.preset = preset;
+    this.kitChar = await KitCharacter.create(this.kit.library, appearance);
+    this.kitChar.setHeight(1.9);
+    this.group = this.kitChar.holder;
+    this.group.traverse((obj) => {
+      if (obj.isMesh) obj.frustumCulled = false;
     });
 
-    // Escalar a 1.9 m de altura y apoyar los pies en y=0.
-    // Box3.setFromObject da cotas gigantes con SkinnedMesh/Mixamo, así que se
-    // mide la geometría real de cada malla con su matriz mundial.
-    this.model.updateWorldMatrix(true, true);
-    let minY = Infinity;
-    let maxY = -Infinity;
-    this.model.traverse((obj) => {
-      if (!obj.isMesh || !obj.geometry) return;
-      if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
-      const bb = obj.geometry.boundingBox;
-      if (!bb) return;
-      for (const x of [bb.min.x, bb.max.x]) {
-        for (const y of [bb.min.y, bb.max.y]) {
-          for (const z of [bb.min.z, bb.max.z]) {
-            const v = new THREE.Vector3(x, y, z).applyMatrix4(obj.matrixWorld);
-            minY = Math.min(minY, v.y);
-            maxY = Math.max(maxY, v.y);
-          }
-        }
-      }
-    });
-    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
-      minY = 0;
-      maxY = 1.9;
-    }
-    const height = Math.max(0.001, maxY - minY);
-    const scale = 1.9 / height;
-    this.model.scale.setScalar(scale);
-    this.model.position.y = -minY * scale;
-    this.group.add(this.model);
-
-    // Hand.R / Hand.L del GLB son marcadores estáticos (no siguen la animación).
-    // La mano real es Palm1R / Palm1L, dentro del esqueleto.
+    const bones = this.kitChar.bones;
     this.bones = {
-      upperR: this.model.getObjectByName('UpperArmR'),
-      lowerR: this.model.getObjectByName('LowerArmR'),
-      handR: this.model.getObjectByName('Palm1R'),
-      shoulderL: this.model.getObjectByName('ShoulderL'),
-      upperL: this.model.getObjectByName('UpperArmL'),
-      lowerL: this.model.getObjectByName('LowerArmL'),
-      handL: this.model.getObjectByName('Palm1L'),
+      upperR: bones.get('upperarmr'),
+      lowerR: bones.get('lowerarmr'),
+      handR: bones.get('handslotr') || bones.get('handr'),
+      shoulderL: bones.get('chest'),
+      upperL: bones.get('upperarml'),
+      lowerL: bones.get('lowerarml'),
+      handL: bones.get('handslotl') || bones.get('handl'),
     };
 
-    // El arma se empuña con la mano derecha real. El armature está en
-    // centímetros (escala ~39.65x), así que se compensa esa escala para que el
-    // arma mantenga su tamaño en metros dentro del grupo del personaje.
+    // El arma cuelga de la mano real del esqueleto. Se compensa la escala
+    // acumulada (incluido el holder) para que mida lo mismo en cualquier skin.
     const firingHand = this.bones.handR || this.bones.lowerR;
     this.weaponMount = new THREE.Group();
     if (firingHand) {
-      let accumulated = 1;
+      let accumulated = Math.abs(this.group.scale.x) || 1;
       for (let node = firingHand; node && node !== this.group; node = node.parent) {
         accumulated *= Math.abs(node.scale.x) || 1;
       }
@@ -110,8 +137,6 @@ export class Character {
       this.group.updateWorldMatrix(true, true);
       const handQ = firingHand.getWorldQuaternion(new THREE.Quaternion());
       const groupQ = this.group.getWorldQuaternion(new THREE.Quaternion());
-      // Orientación que devuelve el arma al frente del personaje en reposo.
-      // El GLB mira hacia +Z y el arma modelo dispara hacia -Z: giro de 180º.
       this.handAlign = groupQ.invert().multiply(handQ).invert()
         .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
       this.weaponMount.quaternion.copy(this.handAlign);
@@ -120,79 +145,52 @@ export class Character {
       this.weaponMount.position.set(0.34, 1.24, 0.22);
       this.group.add(this.weaponMount);
     }
-    this.weaponKick = 0;
-    this.fireTimer = 0;
-    this.supportBase = 0;
-    this.supportBoost = 0;
-    this.storedSpeed = 0;
-    this.storedGrounded = true;
 
-    this.mixer = new THREE.AnimationMixer(this.model);
-    this.actions = {};
-    for (const [key, clipName] of Object.entries(ANIM_MAP)) {
-      const clip = THREE.AnimationClip.findByName(gltf.animations, clipName);
-      if (clip) this.actions[key] = this.mixer.clipAction(clip);
-    }
-    for (const [key, action] of Object.entries(this.actions)) {
-      action.enabled = key === 'idle';
-      action.setEffectiveWeight(key === 'idle' ? 1 : 0);
-      if (['idle', 'walk', 'run'].includes(key)) action.setLoop(THREE.LoopRepeat, Infinity);
-      else action.setLoop(THREE.LoopOnce, 1);
-      action.clampWhenFinished = true;
-      if (key === 'idle') action.play();
-    }
-    this.current = 'idle';
-    this.tint = new THREE.Color(options.color || 0xffffff);
-    this.setColor(options.color || 0xffffff);
-
-    this.height = 1.9;
-    this.dead = false;
+    this.setColor(this.options.color ?? 0xffffff);
   }
 
   setColor(color) {
-    this.tint.set(color);
-    const tintHSL = {};
-    this.tint.getHSL(tintHSL);
-    this.model.traverse((obj) => {
-      if (!obj.isMesh || !obj.material) return;
-      if (!obj.userData.baseColor) obj.userData.baseColor = obj.material.color?.clone() || new THREE.Color(0xffffff);
-      const baseHSL = {};
-      obj.userData.baseColor.getHSL(baseHSL);
-      if (obj.material.color) {
-        if (baseHSL.l < 0.16) {
-          // Piezas oscuras (visera, juntas): solo un reflejo del color.
-          obj.material.color.copy(obj.userData.baseColor).lerp(this.tint, 0.2);
-        } else {
-          // El tinte manda: se mantiene la luminosidad original para conservar el sombreado.
-          const lightness = Math.min(0.92, Math.max(0.5, baseHSL.l * 1.35));
-          obj.material.color.setHSL(tintHSL.h, Math.min(1, tintHSL.s * 1.05), lightness);
-        }
-      }
-      if (obj.material.emissive) obj.material.emissive.copy(this.tint).multiplyScalar(baseHSL.l < 0.16 ? 0.04 : 0.11);
+    if (!this.kitChar || color === undefined || color === null) return;
+    const tint = new THREE.Color(color);
+    // Solo teñimos la ropa exterior: piel, pelo, pantalones y botas conservan
+    // el acabado realista del preset. Antes un 72% de tinte convertía a los 20
+    // personajes en muñecos de colores fluorescentes.
+    for (const key of ['shirt', 'hat', 'pack', 'linen']) {
+      const current = this.kitChar.colorOf(key);
+      if (!current) continue;
+      const base = new THREE.Color(current);
+      base.lerp(tint, 0.42);
+      this.kitChar.setColor(key, `#${base.getHexString()}`);
+    }
+  }
+
+  /** Cambia aspecto en caliente (taquilla): reconstruye las piezas del preset. */
+  async setAppearance(options = {}) {
+    if (!this.kitChar) return;
+    const preset = presetFor(this.kit, options);
+    this.preset = preset;
+    await this.kitChar.apply({
+      parts: { ...(preset.parts || {}) },
+      colors: { ...(preset.colors || {}) },
+      tool: null,
     });
+    this.setColor(options.color ?? this.options.color ?? 0xffffff);
   }
 
   play(name, fade = 0.2) {
     if (name === this.current) return;
-    const next = this.actions[name] || this.actions.idle;
-    if (!next) return;
-    const prev = this.actions[this.current];
-    next.reset();
-    next.enabled = true;
-    next.setEffectiveWeight(1);
-    next.play();
-    if (prev && prev !== next) {
-      prev.crossFadeTo(next, fade, false);
-      next.setEffectiveTimeScale(1);
-      next.fadeIn(fade);
-    }
+    const clip = ANIM_MAP[name] || ANIM_MAP.idle;
     this.current = name;
+    this.kitChar.playClip(clip, {
+      fade,
+      once: ONCE_ANIMS.has(name),
+      speed: 1,
+    }).catch((error) => console.warn('Animación no disponible:', clip, error));
   }
 
   setLocomotion(speed, grounded) {
     this.storedSpeed = speed;
     this.storedGrounded = grounded;
-    // Durante el disparo manda la animación de brazos, no la de caminar.
     if (this.dead || this.fireTimer > 0) return;
     if (!grounded) this.play('jump', 0.15);
     else if (speed > 4.2) this.play('run', 0.25);
@@ -205,17 +203,13 @@ export class Character {
     if (type !== 'pistol') this.supportBoost = 0;
   }
 
-  /** Disparo: el personaje hace la animación y el arma sigue la mano. */
   fire(type = 'pistol') {
     if (this.dead) return;
     this.fireTimer = 0.26;
     this.weaponKick = Math.min(1.5, this.weaponKick + 0.95);
-    this.play('punch', 0.05);
+    this.play(type === 'pistol' ? 'fire' : 'fire2', 0.05);
     this.setWeaponType(type);
-    if (type === 'pistol') {
-      // Cada disparo seguido sube la influencia del IK de la mano libre.
-      this.supportBoost = Math.min(0.85, this.supportBoost + 0.17);
-    }
+    if (type === 'pistol') this.supportBoost = Math.min(0.85, this.supportBoost + 0.17);
   }
 
   die() {
@@ -225,7 +219,7 @@ export class Character {
   }
 
   update(dt) {
-    this.mixer.update(dt);
+    this.kitChar.update(dt);
     if (this.fireTimer > 0) {
       this.fireTimer -= dt;
       if (this.fireTimer <= 0) this.setLocomotion(this.storedSpeed, this.storedGrounded);
@@ -249,7 +243,6 @@ export class Character {
     }
   }
 
-  /** IK CCD de dos huesos: lleva la mano izquierda al anteempuñadura del arma. */
   applySupportIK() {
     const influence = Math.min(0.92, this.supportBase + this.supportBoost);
     const { shoulderL, upperL, lowerL, handL } = this.bones;
@@ -258,8 +251,6 @@ export class Character {
     this.group.updateWorldMatrix(true, true);
     weapon.updateWorldMatrix(true, false);
     const target = weapon.localToWorld(weapon.userData.supportGrip.clone());
-    // El anteempuñadura puede quedar fuera del alcance del brazo. En ese caso
-    // se acerca al máximo alcanzable para estirar el brazo sin deformarlo.
     if (!this.supportReach) {
       const a = upperL.getWorldPosition(new THREE.Vector3());
       const b = lowerL.getWorldPosition(new THREE.Vector3());
@@ -293,7 +284,6 @@ export class Character {
     bone.updateWorldMatrix(false, true);
   }
 
-  /** Esferas de hitbox en coordenadas del grupo (Y pies = 0). */
   getHitboxes(out = []) {
     const { x, z } = this.group.position;
     const y = this.group.position.y;
@@ -305,18 +295,16 @@ export class Character {
   }
 
   dispose() {
-    this.mixer.stopAllAction();
-    this.model.traverse((obj) => {
-      if (obj.isMesh) obj.material?.dispose();
-    });
+    this.kitChar?.dispose();
   }
 }
+
+export const createCharacter = (kit, options = {}) => Character.create(kit, options);
 
 /** Armas hechas con geometría procedural: estilo low-poly limpio, sin assets propietarios. */
 export function createWeaponModel(type) {
   const group = new THREE.Group();
 
-  // Pico: herramienta inicial cuerpo a cuerpo, completamente procedural.
   if (type === 'pickaxe') {
     const handle = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: 0.86 });
     const steel = new THREE.MeshStandardMaterial({ color: 0xa9b6c2, metalness: 0.8, roughness: 0.3 });
@@ -383,7 +371,6 @@ export function createWeaponModel(type) {
   box(bw + 0.03, 0.07, bd * 0.55, metal, 0, bh / 2 + 0.02, -0.04);
   cyl(0.045, 0.045, p.barrel, metal, 0, 0.015, -bd / 2 - p.barrel / 2);
   cyl(0.06, 0.06, 0.08, dark, 0, 0.015, -bd / 2 - p.barrel + 0.02);
-  // Culata y empuñadura
   box(bw * 0.85, 0.24, 0.14, wood || dark, 0, -0.12, bd / 2 - 0.05, -0.28);
   box(bw * 0.8, 0.22, 0.12, dark, 0, -0.2, bd / 2 - 0.22, 0.22);
   if (p.mag > 0.2) box(0.1, p.mag, 0.14, metal, 0, -bh / 2 - p.mag / 2 + 0.04, -0.06, 0.08);
@@ -396,7 +383,6 @@ export function createWeaponModel(type) {
 
   group.userData.muzzle = new THREE.Vector3(0, 0.015, -bd / 2 - p.barrel - 0.04);
   group.userData.grip = new THREE.Vector3(0, -0.19, bd / 2 - 0.22);
-  // Punto donde la mano libre agarra el arma (cañón/anteempuñadura).
   group.userData.supportGrip = type === 'pistol'
     ? new THREE.Vector3(0, -0.1, 0.02)
     : new THREE.Vector3(0, -0.07, -bd * 0.12);

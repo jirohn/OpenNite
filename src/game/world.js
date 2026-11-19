@@ -43,6 +43,37 @@ const SUBBIOME = {
   autumn: 0x6d422b,
 };
 
+/** Objetos del Stylized Nature MegaKit usados en San Borondon (unidades ≈ metros). */
+const KIT_VARIANTS = [
+  { model: 'CommonTree_1', count: 20, minRadius: 0.08, maxRadius: 0.68, scale: 1, shadow: true },
+  { model: 'CommonTree_2', count: 18, minRadius: 0.08, maxRadius: 0.68, scale: 1, shadow: true },
+  { model: 'CommonTree_3', count: 12, minRadius: 0.1, maxRadius: 0.62, scale: 0.92, shadow: true },
+  { model: 'Pine_1', count: 17, minRadius: 0.1, maxRadius: 0.7, scale: 1, shadow: true },
+  { model: 'Pine_2', count: 14, minRadius: 0.12, maxRadius: 0.7, scale: 0.95, shadow: true },
+  { model: 'Pine_4', count: 10, minRadius: 0.12, maxRadius: 0.58, scale: 0.85, shadow: true },
+  { model: 'Rock_Medium_1', count: 24, maxRadius: 0.74, scale: 0.85, allowPoi: true, shadow: true, yOffset: 0.12 },
+  { model: 'Rock_Medium_2', count: 20, maxRadius: 0.74, scale: 0.8, allowPoi: true, shadow: true, yOffset: 0.08 },
+  { model: 'Rock_Medium_3', count: 16, maxRadius: 0.72, scale: 0.78, allowPoi: true, shadow: true, yOffset: 0.16 },
+  { model: 'Bush_Common', count: 46, maxRadius: 0.7, scale: 0.9, shadow: false, flat: true, allowPoi: true },
+  { model: 'Bush_Common_Flowers', count: 32, maxRadius: 0.68, scale: 0.9, shadow: false, flat: true, allowPoi: true },
+  { model: 'Fern_1', count: 24, maxRadius: 0.66, scale: 0.48, shadow: false, flat: true, allowPoi: true },
+  { model: 'Grass_Common_Short', count: 170, maxRadius: 0.76, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
+  { model: 'Grass_Wispy_Tall', count: 115, maxRadius: 0.74, scale: 0.9, shadow: false, flat: true, allowPoi: true, clearance: 0.5 },
+  { model: 'Flower_3_Group', count: 44, maxRadius: 0.7, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
+  { model: 'Flower_4_Group', count: 36, maxRadius: 0.7, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
+  { model: 'Clover_1', count: 52, maxRadius: 0.74, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.4 },
+  { model: 'Pebble_Round_1', count: 54, maxRadius: 0.78, scale: 1.1, shadow: false, allowPoi: true, clearance: 0.4, yOffset: 0.03 },
+  { model: 'Pebble_Square_1', count: 44, maxRadius: 0.78, scale: 1.1, shadow: false, allowPoi: true, clearance: 0.4, yOffset: 0.03 },
+  { model: 'Mushroom_Common', count: 22, maxRadius: 0.64, scale: 1, shadow: false, clearance: 0.6 },
+];
+
+/** Props del Fantasy Props MegaKit (CC0) usados en pueblos, puertos y caminos. */
+const PROP_NAMES = [
+  'Bag', 'Barrel', 'Barrel_Apples', 'Bench', 'Bucket_Wooden_1', 'Crate_Metal',
+  'Crate_Wooden', 'FarmCrate_Apple', 'FarmCrate_Empty', 'Lantern_Wall',
+  'Shelf_Simple', 'Stall_Cart_Empty', 'Stall_Empty', 'Table_Large', 'Torch_Metal',
+];
+
 /** Texturas 2D generadas por código: detalle real sin assets de terceros. */
 function makeSurfaceTexture(kind, seed, repeat = 4, anisotropy = 4) {
   const size = 128;
@@ -117,6 +148,71 @@ function makeSurfaceTexture(kind, seed, repeat = 4, anisotropy = 4) {
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeat, repeat);
+  tex.anisotropy = anisotropy;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Texturas de calzada generadas por código (tierra, adoquines y tablones). */
+function makeRoadTexture(kind, seed, anisotropy = 4) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 256;
+  const c = canvas.getContext('2d');
+  const rnd = makeRandom(seed >>> 0);
+
+  if (kind === 'cobble') {
+    c.fillStyle = '#484742';
+    c.fillRect(0, 0, canvas.width, canvas.height);
+    for (let row = 0; row < 14; row++) {
+      for (let col = -1; col < 6; col++) {
+        const x = col * 24 + (row % 2) * 12 + 1;
+        const y = row * 19 + 1;
+        const v = 126 + Math.floor(rnd() * 48);
+        c.fillStyle = `rgb(${v},${v - 4},${v - 12})`;
+        c.beginPath();
+        c.roundRect(x, y, 21, 16, 5);
+        c.fill();
+      }
+    }
+  } else if (kind === 'plank') {
+    c.fillStyle = '#4a3422';
+    c.fillRect(0, 0, canvas.width, canvas.height);
+    for (let row = 0; row < 8; row++) {
+      const v = 112 + Math.floor(rnd() * 42);
+      c.fillStyle = `rgb(${v},${Math.floor(v * 0.7)},${Math.floor(v * 0.45)})`;
+      c.fillRect(0, row * 32 + 2, canvas.width, 27);
+      c.strokeStyle = 'rgba(28,18,10,0.55)';
+      c.lineWidth = 1;
+      c.beginPath();
+      c.moveTo(0, row * 32 + 2);
+      c.lineTo(canvas.width, row * 32 + 2);
+      c.stroke();
+      for (const x of [12, 112]) {
+        c.fillStyle = 'rgba(35,32,28,0.65)';
+        c.fillRect(x, row * 32 + 8, 3, 3);
+      }
+    }
+  } else {
+    c.fillStyle = '#7f7054';
+    c.fillRect(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < 4200; i++) {
+      const v = 90 + Math.floor(rnd() * 110);
+      c.fillStyle = `rgba(${v},${Math.floor(v * 0.92)},${Math.floor(v * 0.74)},0.42)`;
+      c.fillRect(rnd() * canvas.width, rnd() * canvas.height, 1 + rnd() * 3, 1 + rnd() * 2);
+    }
+    // Rodadas de carretilla que hacen legible el sentido del camino.
+    for (const x of [28, 100]) {
+      c.fillStyle = 'rgba(63,52,37,0.38)';
+      c.fillRect(x - 7, 0, 14, canvas.height);
+      c.fillStyle = 'rgba(176,157,119,0.20)';
+      c.fillRect(x - 2, 0, 4, canvas.height);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = anisotropy;
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -207,10 +303,8 @@ export class World {
     this.map = map;
     this.settings = settings;
     this.seed = (map.seed || 1) >>> 0;
-    this.size = map.size || 432;
+    this.size = map.size || 360;
     this.half = this.size / 2;
-    this.waterLevel = -100;
-    this.biome = {};
     this.theme = THEMES[map.theme] || THEMES.temperate;
     this.subBiomeColor = new THREE.Color(SUBBIOME[map.theme] || SUBBIOME.temperate);
     this.chunks = new Map();
@@ -221,6 +315,8 @@ export class World {
     this.spawnPoints = [];
     this.pois = [];
     this.jumpPads = [];
+    this.roadSegments = [];
+    this.roadCircles = [];
     this.disposables = [];
     this.root = new THREE.Group();
     this.scene.add(this.root);
@@ -233,15 +329,212 @@ export class World {
     this.loaded = false;
     this.model = null;
     this.file = map.file || `${map.id}.glb`;
-    this.scale = Number(map.scale) || 6;
+    this.scale = Number(map.scale) || 1;
+
+    // San Borondon es un mapa procedural pequeño; el antiguo mapa GLB sigue
+    // soportado por si queda instalado en algún equipo.
+    this.procedural = map.type !== 'glb';
+    this.useKitAssets = this.procedural && map.useKitAssets !== false;
+    this.kitBase = map.modelBase || './models/quaternius/glTF/';
+    this.propBase = map.propBase || './models/quaternius/props/glTF/';
+    this.kitModels = {};
+    this.propModels = {};
+    this.propRequests = [];
+
+    if (this.procedural) {
+      this.waterLevel = map.waterLevel ?? 0;
+      this.biome = map.biome || {};
+      this.mountainHeight = this.biome.mountainHeight ?? 26;
+      this.chunkSegments = 40;
+      this.poiFlatHeights = new Map();
+      for (const poi of map.pois || []) {
+        this.poiFlatHeights.set(poi.name, Math.max(this.rawHeightAt(poi.x, poi.z), this.waterLevel + 2.4));
+      }
+      this.pois = (map.pois || []).map((poi) => ({ ...poi }));
+      this.materials = this.createMaterials();
+      this.disposables.push(...Object.values(this.materials), ...this.textures);
+    } else {
+      this.waterLevel = -100;
+      this.biome = {};
+    }
 
     this.setupSky();
     this.setupLights();
     this.setupClouds();
   }
 
-  /** Descarga y carga el GLB completo: no se genera ningún terreno por código. */
   async load() {
+    if (this.procedural) return this.loadIsland();
+    return this.loadGlb();
+  }
+
+  /** Isla pequeña hecha con terreno propio y objetos del Stylized Nature MegaKit. */
+  async loadIsland() {
+    this.generateRoads();
+    this.generateSanBorondonLandmarks();
+    this.setupWater();
+    this.setupJumpPads();
+
+    const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
+    for (let cx = -range; cx <= range; cx++) {
+      for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+    }
+
+    if (this.useKitAssets) {
+      await this.loadKitModels();
+      this.placeKitObjects();
+      this.placePropObjects();
+    }
+    this.loaded = true;
+  }
+
+  async loadKitModels() {
+    const loader = new GLTFLoader();
+    const loadParts = async (url) => {
+      try {
+        const gltf = await loader.loadAsync(url);
+        gltf.scene.updateMatrixWorld(true);
+        const parts = [];
+        gltf.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          const geometry = o.geometry.clone();
+          geometry.applyMatrix4(o.matrixWorld);
+          parts.push({ geometry, material: o.material });
+        });
+        return parts;
+      } catch (error) {
+        console.warn(`No se pudo cargar el modelo ${url}:`, error);
+        return [];
+      }
+    };
+    const names = [...new Set(KIT_VARIANTS.map((v) => v.model))];
+    await Promise.all(names.map(async (name) => {
+      this.kitModels[name] = await loadParts(`${this.kitBase}${name}.gltf`);
+    }));
+    if (this.propRequests.length) {
+      await Promise.all(PROP_NAMES.map(async (name) => {
+        this.propModels[name] = await loadParts(`${this.propBase}${name}.gltf`);
+      }));
+    }
+  }
+
+  /** Coloca los props CC0 en los puntos exactos pedidos por los landmarks. */
+  placePropObjects() {
+    const shadows = !!this.settings.get('shadows');
+    const dummy = new THREE.Object3D();
+    const byModel = new Map();
+    for (const request of this.propRequests) {
+      if (!byModel.has(request.model)) byModel.set(request.model, []);
+      byModel.get(request.model).push(request);
+    }
+    for (const [name, requests] of byModel) {
+      const parts = this.propModels[name];
+      if (!parts?.length) continue;
+      const materials = new Set();
+      for (const { geometry, material } of parts) {
+        const mesh = new THREE.InstancedMesh(geometry, material, requests.length);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.frustumCulled = false;
+        mesh.castShadow = shadows;
+        mesh.receiveShadow = shadows;
+        requests.forEach((r, i) => {
+          dummy.position.set(r.x, r.y ?? this.heightAt(r.x, r.z), r.z);
+          dummy.rotation.set(0, r.rot ?? 0, 0);
+          dummy.scale.setScalar(r.scale ?? 1);
+          dummy.updateMatrix();
+          mesh.setMatrixAt(i, dummy.matrix);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+        this.root.add(mesh);
+        this.disposables.push(geometry);
+        materials.add(material);
+      }
+      for (const mat of materials) {
+        this.disposables.push(mat);
+        if (mat.map) this.disposables.push(mat.map);
+        if (mat.normalMap) this.disposables.push(mat.normalMap);
+      }
+    }
+  }
+
+  placeKitObjects() {
+    const density = this.settings.get('vegetation') ?? 1;
+    const shadows = !!this.settings.get('shadows');
+    const dummy = new THREE.Object3D();
+    const materials = new Set();
+
+    for (const variant of KIT_VARIANTS) {
+      const parts = this.kitModels[variant.model];
+      if (!parts?.length) continue;
+      const count = Math.max(0, Math.round(variant.count * density));
+      if (!count) continue;
+
+      const meshes = parts.map(({ geometry, material }) => {
+        const mesh = new THREE.InstancedMesh(geometry, material, count);
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        mesh.frustumCulled = false;
+        mesh.castShadow = shadows && variant.shadow !== false;
+        mesh.receiveShadow = shadows && variant.shadow !== false;
+        this.root.add(mesh);
+        this.disposables.push(geometry);
+        materials.add(material);
+        return mesh;
+      });
+
+      const rnd = makeRandom(this.seed ^ hashString(variant.model));
+      const minR = this.half * (variant.minRadius ?? 0.05);
+      const maxR = this.half * (variant.maxRadius ?? 0.7);
+      let placed = 0;
+      for (let i = 0; i < count; i++) {
+        let x = 0;
+        let z = 0;
+        let y = 0;
+        let ok = false;
+        for (let tries = 0; tries < 10 && !ok; tries++) {
+          const a = rnd() * Math.PI * 2;
+          const r = minR + Math.sqrt(rnd()) * (maxR - minR);
+          x = Math.cos(a) * r;
+          z = Math.sin(a) * r;
+          y = this.heightAt(x, z);
+          if (y < this.waterLevel + (variant.waterMargin ?? 1.2)) continue;
+          if (!variant.allowPoi && this.nearPOI(x, z, variant.poiFactor ?? 1)) continue;
+          if (this.nearRoad(x, z, (variant.clearance ?? 1.4) + 0.6)) continue;
+          if (this.collidesAt(x, z, y, variant.clearance ?? 1.4)) continue;
+          ok = true;
+        }
+        if (!ok) {
+          dummy.position.set(0, -1000, 0);
+          dummy.scale.setScalar(0.0001);
+        } else {
+          const s = variant.scale * (0.82 + rnd() * 0.36);
+          dummy.position.set(x, y + (variant.yOffset ?? 0), z);
+          dummy.rotation.set(0, rnd() * Math.PI * 2, 0);
+          dummy.scale.set(s, s * (variant.flat ? 0.75 : 1), s);
+          placed++;
+        }
+        dummy.updateMatrix();
+        for (const mesh of meshes) mesh.setMatrixAt(i, dummy.matrix);
+      }
+      for (const mesh of meshes) mesh.instanceMatrix.needsUpdate = true;
+      if (placed === 0) console.warn(`El kit ${variant.model} no encontró ubicaciones válidas.`);
+    }
+    for (const mat of materials) {
+      this.disposables.push(mat);
+      if (mat.map) this.disposables.push(mat.map);
+      if (mat.normalMap) this.disposables.push(mat.normalMap);
+    }
+  }
+
+  collidesAt(x, z, y, radius = 1) {
+    for (const c of this.collidersNear(x, z, radius + 2)) {
+      if (c.maxY < y + 0.5) continue;
+      if (x + radius > c.minX && x - radius < c.maxX && z + radius > c.minZ && z - radius < c.maxZ) return true;
+    }
+    return false;
+  }
+
+  /** Carga del mapa GLB heredado (se mantiene por compatibilidad). */
+  async loadGlb() {
     const bundledUrl = `./maps/${this.file}`;
     const installedUrl = `./installed-maps/${this.file}`;
     const tryFetch = async (url, installed = false) => {
@@ -391,6 +684,10 @@ export class World {
       tree: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, flatShading: true }),
       rock: std(t.rock, { flatShading: true }),
       bush: std(t.tree2, { flatShading: true }),
+      // Detalle de los nuevos POI: tierras de cultivo, hierba alta y piedra funeraria.
+      soil: std(0x5b412c, { map: groundTex, roughness: 1 }),
+      crop: std(0x7f9c46, { roughness: 0.95 }),
+      grave: std(0x9a9b95, { map: concreteTex, roughness: 0.92 }),
     };
   }
 
@@ -398,16 +695,17 @@ export class World {
     this.sky = new Sky();
     this.sky.scale.setScalar(450000);
     const u = this.sky.material.uniforms;
-    u.turbidity.value = 6;
-    u.rayleigh.value = 1.7;
-    u.mieCoefficient.value = 0.006;
-    u.mieDirectionalG.value = 0.83;
-    const phi = THREE.MathUtils.degToRad(56);
-    const theta = THREE.MathUtils.degToRad(148);
+    u.turbidity.value = 4.2;
+    u.rayleigh.value = 2.15;
+    u.mieCoefficient.value = 0.0045;
+    u.mieDirectionalG.value = 0.79;
+    // Sol más bajo y cálido: sombras largas y cielo con profundidad real.
+    const phi = THREE.MathUtils.degToRad(64);
+    const theta = THREE.MathUtils.degToRad(138);
     this.sunDirection = new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
     u.sunPosition.value.copy(this.sunDirection);
     this.root.add(this.sky);
-    this.scene.fog = new THREE.Fog(this.theme.sky, 500, 2600);
+    this.scene.fog = new THREE.Fog(this.theme.sky, 700, 3000);
     this.scene.background = new THREE.Color(this.theme.sky);
   }
 
@@ -416,9 +714,9 @@ export class World {
   }
 
   setupLights() {
-    this.hemi = new THREE.HemisphereLight(this.theme.sky, this.theme.grass, 1.25 * this.theme.sun);
+    this.hemi = new THREE.HemisphereLight(this.theme.sky, this.theme.grass, 1.05 * this.theme.sun);
     this.root.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xfff2dd, 2.1 * this.theme.sun);
+    this.sun = new THREE.DirectionalLight(0xffe9c4, 2.35 * this.theme.sun);
     this.sun.position.copy(this.sunDirection).multiplyScalar(500);
     this.sun.target.position.set(0, 0, 0);
     this.root.add(this.sun, this.sun.target);
@@ -556,7 +854,8 @@ export class World {
         addPad(poi.x + Math.cos(a) * r, poi.z + Math.sin(a) * r);
       }
     }
-    for (let i = 0; i < 14; i++) {
+    const scattered = this.procedural ? 6 : 14;
+    for (let i = 0; i < scattered; i++) {
       const a = rnd() * Math.PI * 2;
       const r = this.half * (0.15 + rnd() * 0.55);
       addPad(Math.cos(a) * r, Math.sin(a) * r);
@@ -614,15 +913,77 @@ export class World {
 
   // ---------------------- Terreno ----------------------
 
-  // El mapa es un GLB completo: no se genera terreno por código.
-  // El modelo se centra con su base en y=0 y se escala en load().
   rawHeightAt(x, z) {
-    if (Math.abs(x) > this.half || Math.abs(z) > this.half) return -100;
-    return 0;
+    if (!this.procedural) {
+      if (Math.abs(x) > this.half || Math.abs(z) > this.half) return -100;
+      return 0;
+    }
+    const b = this.biome;
+    const f = b.frequency || 0.012;
+    const n = fbm(x * f, z * f, this.seed, 5);
+    const broad = fbm(x * f * 0.38 + 30, z * f * 0.38 - 20, this.seed + 991, 3);
+    const ridge = 1 - Math.abs(fbm(x * f * 1.6, z * f * 1.6, this.seed + 451, 3) * 2 - 1);
+    const detail = noise2(x * 0.035, z * 0.035, this.seed + 77) - 0.5;
+    let h = (b.baseHeight ?? 10) + (n - 0.5) * (b.amplitude ?? 9) * 2
+      + (broad - 0.5) * (b.amplitude ?? 9) * 1.1
+      + ridge * ridge * (b.roughness ?? 3.5) * 1.8 + detail * 1.6;
+
+    const mountainField = fbm(x * f * 0.6 + 120, z * f * 0.6 - 85, this.seed + 3337, 3);
+    const peak = Math.pow(clamp((mountainField - 0.48) / 0.28, 0, 1), 1.4);
+    h += peak * this.mountainHeight;
+
+    if (this.map.island) {
+      const angle = Math.atan2(z, x);
+      // Costa irregular: lóbulos, cabos y ensenadas en vez de un círculo perfecto.
+      const coastNoise = fbm(x * 0.0042 + 61, z * 0.0042 - 37, this.seed + 7777, 3);
+      const lobes = 0.09 * Math.sin(angle * 3 + 0.9)
+        + 0.065 * Math.sin(angle * 5.4 - 1.7)
+        + 0.04 * Math.sin(angle * 8.1 + 2.3)
+        + (coastNoise - 0.5) * 0.34;
+      const coastR = this.half * clamp(0.98 + lobes, 0.76, 1.12);
+      const r = Math.hypot(x, z) / coastR;
+
+      // Hundimiento progresivo del terreno a partir de la línea de costa.
+      const t = smoothstep(clamp((r - 0.8) / 0.2, 0, 1));
+      h = lerp(h, this.waterLevel - 20, t);
+
+      // Playas llanas donde el ruido costero es bajo; acantilados donde es alto.
+      const shore = smoothstep(clamp((r - 0.66) / 0.1, 0, 1))
+        * (1 - smoothstep(clamp((r - 0.92) / 0.08, 0, 1)));
+      if (shore > 0) {
+        const cliff = smoothstep(clamp((coastNoise - 0.52) / 0.16, 0, 1));
+        const limit = this.waterLevel + lerp(1.3, 11, cliff) + detail * 0.8;
+        if (h > limit) h = lerp(h, limit, shore);
+      }
+
+      // Los enclaves del mapa siempre quedan sobre tierra firme.
+      for (const poi of this.map.pois || []) {
+        const dx = x - poi.x;
+        const dz = z - poi.z;
+        const d = Math.hypot(dx, dz);
+        const rr = (poi.radius || 20) * 0.78;
+        if (d < rr) {
+          const k = smoothstep(1 - d / rr);
+          h = Math.max(h, lerp(h, this.waterLevel + 2.6, k));
+        }
+      }
+    }
+    return h;
   }
 
   heightAt(x, z) {
-    return this.rawHeightAt(x, z);
+    if (!this.procedural) return this.rawHeightAt(x, z);
+    let h = this.rawHeightAt(x, z);
+    for (const poi of this.map.pois || []) {
+      const dx = x - poi.x;
+      const dz = z - poi.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      if (dist >= poi.radius) continue;
+      const flat = Math.max(this.poiFlatHeights.get(poi.name) ?? h, this.waterLevel + 1.8);
+      const t = smoothstep(clamp((dist - poi.radius * 0.52) / (poi.radius * 0.48), 0, 1));
+      h = lerp(flat, h, t);
+    }
+    return h;
   }
 
   /** Suelo efectivo al caer: terreno + tejados/plataformas crossed. */
@@ -643,7 +1004,7 @@ export class World {
     const centerZ = (cz + 0.5) * CHUNK_SIZE;
     if (Math.abs(centerX) > this.half + CHUNK_SIZE || Math.abs(centerZ) > this.half + CHUNK_SIZE) return null;
 
-    const seg = CHUNK_SEGMENTS;
+    const seg = this.chunkSegments || CHUNK_SEGMENTS;
     const vertexCount = (seg + 1) * (seg + 1);
     const positions = new Float32Array(vertexCount * 3);
     const colors = new Float32Array(vertexCount * 3);
@@ -654,6 +1015,9 @@ export class World {
     const cRock = new THREE.Color(this.theme.rock);
     const cSand = new THREE.Color(this.theme.sand);
     const cSnow = new THREE.Color(0xf2f7fb);
+    // Parches de hierba pisada y tierra: rompen el aspecto de alfombra plana.
+    const cDirt = new THREE.Color(this.theme.sand).lerp(new THREE.Color(this.theme.rock), 0.35);
+    const cDark = new THREE.Color(this.theme.tree).lerp(new THREE.Color(this.theme.grass), 0.3);
     const tmp = new THREE.Color();
 
     let i = 0;
@@ -676,6 +1040,10 @@ export class World {
         else {
           tmp.copy(cLow).lerp(cHigh, clamp(noise2(wx * 0.007, wz * 0.007, this.seed + 31), 0, 1));
           if (sub > 0.55) tmp.lerp(this.subBiomeColor, clamp((sub - 0.55) * 1.8, 0, 0.75));
+          const patch = noise2(wx * 0.019 + 17, wz * 0.019 - 9, this.seed + 771);
+          const patchWide = noise2(wx * 0.0045, wz * 0.0045, this.seed + 1299);
+          if (patch > 0.62) tmp.lerp(cDirt, clamp((patch - 0.62) * 1.9, 0, 0.42));
+          else if (patchWide < 0.36) tmp.lerp(cDark, clamp((0.36 - patchWide) * 1.1, 0, 0.3));
         }
         if (this.map.theme === 'snow' && y > 55) tmp.lerp(cSnow, clamp((y - 55) / 45, 0, 1));
         else if (y > (this.biome.baseHeight || 16) + (this.biome.amplitude || 34) * 0.75) tmp.lerp(this.map.theme === 'desert' ? cSand : cRock, 0.75);
@@ -720,6 +1088,8 @@ export class World {
   }
 
   addVegetation(group, cx, cz, centerX, centerZ) {
+    // San Borondon coloca los modelos del kit de una sola vez en loadIsland().
+    if (this.useKitAssets) return;
     const rnd = makeRandom((this.seed ^ Math.imul(cx + 512, 73856093) ^ Math.imul(cz + 512, 19349663)) >>> 0);
     const density = this.settings.get('vegetation');
     if (density <= 0) return;
@@ -800,6 +1170,30 @@ export class World {
     return false;
   }
 
+  /** True si el punto cae sobre una calzada (con margen opcional). */
+  nearRoad(x, z, margin = 0) {
+    for (const circle of this.roadCircles) {
+      const r = circle.radius + margin;
+      const dx = x - circle.x;
+      const dz = z - circle.z;
+      if (dx * dx + dz * dz < r * r) return true;
+    }
+    for (const s of this.roadSegments) {
+      const dx = s.x2 - s.x1;
+      const dz = s.z2 - s.z1;
+      const len2 = dx * dx + dz * dz;
+      if (len2 < 0.001) continue;
+      const t = clamp(((x - s.x1) * dx + (z - s.z1) * dz) / len2, 0, 1);
+      const px = s.x1 + dx * t;
+      const pz = s.z1 + dz * t;
+      const r = s.width * 0.5 + margin;
+      const ox = x - px;
+      const oz = z - pz;
+      if (ox * ox + oz * oz < r * r) return true;
+    }
+    return false;
+  }
+
   removeChunk(key) {
     const chunk = this.chunks.get(key);
     if (!chunk) return;
@@ -809,6 +1203,31 @@ export class World {
   }
 
   update(playerPos) {
+    if (this.procedural) {
+      const pcx = Math.floor(playerPos.x / CHUNK_SIZE);
+      const pcz = Math.floor(playerPos.z / CHUNK_SIZE);
+      const range = this.settings.get('viewDistance') || 4;
+      const wanted = [];
+      for (let dz = -range; dz <= range; dz++) {
+        for (let dx = -range; dx <= range; dx++) {
+          if (dx * dx + dz * dz > (range + 0.5) ** 2) continue;
+          const cx = pcx + dx;
+          const cz = pcz + dz;
+          const key = `${cx},${cz}`;
+          if (!this.chunks.has(key) && !this.chunkQueue.has(key)) wanted.push({ cx, cz, key });
+        }
+      }
+      wanted.sort((a, b) => ((a.cx - pcx) ** 2 + (a.cz - pcz) ** 2) - ((b.cx - pcx) ** 2 + (b.cz - pcz) ** 2));
+      let created = 0;
+      for (const item of wanted) {
+        if (created >= 3) break;
+        if (this.createChunk(item.cx, item.cz)) created++;
+      }
+      for (const key of [...this.chunks.keys()]) {
+        const [cx, cz] = key.split(',').map(Number);
+        if (Math.abs(cx - pcx) > range + 1 || Math.abs(cz - pcz) > range + 1) this.removeChunk(key);
+      }
+    }
     this.updateSkyForPosition(playerPos);
     this.updateLightForPosition(playerPos);
     if (this.water) this.water.position.set(Math.round(playerPos.x / 100) * 100, this.waterLevel, Math.round(playerPos.z / 100) * 100);
@@ -1154,87 +1573,717 @@ export class World {
     this.spawnPoints = ctx.spawns.length ? ctx.spawns : this.lootSpots;
   }
 
-  generateRoads() {
-    const roads = this.map.roads || [];
-    const geos = [];
-    const pois = this.map.pois || [];
-    const texCanvas = document.createElement('canvas');
-    texCanvas.width = 64;
-    texCanvas.height = 256;
-    const c = texCanvas.getContext('2d');
-    c.fillStyle = '#3c4045';
-    c.fillRect(0, 0, 64, 256);
-    c.fillStyle = '#d8c06a';
-    c.fillRect(30, 16, 4, 80);
-    c.fillStyle = 'rgba(255,255,255,0.08)';
-    for (let i = 0; i < 40; i++) c.fillRect(Math.random() * 64, Math.random() * 256, 2, 2);
-    const tex = new THREE.CanvasTexture(texCanvas);
-    tex.wrapS = THREE.RepeatWrapping;
-    tex.wrapT = THREE.RepeatWrapping;
-    tex.anisotropy = this.settings.get('anisotropy') || 4;
-    this.disposables.push(tex);
+  /** Pueblos densos, puerto, faro y ruinas a escala de isla pequeña. */
+  generateSanBorondonLandmarks() {
+    const ctx = { buckets: new Map(), loot: [], spawns: [] };
+    const rnd = makeRandom(this.seed + 424242);
+    const byName = (name) => (this.map.pois || []).find((p) => p.name.includes(name));
 
-    for (const [aIdx, bIdx] of roads) {
-      const a = pois[aIdx];
-      const b = pois[bIdx];
-      if (!a || !b) continue;
-      const steps = 56;
+    const propScales = {
+      Bag: 1.5, Barrel: 1.7, Barrel_Apples: 1.7, Bench: 1.5, Bucket_Wooden_1: 1.8,
+      Crate_Metal: 1.8, Crate_Wooden: 1.8, FarmCrate_Apple: 2.1, FarmCrate_Empty: 2.1,
+      Lantern_Wall: 1.6, Shelf_Simple: 1.6, Stall_Cart_Empty: 1.5, Stall_Empty: 1.7,
+      Table_Large: 1.5, Torch_Metal: 2.1,
+    };
+    const prop = (model, x, z, rot = 0, scale = null) => {
+      if (!this.useKitAssets) return;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 0.25) return;
+      const s = scale ?? propScales[model] ?? 1;
+      this.propRequests.push({
+        model, x, z, rot, scale: s,
+        y: y + (model === 'Torch_Metal' ? 0.6 * s : 0),
+      });
+    };
+    const addGroundSpots = (x, z, count = 1, spread = 12) => {
+      for (let i = 0; i < count; i++) {
+        const a = rnd() * Math.PI * 2;
+        const r = Math.sqrt(rnd()) * spread;
+        const sx = x + Math.cos(a) * r;
+        const sz = z + Math.sin(a) * r;
+        const sy = this.heightAt(sx, sz);
+        if (sy < this.waterLevel + 1.5) continue;
+        ctx.loot.push(new THREE.Vector3(sx, sy + 1, sz));
+        ctx.spawns.push(new THREE.Vector3(sx, sy + 1.5, sz));
+      }
+    };
+    const hut = (x, z, w, d, h, rot = 0, wallMat = 'wood', roofMat = 'roof', twoFloor = false) => {
+      if (this.heightAt(x, z) < this.waterLevel + 1.8) return;
+      if (this.nearRoad(x, z, 2.8)) return;
+      this.makeBuilding(ctx, x, z, w, d, h, {
+        front: rot, wallMat, roofMat, windows: true, twoFloor,
+      });
+    };
+    const crate = (x, z, model = 'Crate_Wooden') => {
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 0.4) return;
+      prop(model, x, z, rnd() * 0.7 - 0.35);
+      ctx.loot.push(new THREE.Vector3(x, y + 1, z));
+    };
+    const barrel = (x, z, model = 'Barrel') => {
+      if (this.heightAt(x, z) < this.waterLevel + 0.4) return;
+      prop(model, x, z, rnd() * 3);
+    };
+    const chapel = (x, z, rot = 0) => {
+      if (this.heightAt(x, z) < this.waterLevel + 2) return;
+      this.makeBuilding(ctx, x, z, 10, 15, 5.6, { front: rot, wallMat: 'wall', roofMat: 'roof', windows: true });
+      const tx = x + Math.sin(rot) * 9;
+      const tz = z + Math.cos(rot) * 9;
+      const ty = this.heightAt(tx, tz);
+      this.box(ctx, tx, ty + 6, tz, 3.6, 12, 3.6, 'wall2', rot, true);
+      this.box(ctx, tx, ty + 12.4, tz, 4.4, 0.6, 4.4, 'roof', rot, true);
+      this.box(ctx, tx, ty + 14.3, tz, 0.28, 3.2, 0.28, 'metal');
+      this.box(ctx, tx, ty + 15, tz, 1.7, 0.28, 0.28, 'metal');
+      ctx.loot.push(new THREE.Vector3(tx + 3, ty + 1, tz + 3));
+      ctx.spawns.push(new THREE.Vector3(tx + 3.5, ty + 1.5, tz + 3.5));
+    };
+    const stoneWall = (cx, cz, radius, startA, endA) => {
+      const steps = Math.max(4, Math.round(Math.abs(endA - startA) * radius / 5));
+      for (let i = 0; i <= steps; i++) {
+        const a = lerp(startA, endA, i / steps);
+        const x = cx + Math.cos(a) * radius;
+        const z = cz + Math.sin(a) * radius;
+        if (this.heightAt(x, z) < this.waterLevel + 0.5) continue;
+        const y = this.heightAt(x, z);
+        this.box(ctx, x, y + 1.55, z, 4.6, 3.1, 1, 'wall2', -a - Math.PI / 2, true);
+      }
+    };
+    const market = (x, z, rot = 0) => {
+      if (this.heightAt(x, z) < this.waterLevel + 0.6) return;
+      prop('Stall_Empty', x, z, rot);
+      const nx = Math.cos(rot + Math.PI / 2);
+      const nz = Math.sin(rot + Math.PI / 2);
+      crate(x + nx * 2.4, z + nz * 2.4, 'FarmCrate_Apple');
+      barrel(x - nx * 2.6, z - nz * 2.6);
+      ctx.loot.push(new THREE.Vector3(x + nx * 3, this.heightAt(x, z) + 1, z + nz * 3));
+    };
+
+    const rotPoint = (x, z, lx, lz, rot) => ({
+      x: x + lx * Math.cos(rot) + lz * Math.sin(rot),
+      z: z - lx * Math.sin(rot) + lz * Math.cos(rot),
+    });
+
+    /** Molino de viento: torre, tejado cónico y cuatro aspas con vela de lona. */
+    const windmill = (x, z, rot = 0) => {
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 2) return;
+      this.cylinder(ctx, x, y + 3.2, z, 2.8, 6.4, 'wall2', true);
+      this.cylinder(ctx, x, y + 6.5, z, 3.1, 0.5, 'wood', true);
+      this._matKey = 'roof';
+      this.addGeo(ctx.buckets, new THREE.ConeGeometry(3.2, 2.8, 8), x, y + 8.1, z, rot);
+      const hub = rotPoint(x, z, 0, -3.1, rot);
+      this.box(ctx, hub.x, y + 6.7, hub.z, 0.9, 0.9, 0.5, 'metal', rot);
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.25;
+        const arm = new THREE.BoxGeometry(0.36, 6.4, 0.22);
+        arm.translate(0, 3.2, 0);
+        arm.rotateZ(a);
+        this._matKey = 'wood';
+        this.addGeo(ctx.buckets, arm, hub.x, y + 6.7, hub.z, rot);
+        const sail = new THREE.BoxGeometry(1.25, 4.4, 0.08);
+        sail.translate(0.55, 3.4, 0.16);
+        sail.rotateZ(a);
+        this._matKey = 'wall';
+        this.addGeo(ctx.buckets, sail, hub.x, y + 6.7, hub.z, rot);
+      }
+      for (let i = 0; i < 3; i++) crate(x + 3.5 + (i % 2) * 2.5, z + 2 + Math.floor(i / 2) * 2.5);
+      ctx.loot.push(new THREE.Vector3(x + 3, y + 1, z + 3));
+      ctx.spawns.push(new THREE.Vector3(x + 3.5, y + 1.5, z + 3.5));
+    };
+
+    /** Huerta de surcos con cultivos, vallado y espantapájaros. */
+    const farmPlot = (x, z, rot = 0, w = 36, d = 28) => {
+      if (this.heightAt(x, z) < this.waterLevel + 1) return;
+      for (let row = 0; row < 5; row++) {
+        const lz = -d / 2 + 3 + row * ((d - 6) / 4);
+        for (let col = 0; col < 7; col++) {
+          const lx = (col - 3) * (w / 7.5);
+          const s = rotPoint(x, z, lx, lz, rot);
+          const sy = this.heightAt(s.x, s.z);
+          if (sy < this.waterLevel + 0.7) continue;
+          this.box(ctx, s.x, sy + 0.1, s.z, w / 8.4, 0.2, 3.4, 'soil', rot);
+          for (let k = 0; k < 3; k++) {
+            const c = rotPoint(x, z, lx + (k - 1) * 0.85, lz, rot);
+            const cy = this.heightAt(c.x, c.z);
+            this.box(ctx, c.x, cy + 0.55 + rnd() * 0.25, c.z, 0.75, 1.05 + rnd() * 0.4, 0.75,
+              (row + col + k) % 3 === 0 ? 'bush' : 'crop', rot);
+          }
+        }
+      }
+      const c1 = rotPoint(x, z, -w / 2 - 1, -d / 2 - 1, rot);
+      const c2 = rotPoint(x, z, w / 2 + 1, -d / 2 - 1, rot);
+      const c3 = rotPoint(x, z, w / 2 + 1, d / 2 + 1, rot);
+      const c4 = rotPoint(x, z, -w / 2 - 1, d / 2 + 1, rot);
+      this.makeFence(ctx, c1.x, c1.z, c2.x, c2.z);
+      this.makeFence(ctx, c2.x, c2.z, c3.x, c3.z);
+      this.makeFence(ctx, c3.x, c3.z, c4.x, c4.z);
+      this.makeFence(ctx, c4.x, c4.z, c1.x, c1.z);
+      const sc = rotPoint(x, z, w / 2 - 3, d / 2 - 3, rot);
+      const sy = this.heightAt(sc.x, sc.z);
+      this.box(ctx, sc.x, sy + 1.8, sc.z, 0.22, 3.6, 0.22, 'wood');
+      this.box(ctx, sc.x, sy + 2.9, sc.z, 2.6, 0.2, 0.2, 'wood', rot);
+      this.box(ctx, sc.x, sy + 3.55, sc.z, 0.85, 0.8, 0.8, 'crop');
+      crate(x - w / 2 + 2, z + d / 2 - 2, 'FarmCrate_Apple');
+      barrel(x - w / 2 + 4, z + d / 2 - 2, 'Barrel_Apples');
+      ctx.loot.push(new THREE.Vector3(sc.x, sy + 1, sc.z));
+      ctx.spawns.push(new THREE.Vector3(sc.x + 2, sy + 1.5, sc.z + 2));
+    };
+
+    /** Casco de un barco encallado en la costa, con mástil roto y botín. */
+    const shipwreck = (x, z, rot = 0) => {
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 0.2) return;
+      const keel = new THREE.BoxGeometry(2.2, 0.45, 17);
+      this._matKey = 'wood';
+      this.addGeo(ctx.buckets, keel, x, y + 0.65, z, rot);
+      for (const side of [-1, 1]) {
+        const hull = new THREE.BoxGeometry(0.38, 3.6, 16);
+        hull.rotateZ(side * 0.3);
+        const p = rotPoint(x, z, side * 2.1, 0, rot);
+        this._matKey = 'wood';
+        this.addGeo(ctx.buckets, hull, p.x, y + 1.9, p.z, rot);
+        for (let i = 0; i < 6; i++) {
+          const r = rotPoint(x, z, side * 1.7, -7 + i * 2.8, rot);
+          const ry = this.heightAt(r.x, r.z);
+          this.box(ctx, r.x, ry + 1.5, r.z, 0.3, 3, 0.3, 'wood', rot);
+        }
+      }
+      for (let i = 0; i < 5; i++) {
+        const p = rotPoint(x, z, 0, -6 + i * 3, rot);
+        this.box(ctx, p.x, y + 1.4, p.z, 5.2, 0.28, 0.4, 'wood', rot);
+      }
+      const mast = new THREE.BoxGeometry(0.5, 11, 0.5);
+      mast.translate(0, 5.5, 0);
+      mast.rotateZ(0.42);
+      this._matKey = 'wood';
+      this.addGeo(ctx.buckets, mast, x, y + 1.2, z, rot);
+      this.box(ctx, x, y + 6.5, z, 6.5, 0.3, 0.3, 'wood', rot + 0.2);
+      for (let i = 0; i < 4; i++) crate(x + 3 + (i % 2) * 2, z - 2 + Math.floor(i / 2) * 3, 'Crate_Wooden');
+      prop('Barrel', x - 4, z + 3);
+      ctx.loot.push(new THREE.Vector3(x + 2, y + 1, z + 2));
+      ctx.spawns.push(new THREE.Vector3(x + 3, y + 1.5, z + 3));
+    };
+
+    /** Cementerio pequeño: tumbas alineadas, cruces y muro de piedra. */
+    const graveyard = (x, z, rot = 0) => {
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 1) return;
+      for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 5; col++) {
+          const p = rotPoint(x, z, (col - 2) * 3.4, (row - 1.5) * 4.2, rot);
+          const gy = this.heightAt(p.x, p.z);
+          if (gy < this.waterLevel + 0.5) continue;
+          this.box(ctx, p.x, gy + 0.18, p.z, 2, 0.36, 1.1, 'grave', rot);
+          this.box(ctx, p.x, gy + 1, p.z, 0.85, 1.5, 0.28, 'grave', rot);
+          if ((row + col) % 3 === 0) {
+            this.box(ctx, p.x, gy + 1.85, p.z, 0.24, 1, 0.24, 'grave', rot);
+            this.box(ctx, p.x, gy + 1.95, p.z, 1.1, 0.24, 0.24, 'grave', rot);
+          }
+          if ((row + col) % 4 === 0) ctx.loot.push(new THREE.Vector3(p.x + 1.5, gy + 1, p.z + 1.5));
+          ctx.spawns.push(new THREE.Vector3(p.x + 1.5, gy + 1.5, p.z + 1.5));
+        }
+      }
+      const c1 = rotPoint(x, z, -10, -11, rot);
+      const c2 = rotPoint(x, z, 10, -11, rot);
+      const c3 = rotPoint(x, z, 10, 11, rot);
+      const c4 = rotPoint(x, z, -10, 11, rot);
+      this.makeFence(ctx, c1.x, c1.z, c2.x, c2.z);
+      this.makeFence(ctx, c2.x, c2.z, c3.x, c3.z);
+      this.makeFence(ctx, c3.x, c3.z, c4.x, c4.z);
+      this.makeFence(ctx, c4.x, c4.z, c1.x, c1.z);
+      stoneWall(x, z, 14, 0.2, 1.1);
+      chapel(x - 14, z + 6, rot);
+      prop('Torch_Metal', x + 9, z - 9);
+    };
+
+    const harbor = byName('Puerto');
+    if (harbor) {
+      const len = Math.hypot(harbor.x, harbor.z) || 1;
+      const ox = harbor.x / len;
+      const oz = harbor.z / len;
+      const rot = Math.atan2(ox, oz);
+      for (let i = 0; i < 5; i++) {
+        const px = harbor.x + ox * (16 + i * 11);
+        const pz = harbor.z + oz * (16 + i * 11);
+        const py = this.waterLevel + 1.1;
+        this.box(ctx, px, py, pz, 10, 0.5, 14, 'wood', rot, true);
+        for (const side of [-1, 1]) {
+          this.box(ctx, px + side * 4.6 * oz, py - 1.1, pz - side * 4.6 * ox, 0.5, 2.6, 0.5, 'wood');
+        }
+      }
+      // Núcleo de pescadores: almacenes, casas y mercado junto a los muelles.
+      this.makeBuilding(ctx, harbor.x - 22, harbor.z + 14, 16, 12, 6, { wallMat: 'metal', roofMat: 'metal', gable: false });
+      hut(harbor.x - 16, harbor.z - 6, 10, 8, 3.4, 0.5, 'wood');
+      hut(harbor.x - 4, harbor.z + 20, 9, 7, 3.2, -0.3, 'wall2');
+      hut(harbor.x - 26, harbor.z - 12, 8, 7, 3, 0.9, 'wood');
+      hut(harbor.x - 34, harbor.z + 6, 8, 7, 3, -0.6, 'wall');
+      hut(harbor.x - 12, harbor.z + 30, 8, 7, 3, 0.2, 'wood');
+      market(harbor.x - 8, harbor.z + 12, 0.4);
+      this.makeCrane(ctx, harbor.x - 30, harbor.z + 26);
+      for (let i = 0; i < 12; i++) {
+        const a = rnd() * Math.PI * 2;
+        const r = 8 + rnd() * 22;
+        const x = harbor.x + Math.cos(a) * r;
+        const z = harbor.z + Math.sin(a) * r;
+        if (i % 3 === 0) crate(x, z, i % 6 === 0 ? 'Crate_Metal' : 'Crate_Wooden');
+        else barrel(x, z, i % 4 === 0 ? 'Barrel_Apples' : 'Barrel');
+      }
+      prop('Torch_Metal', harbor.x - 6, harbor.z + 4);
+      addGroundSpots(harbor.x, harbor.z, 16, 22);
+    }
+
+    const town = byName('Caserío');
+    if (town) {
+      // Plaza central con pozo y mercado.
+      const wy = this.heightAt(town.x, town.z);
+      this.cylinder(ctx, town.x, wy + 0.7, town.z, 3, 1.4, 'concrete', true);
+      this.cylinder(ctx, town.x, wy + 2.3, town.z, 0.3, 3, 'wood');
+      this.box(ctx, town.x, wy + 4, town.z, 0.3, 0.4, 4, 'wood');
+      ctx.loot.push(new THREE.Vector3(town.x + 3, wy + 1, town.z + 3));
+      market(town.x - 11, town.z + 4, 0.2);
+      market(town.x + 9, town.z - 8, 1.4);
+      chapel(town.x - 13, town.z - 13, 0.35);
+      this.makeTower(ctx, town.x + 17, town.z + 6, 13);
+
+      // Tres anillos de casas apretadas forman calles estrechas y un casco real.
+      const rings = [
+        { count: 6, radius: 17, w: 8, d: 7 },
+        { count: 9, radius: 28, w: 9, d: 7.5 },
+        { count: 12, radius: 38, w: 10, d: 8 },
+      ];
+      const angle0 = rnd() * Math.PI * 2;
+      let idx = 0;
+      for (const ring of rings) {
+        for (let i = 0; i < ring.count; i++) {
+          const a = angle0 + (i / ring.count) * Math.PI * 2 + (rnd() - 0.5) * 0.12;
+          const x = town.x + Math.cos(a) * ring.radius;
+          const z = town.z + Math.sin(a) * ring.radius;
+          const twoFloor = idx % 7 === 3;
+          hut(x, z, ring.w + rnd() * 1.5, ring.d + rnd(), 3.1 + rnd() * 1.1,
+            -a + Math.PI / 2 + (rnd() - 0.5) * 0.3,
+            idx % 4 === 0 ? 'wall2' : idx % 3 === 0 ? 'wall' : 'wood', 'roof', twoFloor);
+          if (idx % 3 === 0) {
+            const nx = Math.cos(a + Math.PI / 2);
+            const nz = Math.sin(a + Math.PI / 2);
+            crate(x + nx * 5, z + nz * 5, idx % 6 === 0 ? 'Crate_Metal' : 'Crate_Wooden');
+            barrel(x - nx * 5, z - nz * 5);
+          }
+          if (idx % 5 === 0) {
+            const bx = town.x + Math.cos(a) * (ring.radius - 5);
+            const bz = town.z + Math.sin(a) * (ring.radius - 5);
+            prop('Bench', bx, bz, -a);
+            prop('Torch_Metal', bx + Math.cos(a) * 2, bz + Math.sin(a) * 2);
+          }
+          idx++;
+        }
+      }
+      stoneWall(town.x, town.z, 47, -1.1, 1.5);
+      stoneWall(town.x, town.z, 47, 2.0, 4.1);
+      this.makeFence(ctx, town.x - 20, town.z + 43, town.x + 4, town.z + 43);
+      addGroundSpots(town.x, town.z, 26, 30);
+    }
+
+    const lighthouse = byName('Faro');
+    if (lighthouse) {
+      const y = this.heightAt(lighthouse.x, lighthouse.z);
+      this.cylinder(ctx, lighthouse.x, y + 4, lighthouse.z, 5.5, 8, 'concrete', true);
+      this.cylinder(ctx, lighthouse.x, y + 12.5, lighthouse.z, 3, 9, 'metal', true);
+      this.cylinder(ctx, lighthouse.x, y + 17.3, lighthouse.z, 3.8, 0.8, 'accent', true);
+      this.cylinder(ctx, lighthouse.x, y + 19, lighthouse.z, 2.2, 2.6, 'glass');
+      this.cylinder(ctx, lighthouse.x, y + 20.7, lighthouse.z, 2.8, 0.5, 'accent');
+      hut(lighthouse.x - 14, lighthouse.z - 8, 9, 7, 3.2, 0.4, 'wall2');
+      hut(lighthouse.x + 12, lighthouse.z - 12, 8, 7, 3, -0.5, 'wood');
+      stoneWall(lighthouse.x, lighthouse.z, 18, -0.6, 2.4);
+      for (let i = 0; i < 4; i++) crate(lighthouse.x + 8 + (i % 2) * 4, lighthouse.z + 6 + Math.floor(i / 2) * 4);
+      prop('Torch_Metal', lighthouse.x - 4, lighthouse.z + 7);
+      ctx.loot.push(new THREE.Vector3(lighthouse.x + 4, y + 1.2, lighthouse.z + 4));
+      ctx.spawns.push(new THREE.Vector3(lighthouse.x + 5, y + 1.5, lighthouse.z + 5));
+      addGroundSpots(lighthouse.x, lighthouse.z, 12, 16);
+    }
+
+    const ruins = byName('Ermita');
+    if (ruins) {
+      for (let i = 0; i < 20; i++) {
+        const a = rnd() * Math.PI * 2;
+        const r = rnd() * ruins.radius * 0.8;
+        const x = ruins.x + Math.cos(a) * r;
+        const z = ruins.z + Math.sin(a) * r;
+        const y = this.heightAt(x, z);
+        const h = 1.4 + rnd() * 4.6;
+        this.box(ctx, x, y + h / 2, z, 2 + rnd() * 5.5, h, 0.8, rnd() > 0.5 ? 'wall2' : 'concrete', rnd() * Math.PI, true);
+        if (rnd() > 0.45) ctx.loot.push(new THREE.Vector3(x + 2, y + 1, z + 2));
+        ctx.spawns.push(new THREE.Vector3(x, y + 1.5, z));
+      }
+      // Arco y columnas de la ermita derruida.
+      const ry = this.heightAt(ruins.x, ruins.z);
+      for (const side of [-1, 1]) {
+        this.cylinder(ctx, ruins.x + side * 3, ry + 3, ruins.z, 0.75, 6, 'concrete', true);
+      }
+      this.box(ctx, ruins.x, ry + 6.2, ruins.z, 7.5, 0.8, 1.2, 'wall2', 0, true);
+      stoneWall(ruins.x, ruins.z, ruins.radius * 0.85, 0.3, 2.7);
+      for (let i = 0; i < 4; i++) crate(ruins.x + 7 + (i % 2) * 4, ruins.z - 4 + Math.floor(i / 2) * 4, 'Crate_Wooden');
+      prop('Torch_Metal', ruins.x - 6, ruins.z + 5);
+      addGroundSpots(ruins.x, ruins.z, 14, 20);
+    }
+
+    const camp = byName('Palmeras');
+    if (camp) {
+      const angle0 = rnd() * Math.PI * 2;
+      for (let i = 0; i < 6; i++) {
+        const a = angle0 + (i / 6) * Math.PI * 2;
+        hut(camp.x + Math.cos(a) * 15, camp.z + Math.sin(a) * 15, 6.5, 5.5, 2.8, a, 'wood');
+      }
+      const fy = this.heightAt(camp.x, camp.z);
+      this.cylinder(ctx, camp.x, fy + 0.35, camp.z, 1.6, 0.7, 'rock', true);
+      market(camp.x + 4, camp.z + 2, 1.1);
+      for (let i = 0; i < 8; i++) {
+        const x = camp.x + (i % 4) * 3.6 - 5;
+        const z = camp.z - 8 + Math.floor(i / 4) * 3.6;
+        if (i % 3 === 0) crate(x, z, 'FarmCrate_Apple');
+        else barrel(x, z);
+      }
+      prop('Table_Large', camp.x - 7, camp.z + 6, 0.3);
+      prop('Bench', camp.x - 7, camp.z + 9, 0.3);
+      this.makeFence(ctx, camp.x - 21, camp.z + 19, camp.x + 21, camp.z + 19);
+      addGroundSpots(camp.x, camp.z, 16, 18);
+    }
+
+    // Puntos de interés nuevos: huerta junto al caserío, cementerio junto a la
+    // ermita, molino en la colina y un naufragio en la primera línea de costa.
+    if (town) farmPlot(town.x + 46, town.z + 32, 0.35);
+    if (ruins) graveyard(ruins.x - 36, ruins.z + 26, 0.4);
+
+    let millSpot = null;
+    for (let i = 0; i < 48; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.12 + rnd() * 0.36);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 4 || this.nearPOI(x, z, 1.35) || this.nearRoad(x, z, 6)) continue;
+      if (!millSpot || y > millSpot.y) millSpot = { x, z, y };
+    }
+    if (millSpot) windmill(millSpot.x, millSpot.z, rnd() * Math.PI);
+
+    let wreckSpot = null;
+    for (let i = 0; i < 900; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.62 + rnd() * 0.2);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 0.5 || y > this.waterLevel + 2.6) continue;
+      if (this.nearPOI(x, z, 1.1)) continue;
+      wreckSpot = { x, z, a: a + Math.PI / 2 };
+      break;
+    }
+    if (wreckSpot) shipwreck(wreckSpot.x, wreckSpot.z, wreckSpot.a);
+
+    // Cabañas aisladas, almacenes y botín disperso por el interior.
+    for (let i = 0; i < 26; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.16 + rnd() * 0.48);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      if (this.nearPOI(x, z, 1.2)) continue;
+      if (this.heightAt(x, z) < this.waterLevel + 2) continue;
+      if (rnd() > 0.38) hut(x, z, 6 + rnd() * 4, 5 + rnd() * 3, 2.8, rnd() * Math.PI * 2);
+      else crate(x, z, rnd() > 0.5 ? 'Crate_Wooden' : 'Crate_Metal');
+      if (rnd() > 0.5) barrel(x + 3, z + 2);
+    }
+    for (let i = 0; i < 70; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = Math.sqrt(rnd()) * this.half * 0.72;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 1.5) continue;
+      ctx.loot.push(new THREE.Vector3(x, y + 1, z));
+      ctx.spawns.push(new THREE.Vector3(x, y + 1.5, z));
+    }
+    // Props sueltos en caminos y claros: detalle constante por toda la isla.
+    for (let i = 0; i < 68; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = Math.sqrt(rnd()) * this.half * 0.7;
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      if (this.heightAt(x, z) < this.waterLevel + 1.2) continue;
+      const pick = rnd();
+      if (pick < 0.35) crate(x, z, 'Crate_Wooden');
+      else if (pick < 0.6) barrel(x, z);
+      else if (pick < 0.8) prop(rnd() > 0.5 ? 'Bag' : 'Bucket_Wooden_1', x, z, rnd() * 3);
+      else prop('Shelf_Simple', x, z, rnd() * 3);
+    }
+
+    for (const [matKey, geos] of ctx.buckets) {
+      if (!geos.length) continue;
+      const merged = mergeGeometries(geos, false);
+      for (const g of geos) g.dispose();
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, this.materials[matKey]);
+      mesh.castShadow = !!this.settings.get('shadows');
+      mesh.receiveShadow = !!this.settings.get('shadows');
+      mesh.frustumCulled = false;
+      this.structures.add(mesh);
+      this.disposables.push(merged);
+    }
+
+    const inside = (v) => Math.hypot(v.x, v.z) < this.half * 0.82 && v.y > this.waterLevel + 0.4;
+    this.lootSpots = ctx.loot.filter(inside);
+    this.spawnPoints = ctx.spawns.filter(inside);
+    while (this.spawnPoints.length < 20) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.2 + rnd() * 0.45);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      this.spawnPoints.push({ x, y: this.heightAt(x, z) + 1.5, z });
+    }
+  }
+
+  generateRoads() {
+    this.roadSegments.length = 0;
+    this.roadCircles.length = 0;
+    const pois = this.map.pois || [];
+    const aniso = this.settings.get('anisotropy') || 4;
+    const kinds = ['dirt', 'cobble', 'plank'];
+    const materials = {};
+    const buckets = { dirt: [], cobble: [], plank: [] };
+
+    for (const kind of kinds) {
+      const tex = makeRoadTexture(kind, this.seed + hashString(kind), aniso);
+      const mat = new THREE.MeshStandardMaterial({
+        map: tex, roughness: 0.98, metalness: 0,
+        polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -2,
+      });
+      materials[kind] = mat;
+      this.disposables.push(tex, mat);
+    }
+
+    /** Cinta de terreno que sigue la altura del suelo y se corta antes del agua. */
+    const addRibbon = (points, kind, width, opts = {}) => {
+      if (!points || points.length < 2) return;
       const verts = [];
       const uvs = [];
       const idxs = [];
-      const midX = (a.x + b.x) / 2 + (b.z - a.z) * 0.07;
-      const midZ = (a.z + b.z) / 2 - (b.x - a.x) * 0.07;
-      const points = [];
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const omt = 1 - t;
-        points.push({
-          x: omt * omt * a.x + 2 * omt * t * midX + t * t * b.x,
-          z: omt * omt * a.z + 2 * omt * t * midZ + t * t * b.z,
-        });
-      }
+      const used = [];
       let dist = 0;
-      for (let i = 0; i <= steps; i++) {
+
+      for (let i = 0; i < points.length; i++) {
         const p = points[i];
         const prev = points[Math.max(0, i - 1)];
-        const next = points[Math.min(steps, i + 1)];
+        const next = points[Math.min(points.length - 1, i + 1)];
         let dx = next.x - prev.x;
         let dz = next.z - prev.z;
-        const len = Math.hypot(dx, dz) || 1;
-        dx /= len; dz /= len;
+        const len = Math.hypot(dx, dz);
+        if (len < 0.02) continue;
+        dx /= len;
+        dz /= len;
         if (i > 0) dist += Math.hypot(p.x - prev.x, p.z - prev.z);
+
+        const centerY = this.heightAt(p.x, p.z);
+        if (!opts.fixedY && centerY < this.waterLevel + 0.65) continue;
         const nx = -dz;
         const nz = dx;
-        const width = 7;
+        const sides = [];
+        let valid = true;
+
         for (const side of [-1, 1]) {
-          const x = p.x + nx * width * side;
-          const z = p.z + nz * width * side;
-          verts.push(x, this.heightAt(x, z) + 0.22, z);
-          uvs.push(side < 0 ? 0 : 1, dist / 24);
+          let half = width * 0.5;
+          let ex = p.x + nx * half * side;
+          let ez = p.z + nz * half * side;
+          if (!opts.fixedY) {
+            for (let k = 0; k < 5 && this.heightAt(ex, ez) < this.waterLevel + 0.45; k++) {
+              half *= 0.72;
+              ex = p.x + nx * half * side;
+              ez = p.z + nz * half * side;
+            }
+          }
+          const edgeY = this.heightAt(ex, ez);
+          if (!opts.fixedY && edgeY < this.waterLevel + 0.35) { valid = false; break; }
+          const y = opts.fixedY ?? (Math.max(centerY, edgeY) + 0.16);
+          sides.push({ x: ex, y, z: ez });
         }
-        if (i < steps) {
-          const k = i * 2;
-          idxs.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
+        if (!valid || sides.length !== 2) continue;
+
+        for (const edge of sides) {
+          verts.push(edge.x, edge.y, edge.z);
+          uvs.push(sideOf(edge, sides[0]) === 0 ? 0 : 1, dist / 7);
         }
+        used.push({ x: p.x, z: p.z });
       }
+
+      for (let i = 1; i < used.length; i++) {
+        this.roadSegments.push({
+          x1: used[i - 1].x, z1: used[i - 1].z,
+          x2: used[i].x, z2: used[i].z,
+          width, kind,
+        });
+      }
+      for (let i = 0; i < used.length - 1; i++) {
+        const k = i * 2;
+        idxs.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
+      }
+      if (!idxs.length) return;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       geo.setIndex(idxs);
       geo.computeVertexNormals();
-      geos.push(geo);
+      buckets[kind].push(geo);
+    };
+
+    // UV lateral: el primer borde siempre es 0 y el segundo 1.
+    const sideOf = (edge, first) => (edge === first ? 0 : 1);
+
+    const sampleCurve = (waypoints, density = 0.7) => {
+      if (!waypoints || waypoints.length < 2) return [];
+      const vecs = waypoints.map((p) => new THREE.Vector3(p.x, 0, p.z));
+      const curve = vecs.length === 2
+        ? new THREE.LineCurve3(vecs[0], vecs[1])
+        : new THREE.CatmullRomCurve3(vecs, false, 'catmullrom', 0.4);
+      const steps = Math.max(12, Math.round(curve.getLength() * density));
+      return curve.getPoints(steps).map((v) => ({ x: v.x, z: v.z }));
+    };
+
+    /** Desvía los puntos de control que caen en el mar hacia el interior. */
+    const routeAroundWater = (a, b) => {
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const steps = Math.max(2, Math.round(len / 16));
+      const waypoints = [{ x: a.x, z: a.z }];
+      for (let i = 1; i < steps; i++) {
+        const t = i / steps;
+        let x = lerp(a.x, b.x, t);
+        let z = lerp(a.z, b.z, t);
+        let y = this.heightAt(x, z);
+        if (y < this.waterLevel + 2.4) {
+          const m = Math.hypot(x, z) || 1;
+          const ix = -x / m;
+          const iz = -z / m;
+          for (let k = 0; k < 9 && y < this.waterLevel + 2.4; k++) {
+            x += ix * 5;
+            z += iz * 5;
+            y = this.heightAt(x, z);
+          }
+        }
+        waypoints.push({ x, z });
+      }
+      waypoints.push({ x: b.x, z: b.z });
+      return waypoints;
+    };
+
+    const dryRuns = (points) => {
+      const runs = [];
+      let run = [];
+      for (const p of points) {
+        if (this.heightAt(p.x, p.z) > this.waterLevel + 0.75) run.push(p);
+        else if (run.length > 1) { runs.push(run); run = []; }
+        else run = [];
+      }
+      if (run.length > 1) runs.push(run);
+      return runs;
+    };
+
+    const addPath = (a, b, opts = {}) => {
+      if (!a || !b) return;
+      const waypoints = opts.detour
+        ? [{ x: a.x, z: a.z }, ...opts.detour, { x: b.x, z: b.z }]
+        : routeAroundWater(a, b);
+      const points = sampleCurve(waypoints, opts.density ?? 0.7);
+      for (const run of dryRuns(points)) addRibbon(run, opts.kind || 'dirt', opts.width ?? 6, opts);
+    };
+
+    const addLoop = (center, radius, opts = {}) => {
+      if (!center) return;
+      const segments = opts.segments ?? 64;
+      const points = [];
+      for (let i = 0; i <= segments; i++) {
+        const a = (i / segments) * Math.PI * 2 + (opts.startAngle || 0);
+        points.push({
+          x: center.x + Math.cos(a) * radius,
+          z: center.z + Math.sin(a) * radius,
+        });
+      }
+      addRibbon(points, opts.kind || 'cobble', opts.width ?? 4.2, opts);
+    };
+
+    const addPlaza = (poi, radius) => {
+      if (!poi) return;
+      const geo = new THREE.CircleGeometry(radius, 40);
+      geo.rotateX(-Math.PI / 2);
+      geo.translate(poi.x, this.heightAt(poi.x, poi.z) + 0.18, poi.z);
+      buckets.cobble.push(geo);
+      this.roadCircles.push({ x: poi.x, z: poi.z, radius });
+    };
+
+    // Red principal: todas las zonas conectadas, con dos bucles para no tener
+    // que volver siempre por el mismo camino.
+    const links = this.map.roads || [[1, 0], [1, 2], [1, 3], [1, 4], [3, 4], [0, 4]];
+    for (const [aIdx, bIdx] of links) {
+      addPath(pois[aIdx], pois[bIdx], { kind: 'dirt', width: 6.6, density: 0.55 });
     }
-    if (geos.length) {
+
+    const town = pois.find((p) => p.type === 'town');
+    if (town) {
+      addPlaza(town, 8.5);
+      addLoop(town, 21, { kind: 'cobble', width: 4.6 });
+      addLoop(town, 36, { kind: 'cobble', width: 4.2 });
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.22;
+        addPath(
+          { x: town.x + Math.cos(a) * 8, z: town.z + Math.sin(a) * 8 },
+          { x: town.x + Math.cos(a) * 43, z: town.z + Math.sin(a) * 43 },
+          { kind: 'cobble', width: 3.6, density: 0.7 },
+        );
+      }
+    }
+
+    const harbor = pois.find((p) => p.type === 'harbor');
+    if (harbor) {
+      const m = Math.hypot(harbor.x, harbor.z) || 1;
+      const ox = harbor.x / m;
+      const oz = harbor.z / m;
+      const planks = [];
+      for (let i = 0; i <= 10; i++) {
+        const d = 8 + i * 7;
+        planks.push({ x: harbor.x + ox * d, z: harbor.z + oz * d });
+      }
+      addRibbon(planks, 'plank', 5.4, { fixedY: this.waterLevel + 1.38 });
+      addLoop(harbor, 16, { kind: 'dirt', width: 4.2, segments: 48 });
+    }
+
+    for (const poi of pois) {
+      if (poi.type === 'tower' || poi.type === 'ruins' || poi.type === 'outpost') {
+        addLoop(poi, Math.min(14, poi.radius * 0.55), {
+          kind: 'dirt', width: 3.4, segments: 40,
+        });
+      }
+    }
+
+    // Sendas hacia el interior: dan sentido al mapa más allá de los POIs.
+    const rnd = makeRandom(this.seed + 9911);
+    for (let i = 0; i < 12; i++) {
+      const from = pois[i % Math.max(1, pois.length)];
+      if (!from) break;
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.28 + rnd() * 0.42);
+      const to = { x: Math.cos(a) * r, z: Math.sin(a) * r };
+      if (this.heightAt(to.x, to.z) < this.waterLevel + 2) continue;
+      addPath(from, to, { kind: 'dirt', width: 3.1, density: 0.5 });
+    }
+
+    for (const kind of kinds) {
+      const geos = buckets[kind];
+      if (!geos.length) continue;
       const merged = mergeGeometries(geos, false);
       for (const g of geos) g.dispose();
-      if (merged) {
-        const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, polygonOffset: true, polygonOffsetFactor: -2 });
-        const mesh = new THREE.Mesh(merged, mat);
-        mesh.receiveShadow = !!this.settings.get('shadows');
-        mesh.frustumCulled = false;
-        this.root.add(mesh);
-        this.disposables.push(merged, mat);
-      }
+      if (!merged) continue;
+      const mesh = new THREE.Mesh(merged, materials[kind]);
+      mesh.receiveShadow = !!this.settings.get('shadows');
+      mesh.frustumCulled = false;
+      this.root.add(mesh);
+      this.disposables.push(merged);
     }
   }
 

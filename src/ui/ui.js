@@ -6,16 +6,17 @@ import { bumpUi, uiStore } from './store.js';
  * la API que ya usan App y Game para no tocar la lógica del motor.
  */
 export class UI {
-  constructor(root, app, settings, maps, audio) {
+  constructor(root, app, settings, maps, audio, account) {
     this.root = root;
     this.app = app;
     this.settings = settings;
     this.maps = maps;
     this.audio = audio;
+    this.account = account;
     this.current = null;
     this.selectedMap = settings.get('mapId');
 
-    Object.assign(bridge, { app, ui: this, settings, maps, audio });
+    Object.assign(bridge, { app, ui: this, settings, maps, audio, account });
     settings.onChange(() => bumpUi());
   }
 
@@ -37,7 +38,7 @@ export class UI {
   showLobby() {
     const maps = this.maps.list();
     if (!maps.some((m) => m.id === this.selectedMap)) {
-      this.selectedMap = maps[0]?.id || 'verdant-isles';
+      this.selectedMap = maps[0]?.id || 'san-borondon';
     }
     this.setScreen('lobby');
   }
@@ -52,6 +53,22 @@ export class UI {
 
   showCredits() {
     this.setScreen('credits');
+  }
+
+  showTienda() {
+    this.setScreen('tienda');
+  }
+
+  showTaquilla() {
+    this.setScreen('taquilla');
+  }
+
+  showBattlePass() {
+    this.setScreen('battlepass');
+  }
+
+  showAccount() {
+    this.setScreen('account');
   }
 
   showPause() {

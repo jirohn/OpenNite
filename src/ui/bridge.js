@@ -6,6 +6,7 @@ export const bridge = {
   settings: null,
   maps: null,
   audio: null,
+  account: null,
   refs: {},
 };
 

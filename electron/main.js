@@ -110,7 +110,27 @@ async function createWindow() {
       sandbox: false,
       spellcheck: false,
       backgroundThrottling: false,
+      nativeWindowOpen: true,
     },
+  });
+  // Firebase Auth abre una ventana emergente para el OAuth de Google. Debe
+  // permanecer dentro de Electron para que el credential se devuelva por
+  // postMessage; el resto de enlaces se abren en el navegador del sistema.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const authPopup = /^https:\/\/(accounts\.google\.com(?:[./]|$)|[a-z0-9-]+\.firebaseapp\.com(?:[./]|$)|[a-z0-9-]+\.web\.app(?:[./]|$))/i.test(url);
+    if (authPopup) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 480, height: 640, minWidth: 400, minHeight: 480,
+          title: 'Iniciar sesión con Google',
+          autoHideMenuBar: true,
+          webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: false },
+        },
+      };
+    }
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
   });
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();

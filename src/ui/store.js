@@ -27,6 +27,15 @@ export const uiStore = createStore({
   loading: { mounted: true, visible: true, percent: 8, text: 'Iniciando motor...' },
 });
 
+export const accountStore = createStore({
+  status: 'loading',
+  profile: null,
+  cloud: false,
+  configured: false,
+  projectId: '',
+  error: '',
+});
+
 export const hudStore = createStore({
   mounted: false,
   mapName: '',
@@ -44,6 +53,10 @@ export const hudStore = createStore({
   reserve: '/ 90',
   reloadHint: '',
   alive: 1,
+  kills: 0,
+  killFeed: [],
+  heading: 0,
+  headingLabel: 'N',
   stormTime: '',
   hit: false,
   hiddenCrosshair: false,
@@ -72,3 +85,4 @@ export function pushHudToast(text, type = '') {
 
 export const useUi = () => useSyncExternalStore(uiStore.subscribe, uiStore.getState);
 export const useHud = () => useSyncExternalStore(hudStore.subscribe, hudStore.getState);
+export const useAccount = () => useSyncExternalStore(accountStore.subscribe, accountStore.getState);
