@@ -51,11 +51,34 @@ export class Character {
     });
 
     // Escalar a 1.9 m de altura y apoyar los pies en y=0.
-    const box = new THREE.Box3().setFromObject(this.model);
-    const height = Math.max(0.001, box.max.y - box.min.y);
+    // Box3.setFromObject da cotas gigantes con SkinnedMesh/Mixamo, así que se
+    // mide la geometría real de cada malla con su matriz mundial.
+    this.model.updateWorldMatrix(true, true);
+    let minY = Infinity;
+    let maxY = -Infinity;
+    this.model.traverse((obj) => {
+      if (!obj.isMesh || !obj.geometry) return;
+      if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+      const bb = obj.geometry.boundingBox;
+      if (!bb) return;
+      for (const x of [bb.min.x, bb.max.x]) {
+        for (const y of [bb.min.y, bb.max.y]) {
+          for (const z of [bb.min.z, bb.max.z]) {
+            const v = new THREE.Vector3(x, y, z).applyMatrix4(obj.matrixWorld);
+            minY = Math.min(minY, v.y);
+            maxY = Math.max(maxY, v.y);
+          }
+        }
+      }
+    });
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+      minY = 0;
+      maxY = 1.9;
+    }
+    const height = Math.max(0.001, maxY - minY);
     const scale = 1.9 / height;
     this.model.scale.setScalar(scale);
-    this.model.position.y = -box.min.y * scale;
+    this.model.position.y = -minY * scale;
     this.group.add(this.model);
 
     this.mixer = new THREE.AnimationMixer(this.model);

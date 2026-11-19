@@ -305,7 +305,6 @@ export class Game {
 
     this.hud.mount(config.map.name);
     const lockOverlay = this.hud.q('lock-prompt');
-    lockOverlay.addEventListener('mousedown', (e) => e.stopPropagation());
     lockOverlay.addEventListener('click', () => this.input.requestLock());
     this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.4);
     this.hud.toast('Clic para fijar el ratón · ESPACIO para saltar del autobús', 'good');
