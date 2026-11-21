@@ -66,7 +66,6 @@ export const hudStore = createStore({
   bannerTitle: '',
   bannerSub: '',
   toasts: [],
-  kills: [],
 });
 
 export function bumpUi() {

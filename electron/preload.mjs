@@ -7,10 +7,15 @@ contextBridge.exposeInMainWorld('opennite', {
     getVersion: () => safe('app:version'),
     quit: () => safe('app:quit'),
     openExternal: (url) => safe('app:open-external', url),
+    writeFile: (relativePath, text) => safe('app:writeFile', relativePath, text),
   },
   settings: {
     get: () => safe('settings:get'),
     set: (data) => safe('settings:set', data),
+  },
+  account: {
+    get: () => safe('account:get'),
+    set: (data) => safe('account:set', data),
   },
   maps: {
     list: () => safe('maps:list'),

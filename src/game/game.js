@@ -5,6 +5,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { clamp, distance2D, raySphere } from '../core/utils.js';
+import { randomLoot } from './weapons.js';
 import { loadCharacterModel, Character, createParachute, attachWeapon } from './character.js';
 import { World } from './world.js';
 import { Player } from './player.js';
@@ -14,6 +15,8 @@ import { LootManager } from './loot.js';
 import { Storm } from './storm.js';
 import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
+import { WorldDebug } from './debug.js';
+import { BuildingManager } from './building.js';
 
 const SKIN_COLORS = [0xffb45c, 0x6f8a5b, 0x5f83a6, 0xa35f52, 0x7a6b4e, 0x4e6470, 0xb59a5e, 0x8b7a6a];
 const SKIN_ANIMS = ['dance', 'wave', 'idle', 'yes', 'dance', 'no', 'wave', 'idle'];
@@ -29,6 +32,7 @@ export class Game {
     this.clock = new THREE.Clock();
     this.mode = 'preview';
     this.previewSkins = [];
+    this.previewDebug = null;
     this.skinPreviewMode = false;
     this.selectedPreviewColor = settings.get('playerColor');
     this.running = false;
@@ -78,6 +82,28 @@ export class Game {
     });
     window.addEventListener('resize', () => this.resize());
     this.resize();
+
+    // F5 activa/desactiva el modo debug (cajas rojas de colisionadores + ejes XYZ del mundo/preview).
+    const debugTarget = () => this.world?.debug || this.previewDebug;
+    const onDebugKey = () => {
+      const dbg = debugTarget();
+      if (!dbg) return;
+      dbg.toggle();
+      this.settings.set('debugMode', dbg.enabled);
+    };
+    document.addEventListener('keydown', (e) => {
+      if (e.code !== 'F5') return;
+      if (!this.world?.debug && !this.previewDebug) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onDebugKey();
+    }, true);
+    this.settings.onChange((_, key) => {
+      if (key === 'debugMode') debugTarget()?.setEnabled(!!this.settings.get('debugMode'));
+    });
+    this.input.on('keydown', (code) => {
+      if (code === 'F5') onDebugKey();
+    });
 
     this.input.on('lockchange', (locked) => {
       if (this.mode === 'playing' && !locked && !this.ending) this.app.requestPause();
@@ -180,6 +206,9 @@ export class Game {
       this.preview.add(ch.group);
       this.previewCharacter = ch;
       this.previewPreset = this.settings.get('playerPreset');
+      this.previewDebug = new WorldDebug(null, this.preview, this.camera);
+      this.previewDebug.setMarkers(() => [this.previewCharacter, ...(this.previewSkins || [])].filter(Boolean));
+      this.previewDebug.setEnabled(!!this.settings.get('debugMode'));
 
       // Ocho maniquíes 3D animados, uno por aspecto, para elegir en el lobby.
       const skins = await Promise.all(SKIN_COLORS.map(async (color, i) => {
@@ -188,7 +217,8 @@ export class Game {
         skin.group.rotation.y = -0.35;
         skin.group.scale.setScalar(1.05);
         skin.play(SKIN_ANIMS[i]);
-        attachWeapon(skin, i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
+        await attachWeapon(skin, i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
+        skin.alwaysAlignForward = true;
         const disc = new THREE.Mesh(
           new THREE.CylinderGeometry(0.66, 0.72, 0.09, 24),
           new THREE.MeshStandardMaterial({ color: 0x12161f, emissive: color, emissiveIntensity: 0.25, metalness: 0.5, roughness: 0.4 }),
@@ -229,6 +259,7 @@ export class Game {
   }
 
   updatePreview(dt, elapsed) {
+    this.previewDebug?.update(dt);
     if (this.skinPreviewMode) {
       this.camera.position.set(3.0 + Math.sin(elapsed * 0.12) * 0.16, 2.6, 7.5);
       this.camera.lookAt(3.0, 1.1, 0);
@@ -263,11 +294,17 @@ export class Game {
 
     const kit = await loadCharacterModel();
     if (this.preview) this.preview.visible = false;
+    this.previewDebug?.setEnabled(!!this.settings.get('debugMode'));
     this.hud.unmount();
 
     this.world = new World(this.scene, config.map, this.settings);
+    this.world.debug = new WorldDebug(this.world, this.scene, this.camera);
+    if (this.previewCharacter) this.previewCharacter.world = this.world;
+    for (const sk of (this.previewSkins || [])) sk.world = this.world;
+    this.world.debug.setEnabled(!!this.settings.get('debugMode'));
     this.app.setLoading?.(40, config.map.type === 'glb' ? 'Cargando escena 3D completa...' : 'Creando San Borondon y colocando la naturaleza...');
     await this.world.load();
+    this.building = new BuildingManager(this.scene, this.world, this.settings);
     this.app.setLoading?.(55, 'Colocando botín y jugadores...');
 
     this.effects = new Effects(this.scene, this.settings);
@@ -286,9 +323,11 @@ export class Game {
       this.hud.toast('¡Bomba de fuerza!', 'good');
     };
     this.scene.add(this.player.character.group);
+    this.player.character.world = this.world;
+    this.player.character.group.castShadow = true;
     this.player.equipStarting();
     this.player.placeOnBus();
-    this.syncWeaponModel();
+    await this.syncWeaponModel();
 
     this.chute = createParachute();
     this.chute.visible = false;
@@ -306,23 +345,35 @@ export class Game {
 
     this.bots = [];
     const count = clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
+    // Los bots bajan con el jugador desde el autobús (punto de despliegue).
+    const dropZone = new THREE.Vector3(0, 220, this.world.half + 120);
     const spots = this.world.spawnPoints || [];
+    const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
-      const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
+      const nearDrop = i % 2 === 0;
+      const px = nearDrop ? (Math.random() - 0.5) * 24 : sp.x;
+      const pz = nearDrop ? (Math.random() - 0.5) * 24 : sp.z;
+      const botSpawn = { x: dropZone.x + px, y: dropZone.y + (nearDrop ? 20 + Math.random() * 180 : 30), z: dropZone.z + pz };
       const ch = await Character.create(kit, {
         color: botColors[i % botColors.length],
         presetIndex: i + 1,
       });
       this.scene.add(ch.group);
-      const bot = new Bot(ch, this.world, this, i, sp);
+      const bot = new Bot(ch, this.world, this, i, botSpawn);
+      bot.dropping = nearDrop;
       attachWeapon(ch, 'ar');
       this.bots.push(bot);
     }
+    this.world.debug?.setMarkers(() => [
+      this.player?.character, ...(this.bots || []).map((b) => b.character),
+    ].filter(Boolean));
+    this.world.debug?.rebuild();
+    this.audio.applyDeaf(!!this.settings.get('deafMode'));
 
     this.hud.mount(config.map.name);
-    this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.4);
-    this.hud.toast('Clic para fijar el ratón · ESPACIO para saltar del autobús', 'good');
+    this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.2);
+    this.hud.toast('Pulsa ESPACIO para saltar del autobús (o se abrirá solo sobre la isla). Clic para controlar la cámara.', 'good');
     this.matchTime = 0;
     this.mode = 'playing';
     this.running = true;
@@ -354,12 +405,12 @@ export class Game {
     return group;
   }
 
-  syncWeaponModel() {
+  async syncWeaponModel() {
     const inv = this.player?.inventory;
     const type = inv?.current()?.type || null;
     if (type === this.lastWeaponType) return;
     this.lastWeaponType = type;
-    attachWeapon(this.player.character, type);
+    await attachWeapon(this.player.character, type);
   }
 
   // ---------------------- Combate ----------------------
@@ -424,33 +475,46 @@ export class Game {
         this.hud.toast('¡Escudo roto!', 'warn');
       } else this.audio.play('hurt');
       this.hud.damageFlash(clamp(damage / 55, 0.15, 0.7));
+      if (!result.killed) this.player.character?.hit?.(damage > 35);
       if (result.killed) this.endMatch(false, attacker?.name || 'Tormenta');
       return;
     }
     if (!target?.alive) return;
-    this.player.damageDealt += damage;
-    this.hud.hitMarker();
-    this.audio.play('hit', { head: part === 'head' });
-    if (this.settings.get('showDamageNumbers') && point) {
-      this.effects.floatingText(point, `${Math.round(damage)}${part === 'head' ? '!' : ''}`, part === 'head' ? '#ffdb4d' : '#ffffff');
+    const byPlayer = attacker === this.player;
+    if (byPlayer) {
+      this.player.damageDealt += damage;
+      this.hud.hitMarker();
+      this.audio.play('hit', { head: part === 'head' });
+      if (this.settings.get('showDamageNumbers') && point) {
+        this.effects.floatingText(point, `${Math.round(damage)}${part === 'head' ? '!' : ''}`, part === 'head' ? '#ffdb4d' : '#ffffff');
+      }
     }
     const killed = target.takeDamage(damage, part, attacker);
-    if (killed) {
-      const isPlayer = attacker === this.player;
-      if (isPlayer) {
-        this.player.kills++;
-        this.audio.play('kill');
-        this.hud.banner('ELIMINADO', target.name, 1.4);
-      }
-      this.hud.kill(isPlayer ? 'TÚ' : attacker?.name || '???', target.name, isPlayer ? weaponName : 'AR');
-      this.effects.burst(target.position.clone().add(new THREE.Vector3(0, 1.2, 0)), 22, [0xff4d5e, 0x9b1c2e], { speed: 4, life: 0.8 });
-      this.loot.createEntity(target.position.clone().add(new THREE.Vector3(1.5, 0, 0)), { kind: 'weapon', type: 'smg', rarity: 1, color: '#5bdb79', icon: '⌁', name: 'Botín de rival', ammo: 30, ammoType: 'light' }, false);
-      if (this.bots.every((b) => !b.alive)) this.endMatch(true);
-    }
+    if (!killed) target.character?.hit?.(part === 'head' || damage > 35);
+    if (killed) this.handleBotDeath(target, attacker, weaponName);
   }
 
-  onBotKilled(bot, attacker) {
-    this.hud.kill(attacker === this.player ? 'TÚ' : attacker?.name || '???', bot.name, 'AR');
+  handleBotDeath(bot, attacker, weaponName = 'AR') {
+    const isPlayer = attacker === this.player;
+    if (isPlayer) {
+      this.player.kills++;
+      this.audio.play('kill');
+      this.hud.banner('ELIMINADO', bot.name, 1.4);
+    }
+    this.hud.kill(isPlayer ? 'TÚ' : attacker?.name || '???', bot.name, isPlayer ? weaponName : weaponName || 'AR');
+    this.effects.burst(bot.position.clone().add(new THREE.Vector3(0, 1.2, 0)), 22, [0xff4d5e, 0x9b1c2e], { speed: 4, life: 0.8 });
+    if (this.loot) {
+      const drop = randomLoot(Math.random);
+      const angle = Math.random() * Math.PI * 2;
+      const pos = bot.position.clone().add(new THREE.Vector3(Math.cos(angle) * 1.5, 0.2, Math.sin(angle) * 1.5));
+      this.loot.createEntity(pos, drop, false);
+    }
+    if (this.bots.every((b) => !b.alive)) this.endMatch(true);
+  }
+
+  onBotKilled(bot, attacker, weaponName = 'AR') {
+    if (bot?.alive) return;
+    this.handleBotDeath(bot, attacker, weaponName);
   }
 
   onStormEvent(text, type) { this.hud.toast(text, type); }
@@ -529,7 +593,10 @@ export class Game {
         if (this.input.isDown('KeyR')) player.inventory.reload();
         const near = this.loot.findNear(player.position, 3.4);
         this.pickupLatch = this.pickupLatch || false;
-        if (this.input.isDown('KeyE') && near && !this.pickupLatch) {
+        if (this.input.isDown('KeyB') && !this.buildToggleLatch) { this.buildToggleLatch = true; const on = this.building.toggle(); this.hud.toast(on ? 'Modo construcción ON (Q/E rotar, clic colocar)' : 'Modo construcción OFF', on ? 'good' : 'warn'); }
+    if (!this.input.isDown('KeyB')) this.buildToggleLatch = false;
+    if (this.building?.enabled) this.building.update(this.player, this.camera, this.input);
+    if (this.input.isDown('KeyE') && near && !this.pickupLatch) {
           const res = this.loot.interact(near, player);
           if (res) this.hud.toast(res.text, res.color === '#5bd88a' ? 'good' : '');
           this.audio.play('click');
@@ -546,6 +613,7 @@ export class Game {
 
     // Bots
     for (const bot of this.bots) bot.update(dt, player, this.bots, this.storm);
+    if (player.alive) this.audio.applyDeaf(!!this.settings.get('deafMode'));
 
     // Tormenta y daño ambiental
     if (player.inBus && this.matchTime > 8) this.storm.start();
@@ -561,7 +629,10 @@ export class Game {
       for (const bot of this.bots) {
         if (!bot.alive) continue;
         const dmg = this.storm.damageAt(bot.position);
-        if (dmg > 0) bot.takeDamage(dmg * 0.5, 'body', null);
+        if (dmg > 0) {
+          const killed = bot.takeDamage(dmg * 0.5, 'body', { name: 'la tormenta' });
+          if (killed) this.handleBotDeath(bot, { name: 'la tormenta' }, 'Tormenta');
+        }
       }
     }
 
@@ -610,5 +681,6 @@ export class Game {
     this.paused = false;
     this.ending = false;
     if (this.preview) this.preview.visible = true;
+    this.previewDebug?.setEnabled(!!this.settings.get('debugMode'));
   }
 }

@@ -39,6 +39,7 @@ export class UI {
     const maps = this.maps.list();
     if (!maps.some((m) => m.id === this.selectedMap)) {
       this.selectedMap = maps[0]?.id || 'san-borondon';
+      this.settings.set('mapId', this.selectedMap);
     }
     this.setScreen('lobby');
   }

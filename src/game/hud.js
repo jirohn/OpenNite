@@ -104,7 +104,11 @@ export class HUD {
     patch.weaponColor = cur ? cur.color : '#ffffff';
     patch.ammo = cur ? (cur.def.melee ? '∞' : cur.ammo) : '0';
     patch.reserve = cur && cur.def.ammo ? `/ ${inv.ammo[cur.def.ammo] ?? 0}` : '';
-    patch.reloadHint = inv.reloading ? 'RECARGANDO...' : cur && !cur.def.melee && cur.ammo === 0 ? 'PULSA R PARA RECARGAR' : '';
+    patch.reloadHint = inv.reloading
+      ? 'RECARGANDO...'
+      : cur && !cur.def.melee && cur.ammo === 0
+        ? ((inv.ammo[cur.def.ammo] ?? 0) > 0 ? 'SIN BALAS · PULSA R' : 'SIN MUNICIÓN')
+        : '';
 
     // Contadores y brújula (la vista gira con el mismo yaw que la cámara).
     patch.alive = 1 + bots.filter((b) => b.alive).length;
@@ -112,17 +116,28 @@ export class HUD {
     const heading = (THREE.MathUtils.radToDeg(Math.atan2(-Math.sin(player.yaw), Math.cos(player.yaw))) + 360) % 360;
     patch.heading = Math.round(heading);
     patch.headingLabel = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'][Math.round(heading / 45) % 8];
-    patch.stormTime = storm.timeText;
+    if (storm.active) {
+      const warn = outside > 0 ? ` · ¡SAL DE LA TORMENTA! +${Math.round(outside)}m` : '';
+      patch.stormTime = `${storm.timeText} · Fase ${storm.phase || 0}${warn}`;
+    } else {
+      patch.stormTime = '';
+    }
 
     // Crosshair
     this.hitTime -= dt;
     patch.hit = this.hitTime > 0;
     patch.hiddenCrosshair = player.ads && !!cur?.def.scope;
 
-    // Prompt de recogida
-    const near = loot.findNear(player.position, 3.4);
-    patch.pickupVisible = !!near && player.alive;
-    if (near) patch.pickupText = near.isChest ? 'Abrir cofre' : near.item.name;
+    // Prompt de recogida / salto del autobús
+    if (player.inBus) {
+      patch.pickupVisible = true;
+      patch.pickupText = 'Pulsa ESPACIO para saltar del autobús';
+    } else {
+      const near = loot.findNear(player.position, 3.4);
+      patch.pickupVisible = !!near && player.alive;
+      if (near) patch.pickupText = near.isChest ? 'Abrir cofre (E)' : `${near.item.name} (E)`;
+      else if (patch.pickupVisible === false) patch.pickupText = '';
+    }
 
     // Banner / toasts
     if (this.bannerTime > 0) {

@@ -22,8 +22,8 @@ export function Hud() {
       {h.showLockPrompt && (
         <button type="button" className="interactive lock-overlay" onMouseEnter={hover}
           onClick={() => bridge.hud?.input?.requestLock?.()}>
-          <span>CLIC PARA TOMAR EL CONTROL</span>
-          <small>WASD para moverte · ratón para mirar · si el ratón no se fija, mantén pulsado el CLIC IZQUIERDO</small>
+          <span>CLIC PARA JUGAR</span>
+          <small>WASD moverte · Ratón mirar · ESPACIO saltar/salir del autobús · CLIC disparar · E recoger</small>
         </button>
       )}
 
@@ -100,7 +100,10 @@ export function Hud() {
       </div>
 
       {h.pickupVisible && (
-        <div className="pickup-prompt" id="pickup-prompt"><kbd>E</kbd><span id="pickup-text">{h.pickupText}</span></div>
+        <div className="pickup-prompt" id="pickup-prompt">
+          <kbd>{/ESPACIO/i.test(h.pickupText || '') ? 'ESPACIO' : 'E'}</kbd>
+          <span id="pickup-text">{h.pickupText}</span>
+        </div>
       )}
       {h.bannerVisible && (
         <div className="banner" id="banner">
@@ -115,9 +118,7 @@ export function Hud() {
       <div className="storm-vignette" id="storm-vignette" style={{ opacity: h.stormOpacity }} />
       <div id="fps-counter" className="fps-counter">{h.fps}</div>
       <div id="pause-hint">
-        <kbd>WASD</kbd> mover &nbsp;·&nbsp; <kbd>SHIFT</kbd> correr &nbsp;·&nbsp; <kbd>ESPACIO</kbd> saltar / planeador
-        &nbsp;·&nbsp; <kbd>CLIC DCHO</kbd> apuntar &nbsp;·&nbsp; <kbd>R</kbd> recargar &nbsp;·&nbsp; <kbd>E</kbd> recoger
-        &nbsp;·&nbsp; <kbd>ESC</kbd> pausa
+        <kbd>WASD</kbd> mover · <kbd>SHIFT</kbd> correr · <kbd>ESPACIO</kbd> saltar/salir del bus/planeador · <kbd>CLIC</kbd> disparar · <kbd>CLIC DCHO</kbd> apuntar · <kbd>R</kbd> recargar · <kbd>E</kbd> interactuar · <kbd>1-5</kbd> arma · <kbd>ESC</kbd> pausa
       </div>
     </div>
   );

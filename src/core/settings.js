@@ -24,13 +24,13 @@ export const QUALITY_PRESETS = {
 };
 
 export const DEFAULT_SETTINGS = {
-  quality: 'high',
-  ...QUALITY_PRESETS.high,
+  quality: 'medium',
+  ...QUALITY_PRESETS.medium,
   fov: 78,
   sensitivity: 0.0022,
   invertY: false,
-  cameraShoulder: 1.15,
-  cameraDistance: 3.6,
+  cameraShoulder: 1.35,
+  cameraDistance: 3.8,
   masterVolume: 0.75,
   sfxVolume: 0.9,
   musicVolume: 0.4,
@@ -42,11 +42,13 @@ export const DEFAULT_SETTINGS = {
   playerPreset: 'islander',
   showDamageNumbers: true,
   crosshairColor: '#ffffff',
+  debugMode: false,
+  deafMode: false,
 };
 
 function sanitize(raw) {
   const out = { ...DEFAULT_SETTINGS, ...(raw || {}) };
-  if (!QUALITY_PRESETS[out.quality]) out.quality = 'high';
+  if (!QUALITY_PRESETS[out.quality]) out.quality = 'medium';
   out.resolutionScale = Math.min(1.5, Math.max(0.5, Number(out.resolutionScale) || 1));
   out.viewDistance = Math.min(10, Math.max(2, Math.floor(Number(out.viewDistance) || 6)));
   out.fov = Math.min(110, Math.max(60, Number(out.fov) || 78));
@@ -98,7 +100,7 @@ export class Settings {
       Object.assign(this.data, QUALITY_PRESETS[value], { quality: value });
     }
     this.data = sanitize(this.data);
-    this.emit();
+    this.emit(key);
     this.save();
     return this.data;
   }
@@ -116,9 +118,9 @@ export class Settings {
     return () => this.listeners.delete(fn);
   }
 
-  emit() {
+  emit(key) {
     for (const fn of this.listeners) {
-      try { fn(this.data); } catch (error) { console.error(error); }
+      try { fn(this.data, key); } catch (error) { console.error(error); }
     }
   }
 

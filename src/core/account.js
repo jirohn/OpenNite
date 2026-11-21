@@ -59,8 +59,19 @@ class AccountManager {
     }
   }
 
-  readLocal() {
+  async readLocal() {
     try {
+      if (window.opennite?.account?.get) {
+        const raw = await window.opennite.account.get();
+        if (raw) return sanitizeProfile(raw, raw.uid || 'offline');
+        // Migración: en versiones anteriores la cuenta solo vivía en localStorage,
+        // pero en Electron el origen (puerto local) cambia y ese storage se pierde.
+        try {
+          const legacy = JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null');
+          if (legacy) return sanitizeProfile(legacy, legacy.uid || 'offline');
+        } catch { /* ignore */ }
+        return sanitizeProfile({}, 'offline');
+      }
       const raw = JSON.parse(localStorage.getItem(LOCAL_KEY) || 'null');
       return sanitizeProfile(raw || {}, raw?.uid || 'offline');
     } catch {
@@ -70,7 +81,13 @@ class AccountManager {
 
   saveLocal() {
     try {
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(this.profile));
+      if (window.opennite?.account?.set) {
+        window.opennite.account.set(this.profile).catch((error) => {
+          console.warn('No se pudo guardar el perfil local:', error);
+        });
+      } else {
+        localStorage.setItem(LOCAL_KEY, JSON.stringify(this.profile));
+      }
     } catch (error) {
       console.warn('No se pudo guardar el perfil local:', error);
     }
@@ -88,7 +105,7 @@ class AccountManager {
   }
 
   async init() {
-    this.profile = this.readLocal();
+    this.profile = await this.readLocal();
     this.status = FIREBASE_CONFIGURED ? 'connecting' : 'offline';
     this.emit();
     if (!FIREBASE_CONFIGURED) return this.profile;

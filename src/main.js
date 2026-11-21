@@ -6,6 +6,7 @@ import { account } from './core/account.js';
 import { AudioEngine } from './core/audio.js';
 import { Input } from './core/input.js';
 import { MapManager } from './core/map-manager.js';
+import { loadGunConfig } from './game/gun-config.js';
 import { Game } from './game/game.js';
 import { UI } from './ui/ui.js';
 import { App } from './ui/App.jsx';
@@ -31,8 +32,14 @@ class AppController {
     account.subscribe((snapshot) => accountStore.setState(snapshot));
     await account.init();
 
+    // Colocación del arma exportada desde el editor (tools/gun-config.json).
+    await loadGunConfig();
+
     this.setLoading(18, 'Leyendo mapas...');
     this.maps = await new MapManager().init();
+    // Un mapa guardado en versiones anteriores puede ya no existir. Corregirlo
+    // aquí evita que "JUGAR AHORA" intente cargar un JSON inexistente.
+    this.resolveMapId(settings.get('mapId'));
 
     this.audio = new AudioEngine(settings);
     this.input = new Input(this.canvas);
@@ -85,8 +92,17 @@ class AppController {
     pushHudToast(text, type);
   }
 
+  /** Devuelve un id de mapa instalado y lo persiste si el guardado era obsoleto. */
+  resolveMapId(requested) {
+    const maps = this.maps?.list?.() || [];
+    const valid = requested && maps.some((m) => m.id === requested);
+    const id = valid ? requested : (maps[0]?.id || 'san-borondon');
+    if (settings.get('mapId') !== id) settings.set('mapId', id);
+    return id;
+  }
+
   async startMatch(mapId) {
-    const id = mapId || settings.get('mapId');
+    const id = this.resolveMapId(mapId || settings.get('mapId'));
     this.setLoading(5, 'Cargando mapa...');
     try {
       const map = await this.maps.getMapData(id);
@@ -183,6 +199,18 @@ class AppController {
   quit() {
     if (window.opennite?.app?.quit) window.opennite.app.quit();
     else window.close();
+  }
+
+  /** Abre la app aparte del Editor de armas (servida desde /tools/gun-editor.html). */
+  openEditor() {
+    if (this.input?.releaseLock) this.input.releaseLock();
+    setTimeout(() => { window.location.assign('/tools/gun-editor.html'); }, 30);
+  }
+
+  /** Abre la app aparte del Editor de mapa (servida desde /tools/map-editor.html). */
+  openMapEditor() {
+    if (this.input?.releaseLock) this.input.releaseLock();
+    setTimeout(() => { window.location.assign('/tools/map-editor.html'); }, 30);
   }
 }
 

@@ -1,0 +1,22 @@
+Universal Base Characters + Universal Animation Library (CC0)
+=============================================================
+
+Origen oficial (packs Standard, descargados desde itch.io):
+- https://quaternius.itch.io/universal-base-characters
+- https://quaternius.itch.io/universal-animation-library
+
+Licencia: CC0 1.0 Universal. Se permite uso personal, educativo y comercial
+sin atribución obligatoria. Se conservan los archivos LICENSE-UBC.txt y
+LICENSE-UAL.txt incluidos en los packs originales.
+
+Archivos incluidos en OpenNite (subconjunto web-ready):
+- Superhero_Male_FullBody.gltf/.bin + texturas
+- Superhero_Female_FullBody.gltf/.bin + texturas
+- UAL1_Standard.glb (43 clips, rig idéntico de 65 huesos)
+- LICENSE-UBC.txt, LICENSE-UAL.txt
+
+Notas técnicas:
+- Las rutas de las texturas *_Normal_png.png del GLTF original se han
+  renombrado a *_Normal.png para que coincidan con los archivos del pack.
+- El rig de UBC y UAL comparte los mismos nombres de huesos; las animaciones
+  se aplican directamente al esqueleto del personaje sin retargeting.

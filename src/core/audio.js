@@ -48,6 +48,12 @@ export class AudioEngine {
     this.music.gain.setTargetAtTime(b, this.ctx.currentTime, 0.05);
   }
 
+  /** Modo sordo: atenúa el master y muestra el indicador de sonido alrededor del aim. */
+  applyDeaf(on) {
+    if (!this.ctx || !this.master) return;
+    this.master.gain.setTargetAtTime(on ? 0.08 : 1, this.ctx.currentTime, 0.08);
+  }
+
   get now() { return this.ctx ? this.ctx.currentTime : 0; }
 
   tone({ freq = 440, end = null, type = 'sine', dur = 0.15, gain = 0.2, delay = 0, attack = 0.005, dest = null, detune = 0 }) {

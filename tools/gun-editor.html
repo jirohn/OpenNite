@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>OpenNite — Editor de armas (UBC/Unreal rig)</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0d12; color: #e6e8ee; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; }
+  canvas#editor-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .panel { position: fixed; left: 12px; top: 12px; width: 300px; height: 100vh; overflow-y: auto; background: rgba(12, 16, 24, .95); border: 1px solid #27303f; border-radius: 8px; backdrop-filter: blur(3px); padding: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
+  .panel h2 { margin: 0 0 2px; font-size: 16px; }
+  .tag { display: inline-block; font-size: 10px; background: #3b4b6a; color: #c4d1e6; padding: 2px 8px; border-radius: 99px; margin-left: 8px; }
+  h3 { font-size: 12px; color: #8d9bb0; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .4px; }
+  .sl { display: flex; justify-content: space-between; font-size: 12px; margin: 8px 2px; align-items: center; }
+  .sl span:first-child { color: #a8b3c7; min-width: 34px; }
+  .sl span:last-child { font-family: 'Cascadia Mono', Consolas, monospace; color: #d8dce5; font-size: 11px; text-align: right; }
+  .row { display: flex; gap: 6px; margin: 8px 2px; }
+  button { background: #213046; color: #e8eef6; border: 1px solid #34435c; padding: 7px 10px; border-radius: 6px; cursor: pointer; width: 100%; font-size: 12px; margin: 4px 0; }
+  button.primary { background: #22478b; border-color: #2b5cb8; font-weight: 600; }
+  button.danger { background: #4a2222; border-color: #7a3030; color: #f3dcdc; }
+  button.ghost { background: transparent; border: none; color: #9db0c7; font-size: 11px; padding: 2px 6px; width: auto; margin: 0; }
+  button.activeSel { background: #2b5cb8; border-color: #4a8cff; }
+  select { width: 100%; background: #0f141b; border: 1px solid #27303f; color: #e6e8ee; padding: 7px 9px; border-radius: 6px; margin: 6px 0; }
+  textarea { width: 100%; height: 130px; background: #0c1018; border: 1px solid #27303f; color: #c5cddb; padding: 8px; border-radius: 6px; font: 11px 'Consolas', 'Courier New', monospace; margin-top: 8px; resize: vertical; }
+  .toggle { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin: 8px 2px; }
+  .toggle span { color: #a8b3c7; }
+  .dot { width: 30px; height: 16px; background: #2d3a4e; border-radius: 8px; position: relative; cursor: pointer; transition: .15s; }
+  .dot::after { content: ''; width: 12px; height: 12px; background: #7f9cb8; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: .15s; }
+  .dot.on { background: #2662ab; }
+  .dot.on::after { background: #fff; transform: translateX(14px); }
+  .back { position: fixed; left: 12px; bottom: 10px; font-size: 11px; color: #7a8499; z-index: 2; }
+  .back a { color: #9db3d5; text-decoration: none; }
+  .hint { font-size: 10px; color: #7c8897; line-height: 1.5; }
+  .hint b { color: #a8b3c7; }
+  .section { display: none; }
+  .section.active { display: block; }
+</style>
+</head>
+<body>
+<canvas id="editor-canvas"></canvas>
+<div class="panel">
+  <h2>Editor de armas <span class="tag">UBC/Unreal rig</span></h2>
+  <small class="hint">Modelo base UBC + arma editable. Ejes: <b style="color:#ff4444">X rojo</b>, <b style="color:#3ccb3c">Y verde</b>, <b style="color:#445bff">Z azul</b>. Clic en un eje del gizmo para mover solo en ese eje. Undo: Ctrl+Z.</small>
+
+  <h3>Arma</h3>
+  <select id="weaponType"></select>
+
+  <h3>Animación de prueba</h3>
+  <select id="animSel"></select>
+  <small class="hint">Arrastra sobre el modelo para orbitar la cámara · rueda para zoom.</small>
+
+  <h3>Jerarquía</h3>
+  <div class="row"><button class="ghost" id="selWeapon">🎯 Arma (mano der.)</button></div>
+  <div class="row"><button class="ghost" id="selSupport">🤚 IK mano izquierda</button></div>
+  <div class="row"><button class="ghost" id="selRightIk">🤚 IK mano derecha</button></div>
+  <div class="row"><button class="ghost" id="selScene">⚙ Escena / visual</button></div>
+  <small class="hint" id="activeHint">Activo: Arma (mano derecha)</small>
+
+  <div class="section active" data-for="weaponPos" id="secWeapon">
+    <h3>Transformación del arma (mano derecha)</h3>
+    <div class="sl"><span>Pos. X</span><span id="pvX"></span><input type="range" id="posX" min="-1.2" max="1.2" step="0.01"></div>
+    <div class="sl"><span>Pos. Y</span><span id="pvY"></span><input type="range" id="posY" min="-1.2" max="1.2" step="0.01"></div>
+    <div class="sl"><span>Pos. Z</span><span id="pvZ"></span><input type="range" id="posZ" min="-2" max="0.6" step="0.01"></div>
+    <div class="sl"><span>Rot. X°</span><span id="rvX"></span><input type="range" id="rotX" min="-180" max="180" step="0.5"></div>
+    <div class="sl"><span>Rot. Y°</span><span id="rvY"></span><input type="range" id="rotY" min="-180" max="180" step="0.5"></div>
+    <div class="sl"><span>Rot. Z°</span><span id="rvZ"></span><input type="range" id="rotZ" min="-180" max="180" step="0.5"></div>
+  </div>
+
+  <div class="section" data-for="support" id="secSupport">
+    <h3>IK / Mano izquierda (agarre)</h3>
+    <div class="sl"><span>IK X</span><span id="sgXv"></span><input type="range" id="sgX" min="-1.2" max="1.2" step="0.01"></div>
+    <div class="sl"><span>IK Y</span><span id="sgYv"></span><input type="range" id="sgY" min="-1.2" max="1.2" step="0.01"></div>
+    <div class="sl"><span>IK Z</span><span id="sgZv"></span><input type="range" id="sgZ" min="-2" max="0.6" step="0.01"></div>
+    <div class="sl"><span>IK Rot X°</span><span id="sgrXv"></span><input type="range" id="sgrX" min="-180" max="180" step="0.5"></div>
+    <div class="sl"><span>IK Rot Y°</span><span id="sgrYv"></span><input type="range" id="sgrY" min="-180" max="180" step="0.5"></div>
+    <div class="sl"><span>IK Rot Z°</span><span id="sgrZv"></span><input type="range" id="sgrZ" min="-180" max="180" step="0.5"></div>
+    <div class="sl"><span>Fuerza IK izq.</span><span id="ikStrv"></span><input type="range" id="ikStr" min="0" max="1" step="0.01"></div>
+  </div>
+
+  <div class="section" data-for="rightIk" id="secRightIk">
+    <h3>IK / Mano derecha (mira)</h3>
+    <div class="sl"><span>IKDer X</span><span id="rikXv"></span><input type="range" id="rikX" min="-2" max="2" step="0.01"></div>
+    <div class="sl"><span>IKDer Y</span><span id="rikYv"></span><input type="range" id="rikY" min="-2" max="2" step="0.01"></div>
+    <div class="sl"><span>IKDer Z</span><span id="rikZv"></span><input type="range" id="rikZ" min="-2" max="2" step="0.01"></div>
+    <div class="sl"><span>Fuerza IK der.</span><span id="ikStrRv"></span><input type="range" id="ikStrR" min="0" max="1" step="0.01"></div>
+  </div>
+
+  <div class="section" data-for="scene" id="secScene">
+    <h3>Visual</h3>
+    <div class="sl"><span>Resolución</span><span id="resVal">1.00x</span><input type="range" id="resScale" min="0.5" max="2" step="0.05" value="1"></div>
+    <select id="quality">
+      <option value="0.6">Baja · 0.60x</option>
+      <option value="1" selected>Media · 1.00x</option>
+      <option value="1.5">Alta · 1.50x</option>
+      <option value="2">Ultra · 2.00x</option>
+    </select>
+    <div class="sl"><span>Fondo</span><span id="bgVal">#23272f</span><input type="color" id="bgColor" value="#23272f"></div>
+    <div class="sl"><span>Suelo</span><span id="groundVal">#1a1e26</span><input type="color" id="groundColor" value="#1a1e26"></div>
+    <div class="row">
+      <button class="ghost" data-bg="#23272f">Gris</button>
+      <button class="ghost" data-bg="#0b0d12">Negro</button>
+      <button class="ghost" data-bg="#274060">Azul</button>
+      <button class="ghost" data-bg="#2e4a34">Verde</button>
+    </div>
+    <div class="toggle"><span>Contorno (outline) del personaje y el arma</span><div class="dot" id="outlineDot"></div></div>
+
+    <h3>Movimiento manual (off)</h3>
+    <div class="toggle">
+      <span id="manualLabel">Movimiento manual (off)</span>
+      <div class="dot" id="manualDot"></div>
+    </div>
+
+    <h3>Solapa del arma (readout)</h3>
+    <div class="sl"><span>Muzzle (local)</span><span id="muzzleLocal"></span></div>
+    <div class="sl"><span>Grip (local)</span><span id="gripLocal"></span></div>
+    <div class="sl"><span>SupportGrip (local)</span><span id="supportLocal"></span></div>
+    <div class="sl"><span>Length</span><span id="lengthVal"></span></div>
+
+    <h3>Resultado en el mundo</h3>
+    <div class="sl"><span>Dirección del arma (X,Y,Z)</span><span id="gunFwd"></span></div>
+    <div class="sl"><span>Posición (X,Y,Z)</span><span id="gunPosWorld"></span></div>
+    <div class="sl"><span>Ang. al frente (max1)</span><span id="gunFwdAng"></span></div>
+  </div>
+
+  <div class="row"><button class="primary" id="apply">Aplicar cambios</button><button class="ghost" id="reset">Reset</button></div>
+  <div class="row"><button class="ghost" id="undo">Undo (Ctrl+Z)</button><button class="ghost" id="redo">Redo (Ctrl+Y)</button></div>
+  <div class="row"><button class="primary" id="export">Guardar todo</button><button class="ghost" id="copy">Copiar texto</button></div>
+  <textarea id="configText" readonly></textarea>
+</div>
+<div class="back"><a href="/">← Volver al juego</a></div>
+<div id="error-overlay" style="display:none; position:fixed; left:12px; top:12px; z-index:9; background:#3a1414; border:1px solid #7a3030; color:#ffdada; padding:12px 14px; border-radius:8px; font:12px Consolas,monospace; max-width:60vw; white-space:pre-wrap;"></div>
+<script type="module" src="./gun-editor.mjs"></script>
+</body>
+</html>

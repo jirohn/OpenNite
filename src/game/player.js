@@ -80,8 +80,9 @@ export class Player {
     this.gliding = false;
     this.swimming = false;
     this.grounded = false;
-    this.fallPeakY = 340;
-    this.position.set(0, 340, this.world.half + 500);
+    this.fallPeakY = 220;
+    this.busTime = 0;
+    this.position.set(0, 220, this.world.half + 120);
     this.yaw = Math.PI;
     this.pitch = -0.55;
     this.character.group.visible = true;
@@ -170,31 +171,24 @@ export class Player {
     if (inv === 'reloaded') this.audio.play('reload');
 
     if (this.inBus) {
+      this.busTime = (this.busTime || 0) + dt;
       this.position.z -= this.busSpeed * dt;
-      this.position.y = 340 + Math.sin(this.time * 0.8) * 1.2;
+      this.position.y = 220 + Math.sin(this.time * 0.8) * 1.2;
       this.character.group.position.copy(this.position);
+    this.character.grounded = this.grounded;
       // El GLB mira hacia +Z; la cámara/frente del juego miran hacia -Z.
-    this.character.group.rotation.y = this.yaw + Math.PI;
+      this.character.group.rotation.y = this.yaw + Math.PI;
       this.character.play('idle');
       this.character.update(dt);
       this.updateCamera(dt);
+      // Si el jugador no salta, se despliega automáticamente sobre la isla.
+      if (this.busTime > 7 || this.position.z < -this.world.half * 0.2) {
+        this.jumpFromBus();
+      }
       return;
     }
 
     const waterY = this.world.waterLevel ?? -100;
-    const terrainY = this.world.heightAt(this.position.x, this.position.z);
-    const deepWater = waterY > -20 && terrainY < waterY - 0.55;
-    const wasSwimming = this.swimming;
-    this.swimming = deepWater && this.position.y < waterY + 0.25;
-    if (this.swimming && !wasSwimming) {
-      // Al entrar en el agua se cancela la caída: nunca es mortal ni hace daño.
-      this.gliding = false;
-      this.velocity.y = Math.min(this.velocity.y, -1);
-      this.fallPeakY = Math.min(this.fallPeakY, waterY);
-      this.character.play('jump');
-    } else if (!this.swimming && wasSwimming) {
-      this.fallPeakY = this.position.y;
-    }
 
     // Entrada de movimiento
     const fwdInput = (input.isDown('KeyW') ? 1 : 0) - (input.isDown('KeyS') ? 1 : 0);
@@ -221,6 +215,25 @@ export class Player {
     this.velocity.x = lerp(this.velocity.x, targetVX, clamp(accel * dt, 0, 1));
     this.velocity.z = lerp(this.velocity.z, targetVZ, clamp(accel * dt, 0, 1));
 
+    // Integración horizontal y detección de agua en la posición actual
+    this.position.x += this.velocity.x * dt;
+    this.position.z += this.velocity.z * dt;
+    this.world.resolveCollision(this.position, 0.42, this.crouching ? 1.15 : 1.8);
+
+    const terrainY = this.world.heightAt(this.position.x, this.position.z);
+    const deepWater = waterY > -20 && terrainY < waterY - 0.55;
+    const wasSwimming = this.swimming;
+    this.swimming = deepWater && this.position.y < waterY + 0.3;
+    if (this.swimming && !wasSwimming) {
+      // Al entrar en el agua se cancela la caída: nunca es mortal ni hace daño.
+      this.gliding = false;
+      this.velocity.y = Math.min(this.velocity.y, -1);
+      this.fallPeakY = Math.min(this.fallPeakY, waterY);
+      this.character.play('jump');
+    } else if (!this.swimming && wasSwimming) {
+      this.fallPeakY = this.position.y;
+    }
+
     // El planeador se alterna con ESPACIO (onSpacePress); aquí solo se integra la caída.
     if (!this.grounded && !this.gliding && !this.swimming) this.fallPeakY = Math.max(this.fallPeakY, this.position.y);
     if (this.swimming) {
@@ -229,7 +242,7 @@ export class Player {
       const desiredV = clamp((targetY - this.position.y) * 4.5, -3.2, 3.2);
       this.velocity.y = lerp(this.velocity.y, desiredV, clamp(dt * 6, 0, 1));
     } else if (this.gliding) {
-      this.velocity.y = Math.max(this.velocity.y - 5.5 * dt, -6.5);
+      this.velocity.y = Math.max(this.velocity.y - 9 * dt, -22);
       if (this.grounded) {
         this.gliding = false;
         this.audio.play('land');
@@ -238,32 +251,37 @@ export class Player {
       this.velocity.y -= GRAVITY * dt;
     }
 
-    // Integración y colisiones
-    this.position.x += this.velocity.x * dt;
-    this.position.z += this.velocity.z * dt;
-    this.world.resolveCollision(this.position, 0.42, this.crouching ? 1.15 : 1.8);
+    // Integración vertical y colisiones
     const prevY = this.position.y;
     this.position.y += this.velocity.y * dt;
-    const ground = this.world.groundAt(this.position.x, this.position.z, prevY, this.position.y);
+    const groundSolid = this.world.groundAt(this.position.x, this.position.z, prevY, this.position.y);
+    const waterSurface = deepWater ? (waterY - WATER_FLOAT) : -Infinity;
+    const ground = Math.max(groundSolid, waterSurface);
     if (this.position.y <= ground) {
       const impact = this.velocity.y;
       const wasGliding = this.gliding;
-      const landedInWater = ground < waterY - 0.2;
-      if (!this.grounded && impact < -8 && !landedInWater) this.audio.play('land');
+      const landedInWater = deepWater && ground >= waterY - WATER_FLOAT - 0.01;
+      const wasAirborne = !this.grounded && !wasSwimming;
+      if (wasAirborne && impact < -8 && !landedInWater) this.audio.play('land');
       this.position.y = ground;
       this.velocity.y = 0;
-      this.grounded = true;
+      this.grounded = !landedInWater;
       this.gliding = false;
-      // Caer al agua nunca inflige daño por impacto.
-      if (!wasGliding && !this.inBus && !this.swimming && !landedInWater) {
-        const fall = this.fallPeakY - ground;
-        if (fall > FALL_SAFE) {
-          const damage = Math.min(100, (fall - FALL_SAFE) * (100 / (FALL_LETHAL - FALL_SAFE)));
-          if (this.onFallDamage) this.onFallDamage(damage);
-          else this.takeDamage(damage);
+      if (landedInWater) {
+        this.swimming = true;
+        this.fallPeakY = waterY;
+      } else {
+        // Caer al agua nunca inflige daño por impacto.
+        if (!wasGliding && !this.inBus && !this.swimming) {
+          const fall = this.fallPeakY - ground;
+          if (fall > FALL_SAFE) {
+            const damage = Math.min(100, (fall - FALL_SAFE) * (100 / (FALL_LETHAL - FALL_SAFE)));
+            if (this.onFallDamage) this.onFallDamage(damage);
+            else this.takeDamage(damage);
+          }
         }
+        this.fallPeakY = ground;
       }
-      this.fallPeakY = landedInWater ? waterY : ground;
     } else {
       this.grounded = false;
     }
@@ -288,9 +306,21 @@ export class Player {
     this.character.group.position.copy(this.position);
     // El GLB mira hacia +Z; la cámara/frente del juego miran hacia -Z.
     this.character.group.rotation.y = this.yaw + Math.PI;
-    if (this.swimming) this.character.setLocomotion(0, false);
-    else if (this.gliding) this.character.play('jump', 0.15);
-    else this.character.setLocomotion(planarSpeed, this.grounded);
+    this.character.aimPitch = this.pitch;
+    this.character.aimDir = this.getAimDirection().clone();
+    const cur = this.inventory.current();
+    const pose = {
+      crouching: this.crouching,
+      ads: this.ads,
+      reloading: this.inventory.reloading,
+      twoHand: !!cur && !cur.def.melee && cur.type !== 'pistol',
+      armed: !!cur && !cur.def.melee,
+      strafe: sideInput,
+      back: fwdInput < 0,
+      swimming: this.swimming,
+      gliding: this.gliding,
+    };
+    this.character.setLocomotion(planarSpeed, this.grounded, pose);
     this.character.update(dt);
     if (this.grounded && planarSpeed > 0.8) this.audio.footstep(this.sprinting);
     if (planarSpeed > 0.5) this.bob += dt * (this.sprinting ? 13 : 9);

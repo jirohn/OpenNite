@@ -188,6 +188,11 @@ export class LootManager {
       const got = player.heal(item.amount);
       text = `+${Math.round(got)} vida`;
       color = '#5bd88a';
+    } else if (item.kind === 'slurp') {
+      const gh = player.heal(item.amount);
+      const gs = player.addShield(item.amount);
+      text = `+${Math.round(gh)} vida / +${Math.round(gs)} escudo`;
+      color = '#b06cff';
     } else if (item.kind === 'ammo') {
       inv.addAmmo(item.ammoType, item.amount);
       text = `+${item.amount} munición`;

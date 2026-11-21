@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile, unlink } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStaticServer } from './server.js';
 import { setupUpdater } from './updater.js';
@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
 const userDir = join(app.getPath('userData'));
 const settingsFile = join(userDir, 'settings.json');
+const accountFile = join(userDir, 'account.json');
 const mapsDir = join(userDir, 'maps');
 const mapsIndex = join(mapsDir, 'index.json');
 
@@ -34,10 +35,22 @@ function registerIPC() {
   ipcMain.handle('app:open-external', async (_event, url) => {
     if (/^https?:\/\//i.test(String(url))) await shell.openExternal(url);
   });
+  ipcMain.handle('app:writeFile', async (_event, relativePath, text) => {
+    const target = join(rootDir, String(relativePath || ''));
+    if (!target.startsWith(rootDir + sep)) throw new Error('Ruta no permitida');
+    await writeFile(target, text, 'utf8');
+    return target;
+  });
 
   ipcMain.handle('settings:get', () => readJSON(settingsFile, null));
   ipcMain.handle('settings:set', async (_event, data) => {
     await writeFile(settingsFile, JSON.stringify(data, null, 2), 'utf8');
+    return true;
+  });
+
+  ipcMain.handle('account:get', () => readJSON(accountFile, null));
+  ipcMain.handle('account:set', async (_event, data) => {
+    await writeFile(accountFile, JSON.stringify(data, null, 2), 'utf8');
     return true;
   });
 
@@ -137,6 +150,10 @@ async function createWindow() {
     mainWindow?.focus();
     mainWindow?.webContents.focus();
   });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // Permitir navegar a páginas fuera del origen del juego.
+    if (!url.startsWith(`http://127.0.0.1:${server?.port || 0}/`)) event.preventDefault();
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 
   const devURL = process.env.VITE_DEV_SERVER_URL;
@@ -146,8 +163,17 @@ async function createWindow() {
   } else {
     const dist = join(rootDir, 'dist');
     if (!existsSync(dist)) throw new Error('No existe dist/. Ejecuta npm run build primero.');
-    server = await createStaticServer(dist, mapsDir);
-    await mainWindow.loadURL(`http://127.0.0.1:${server.port}/index.html`);
+    server = await createStaticServer(dist, mapsDir, [
+      { prefix: 'config/', dir: join(rootDir, 'config') },
+      { prefix: 'tools/', dir: join(rootDir, 'tools') },
+      { prefix: 'src/', dir: join(rootDir, 'src') },
+      { prefix: 'node_modules/', dir: join(rootDir, 'node_modules') },
+    ]);
+    let startUrl = `http://127.0.0.1:${server.port}/index.html`;
+    if (process.argv.includes('--editor')) startUrl = `http://127.0.0.1:${server.port}/tools/gun-editor.html`;
+    if (process.argv.includes('--map-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/map-editor.html`;
+    if (process.argv.includes('--parts-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/parts-editor.html`;
+    await mainWindow.loadURL(startUrl);
   }
 }
 

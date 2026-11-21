@@ -1,0 +1,443 @@
+{
+  "source": "Kenney Building Kit (CC0) via poly.pizza",
+  "license": "CC0",
+  "items": [
+    {
+      "name": "Floor",
+      "file": "floor.glb",
+      "uuid": "010afbc5-21f0-4b74-a4d0-b5f6fb84ed78",
+      "bytes": 12520,
+      "bounds": {
+        "min": [
+          -1,
+          0,
+          -1
+        ],
+        "max": [
+          1,
+          0.0999999940395355,
+          1
+        ],
+        "size": [
+          2,
+          0.1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Wall",
+      "file": "wall.glb",
+      "uuid": "f856b583-8664-4856-a395-fe4f4337db8a",
+      "bytes": 12404,
+      "bounds": {
+        "min": [
+          -0.0500000193715096,
+          0,
+          -1
+        ],
+        "max": [
+          0.0500000193715096,
+          2.40000009536743,
+          1
+        ],
+        "size": [
+          0.1,
+          2.4,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Wall Doorway Wide",
+      "file": "wall_doorway_wide.glb",
+      "uuid": "4466302e-aa49-426e-ad87-724d3bbe1410",
+      "bytes": 15280,
+      "bounds": {
+        "min": [
+          -0.100000195205212,
+          -6.85815853502321e-15,
+          -2.00000023841858
+        ],
+        "max": [
+          0.100000195205212,
+          2.40000009536743,
+          2.00000023841858
+        ],
+        "size": [
+          0.2,
+          2.4,
+          4
+        ]
+      }
+    },
+    {
+      "name": "Wall Doorway Round",
+      "file": "wall_doorway_round.glb",
+      "uuid": "dd7f67fc-dc78-4a65-ac96-2faadc4bce6e",
+      "bytes": 18648,
+      "bounds": {
+        "min": [
+          -0.0999999940395355,
+          0,
+          -1
+        ],
+        "max": [
+          0.0999999940395355,
+          2.40000009536743,
+          1
+        ],
+        "size": [
+          0.2,
+          2.4,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Wall Window Wide",
+      "file": "wall_window_wide.glb",
+      "uuid": "d645b352-546d-4b6b-a6da-8e943b7801a0",
+      "bytes": 17412,
+      "bounds": {
+        "min": [
+          -0.0999999940395355,
+          0,
+          -2
+        ],
+        "max": [
+          0.0999999940395355,
+          2.40000009536743,
+          2
+        ],
+        "size": [
+          0.2,
+          2.4,
+          4
+        ]
+      }
+    },
+    {
+      "name": "Wall Window Square",
+      "file": "wall_window_square.glb",
+      "uuid": "e7a1ec73-07f9-4998-81a2-2d406bdfe85d",
+      "bytes": 17368,
+      "bounds": {
+        "min": [
+          -0.0999999940395355,
+          0,
+          -1
+        ],
+        "max": [
+          0.0999999940395355,
+          2.40000009536743,
+          1
+        ],
+        "size": [
+          0.2,
+          2.4,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Roof Flat Center",
+      "file": "roof_flat_center.glb",
+      "uuid": "32b7a8b4-f6fa-46eb-94fd-3859184e6b07",
+      "bytes": 12540,
+      "bounds": {
+        "min": [
+          -1,
+          0,
+          -1
+        ],
+        "max": [
+          1,
+          0.0999999940395355,
+          1
+        ],
+        "size": [
+          2,
+          0.1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Roof Flat Side",
+      "file": "roof_flat_side.glb",
+      "uuid": "24ca50d3-d636-4d8f-a72b-96db2a71d0b8",
+      "bytes": 14420,
+      "bounds": {
+        "min": [
+          -1,
+          0,
+          -1
+        ],
+        "max": [
+          1.19999992847443,
+          0.399999976158142,
+          1
+        ],
+        "size": [
+          2.2,
+          0.4,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Roof Flat Corner",
+      "file": "roof_flat_corner.glb",
+      "uuid": "204a471b-8d33-4e03-b54f-3f7c573886a4",
+      "bytes": 15336,
+      "bounds": {
+        "min": [
+          -1,
+          -2.70716769788511e-15,
+          -1
+        ],
+        "max": [
+          1.20000004768372,
+          0.399999976158142,
+          1.20000004768372
+        ],
+        "size": [
+          2.2,
+          0.4,
+          2.2
+        ]
+      }
+    },
+    {
+      "name": "Roof Flat Square",
+      "file": "roof_flat_square.glb",
+      "uuid": "1cb1b14b-d65f-4f1a-95db-04bc403f4307",
+      "bytes": 16100,
+      "bounds": {
+        "min": [
+          -1.1972576379776,
+          0,
+          -1.1972576379776
+        ],
+        "max": [
+          1.1972576379776,
+          0.399999976158142,
+          1.1972576379776
+        ],
+        "size": [
+          2.394515,
+          0.4,
+          2.394515
+        ]
+      }
+    },
+    {
+      "name": "Stairs Center",
+      "file": "stairs_center.glb",
+      "uuid": "a370a179-eacc-4838-8645-da1a8a7cd17b",
+      "bytes": 19652,
+      "bounds": {
+        "min": [
+          -0.649999976158142,
+          3.15836245537145e-16,
+          -2
+        ],
+        "max": [
+          0.649999976158142,
+          2.5,
+          2
+        ],
+        "size": [
+          1.3,
+          2.5,
+          4
+        ]
+      }
+    },
+    {
+      "name": "Stairs Closed",
+      "file": "stairs_closed.glb",
+      "uuid": "26e9fc8a-8205-4509-9895-dd7649a350ee",
+      "bytes": 21328,
+      "bounds": {
+        "min": [
+          -0.649999976158142,
+          3.60955705403911e-16,
+          -2
+        ],
+        "max": [
+          0.649999976158142,
+          2.5,
+          2
+        ],
+        "size": [
+          1.3,
+          2.5,
+          4
+        ]
+      }
+    },
+    {
+      "name": "Column",
+      "file": "column.glb",
+      "uuid": "b44d1957-1556-48d3-b885-38e5bb0eb8c9",
+      "bytes": 13740,
+      "bounds": {
+        "min": [
+          -0.25,
+          0,
+          -0.25
+        ],
+        "max": [
+          0.25,
+          2.40000009536743,
+          0.25
+        ],
+        "size": [
+          0.5,
+          2.4,
+          0.5
+        ]
+      }
+    },
+    {
+      "name": "Wall Half",
+      "file": "wall_half.glb",
+      "uuid": "6e76fffb-f7bf-4b7b-99d9-c7f703a5de3e",
+      "bytes": 12416,
+      "bounds": {
+        "min": [
+          -0.0500000193715096,
+          0,
+          -0.5
+        ],
+        "max": [
+          0.0500000193715096,
+          2.40000009536743,
+          0.5
+        ],
+        "size": [
+          0.1,
+          2.4,
+          1
+        ]
+      }
+    },
+    {
+      "name": "Wall Low",
+      "file": "wall_low.glb",
+      "uuid": "8cbe9a64-4a8d-416c-8dd9-569d02f69d73",
+      "bytes": 12412,
+      "bounds": {
+        "min": [
+          -0.0500000193715096,
+          0,
+          -1
+        ],
+        "max": [
+          0.0499999970197678,
+          1.20000004768372,
+          1
+        ],
+        "size": [
+          0.1,
+          1.2,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Wall Corner",
+      "file": "wall_corner.glb",
+      "uuid": "a9f6d3ff-4cc9-4252-8e75-cefd0755f25e",
+      "bytes": 12744,
+      "bounds": {
+        "min": [
+          -1,
+          0,
+          -1
+        ],
+        "max": [
+          1,
+          2.40000009536743,
+          1
+        ],
+        "size": [
+          2,
+          2.4,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Floor Half",
+      "file": "floor_half.glb",
+      "uuid": "9bc7cbb3-75d9-4f32-b163-f28d24bbc404",
+      "bytes": 12528,
+      "bounds": {
+        "min": [
+          -0.5,
+          0,
+          -1
+        ],
+        "max": [
+          0.5,
+          0.0999999940395355,
+          1
+        ],
+        "size": [
+          1,
+          0.1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "Floor Quarter",
+      "file": "floor_quarter.glb",
+      "uuid": "92b977f7-901a-4e3c-b5c1-b77887ea8530",
+      "bytes": 12536,
+      "bounds": {
+        "min": [
+          -0.5,
+          0,
+          -1
+        ],
+        "max": [
+          0.5,
+          0.0999999940395355,
+          0
+        ],
+        "size": [
+          1,
+          0.1,
+          1
+        ]
+      }
+    },
+    {
+      "name": "Roof Flat Patch",
+      "file": "roof_flat_patch.glb",
+      "uuid": "4c4aeca1-5145-4c2a-9efe-f85d29aaa923",
+      "bytes": 13556,
+      "bounds": {
+        "min": [
+          -0.550000011920929,
+          0,
+          -0.550000011920929
+        ],
+        "max": [
+          0.550000011920929,
+          0.0499999970197678,
+          0.550000011920929
+        ],
+        "size": [
+          1.1,
+          0.05,
+          1.1
+        ]
+      }
+    }
+  ]
+}

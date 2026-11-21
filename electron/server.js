@@ -23,7 +23,7 @@ const MIME = {
  * Servidor local mínimo: evita problemas de CORS con módulos ES en file://.
  * `mapsDir` se sirve bajo /installed-maps/ para los mapas descargados completos.
  */
-export function createStaticServer(rootDir, mapsDir = null) {
+export function createStaticServer(rootDir, mapsDir = null, extraRoots = []) {
   const root = resolve(rootDir);
   const mapsRoot = mapsDir ? resolve(mapsDir) : null;
   const server = http.createServer(async (req, res) => {
@@ -35,6 +35,17 @@ export function createStaticServer(rootDir, mapsDir = null) {
       if (mapsRoot && /^installed-maps[/\\]/i.test(rel)) {
         base = mapsRoot;
         rel = rel.replace(/^installed-maps[/\\]/i, '');
+      }
+
+      // Rutas de desarrollo/herramientas que viven fuera de dist/ (tools/, src/, node_modules/).
+      // NOTE: `rel` está normalizada (\ en Windows), así que los prefijos también.
+      const extras = extraRoots.map((e) => ({ ...e, prefix: (e?.prefix || '').replace(/\//g, sep) }));
+      for (const extra of extras) {
+        if (extra.prefix && rel.startsWith(extra.prefix) && !/^installed-maps/.test(rel)) {
+          base = resolve(extra.dir);
+          rel = rel.slice(extra.prefix.length);
+          break;
+        }
       }
 
       if (rel === '' || rel.endsWith('/')) rel = join(rel, 'index.html');

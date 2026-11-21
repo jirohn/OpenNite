@@ -1,16 +1,24 @@
 import * as THREE from 'three';
 import { Character as KitCharacter, Library, catalogFromFiles } from './kit-character.js';
+import { Character as UbcCharacter, loadUbcKit } from './ubc-character.js';
+import { getGunPlacement, loadGunConfig } from './gun-config.js';
 
 let kitPromise = null;
 
 /**
- * Personajes humanoides animados (cuerpo + piezas CC0 de NoLimitNexus/Quaternius
- * y animaciones KayKit CC0). Se carga una sola vez y se comparte entre los 20
- * jugadores; cada personaje clona el esqueleto y recoloriza sus materiales.
+ * Carga de personajes/animaciones. Prioriza Quaternius UBC + UAL (CC0, rig y
+ * animaciones compatibles) y cae al kit KayKit/NLN anterior si no están.
+ * Se carga una sola vez y se comparte entre los 20 jugadores.
  */
 export function loadCharacterModel() {
   if (kitPromise) return kitPromise;
   kitPromise = (async () => {
+    try {
+      const ubc = await loadUbcKit();
+      return { type: 'ubc', ubc };
+    } catch (error) {
+      console.warn('UBC/UAL no disponible, usando kit anterior:', error);
+    }
     const catalog = await catalogFromFiles('./models/opennite/');
     // Solo los clips que usa OpenNite: menos descarga en equipos modestos.
     catalog.animations = [
@@ -30,7 +38,7 @@ export function loadCharacterModel() {
       library.glb(catalog.base.url),
       ...catalog.parts.map((p) => library.glb(p.url)),
     ]);
-    return { library, presets: catalog.presets || [] };
+    return { type: 'kit', library, presets: catalog.presets || [] };
   })().catch((error) => {
     kitPromise = null;
     throw error;
@@ -41,13 +49,18 @@ export function loadCharacterModel() {
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 
-/** Animaciones del motor mapeadas a clips reales del kit. */
-const ANIM_MAP = {
+/** Animaciones del motor mapeadas a clips reales del kit KayKit/NLN. */
+const KIT_ANIM_MAP = {
   idle: 'Idle_A',
   walk: 'Walking_A',
   run: 'Running_A',
-  jump: 'Jump_Full_Short',
+  jump: 'Jump_Idle',
+  jumpStart: 'Jump_Start',
+  land: 'Jump_Land',
+  swim: 'Swim_Idle',
+  swimFwd: 'Swim_Forward',
   death: 'Death_A',
+  death2: 'Death_B',
   dance: 'Cheering',
   punch: 'Melee_Unarmed_Attack_Punch_A',
   wave: 'Waving',
@@ -56,12 +69,68 @@ const ANIM_MAP = {
   yes: 'Cheering',
   no: 'Hit_A',
   hit: 'Hit_A',
+  hit2: 'Hit_B',
   pickup: 'PickUp',
   interact: 'Interact',
   fire: 'Ranged_1H_Shoot',
   fire2: 'Ranged_2H_Shoot',
+  crouch: 'Crouching',
+  sprint: 'Running_B',
+  aim: 'Ranged_1H_Aiming',
+  aim2: 'Ranged_2H_Aiming',
+  reload: 'Ranged_1H_Reload',
+  reload2: 'Ranged_2H_Reload',
+  strafeL: 'Running_Strafe_Left',
+  strafeR: 'Running_Strafe_Right',
+  back: 'Walking_Backwards',
+  dodge: 'Dodge_Backward',
 };
-const ONCE_ANIMS = new Set(['death', 'punch', 'fire', 'fire2', 'jump', 'pickup', 'interact']);
+
+/** Animaciones mapeadas a clips de Quaternius Universal Animation Library. */
+export const UBC_ANIM_MAP = {
+  idle: 'Idle_Loop',
+  idleArmed: 'Pistol_Idle_Loop',
+  walk: 'Walk_Loop',
+  walkArmed: 'Walk_Loop',
+  run: 'Jog_Fwd_Loop',
+  sprint: 'Sprint_Loop',
+  jump: 'Jump_Loop',
+  jumpStart: 'Jump_Start',
+  land: 'Jump_Land',
+  swim: 'Swim_Idle_Loop',
+  swimFwd: 'Swim_Fwd_Loop',
+  death: 'Death01',
+  death2: 'Death01',
+  dance: 'Dance_Loop',
+  punch: 'Punch_Jab',
+  wave: 'Idle_Talking_Loop',
+  sit: 'Sitting_Idle_Loop',
+  stand: 'Sitting_Exit',
+  yes: 'Idle_Talking_Loop',
+  no: 'Hit_Head',
+  hit: 'Hit_Chest',
+  hit2: 'Hit_Head',
+  pickup: 'PickUp_Table',
+  interact: 'Interact',
+  fire: 'Pistol_Shoot',
+  fire2: 'Pistol_Shoot',
+  crouch: 'Crouch_Idle_Loop',
+  crouchWalk: 'Crouch_Fwd_Loop',
+  aim: 'Pistol_Aim_Neutral',
+  aim2: 'Pistol_Aim_Neutral',
+  reload: 'Pistol_Reload',
+  reload2: 'Pistol_Reload',
+  // UAL Standard no incluye strafes/retroceso/rifle 2H: fallbacks razonables.
+  strafeL: 'Walk_Loop',
+  strafeR: 'Walk_Loop',
+  back: 'Walk_Loop',
+  dodge: 'Roll',
+};
+
+const ONCE_ANIMS = new Set([
+  'death', 'death2', 'punch', 'fire', 'fire2', 'land', 'pickup', 'interact',
+  'reload', 'reload2', 'dodge', 'hit', 'hit2', 'jumpStart', 'stand',
+]);
 
 const presetFor = (kit, options = {}) => {
   const presets = kit?.presets || [];
@@ -81,15 +150,25 @@ export class Character {
   constructor(kit, options = {}) {
     this.kit = kit;
     this.options = options;
-    this.current = 'idle';
+    this.current = '';
     this.weaponKick = 0;
     this.fireTimer = 0;
     this.supportBase = 0;
     this.supportBoost = 0;
     this.storedSpeed = 0;
     this.storedGrounded = true;
+    this.storedOpts = {};
+    this.reactionTimer = 0;
     this.dead = false;
     this.height = 1.9;
+    // Editor de armas: cuando true, los sliders del editor manejan el offset
+    // local del arma (la alineación inicial ya no se toca).
+    this.manualGunAlign = false;
+    // Alinear el arma con el frente solo una vez, en la pose armada ya asentada.
+    // Después acompaña al hueso de la mano.
+    this.needsGunAlign = false;
+    this.alwaysAlignForward = false;
+    this.gunAlignTimer = 0;
   }
 
   static async create(kit, options = {}) {
@@ -99,14 +178,22 @@ export class Character {
   }
 
   async init() {
-    const preset = presetFor(this.kit, this.options);
-    const appearance = {
-      parts: { ...(preset.parts || {}) },
-      colors: { ...(preset.colors || {}) },
-      tool: null,
-    };
-    this.preset = preset;
-    this.kitChar = await KitCharacter.create(this.kit.library, appearance);
+    if (this.kit?.type === 'ubc') {
+      this.isUbc = true;
+      this.animMap = UBC_ANIM_MAP;
+      this.kitChar = await UbcCharacter.create(this.kit.ubc, this.options);
+    } else {
+      this.isUbc = false;
+      this.animMap = KIT_ANIM_MAP;
+      const preset = presetFor(this.kit, this.options);
+      const appearance = {
+        parts: { ...(preset.parts || {}) },
+        colors: { ...(preset.colors || {}) },
+        tool: null,
+      };
+      this.preset = preset;
+      this.kitChar = await KitCharacter.create(this.kit.library, appearance);
+    }
     this.kitChar.setHeight(1.9);
     this.group = this.kitChar.holder;
     this.group.traverse((obj) => {
@@ -114,14 +201,29 @@ export class Character {
     });
 
     const bones = this.kitChar.bones;
+    const pick = (...names) => {
+      for (const n of names) { const b = bones.get?.(n); if (b) return b; }
+      return null;
+    };
     this.bones = {
-      upperR: bones.get('upperarmr'),
-      lowerR: bones.get('lowerarmr'),
-      handR: bones.get('handslotr') || bones.get('handr'),
-      shoulderL: bones.get('chest'),
-      upperL: bones.get('upperarml'),
-      lowerL: bones.get('lowerarml'),
-      handL: bones.get('handslotl') || bones.get('handl'),
+      spine: pick('spine_01', 'spine'),
+      spine2: pick('spine_02'),
+      chest: pick('spine_03', 'chest'),
+      neck: pick('neck_01', 'neck'),
+      head: pick('head'),
+      upperR: pick('upperarmr', 'upperarm_r'),
+      lowerR: pick('lowerarmr', 'lowerarm_r'),
+      handR: pick('handslotr', 'handr', 'hand_r', 'handslot_r'),
+      shoulderL: pick('chest', 'spine_03', 'spine_02'),
+      upperL: pick('upperarml', 'upperarm_l'),
+      lowerL: pick('lowerarml', 'lowerarm_l'),
+      handL: pick('handslotl', 'handl', 'hand_l', 'handslot_l'),
+      thighL: pick('thigh_l', 'thighl'),
+      calfL: pick('calf_l', 'calfl'),
+      footL: pick('foot_l', 'footl'),
+      thighR: pick('thigh_r', 'thighr'),
+      calfR: pick('calf_r', 'calfr'),
+      footR: pick('foot_r', 'footr'),
     };
 
     // El arma cuelga de la mano real del esqueleto. Se compensa la escala
@@ -135,10 +237,15 @@ export class Character {
       }
       this.weaponMount.scale.setScalar(1 / Math.max(0.0001, accumulated));
       this.group.updateWorldMatrix(true, true);
-      const handQ = firingHand.getWorldQuaternion(new THREE.Quaternion());
-      const groupQ = this.group.getWorldQuaternion(new THREE.Quaternion());
-      this.handAlign = groupQ.invert().multiply(handQ).invert()
-        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+      if (this.isUbc) {
+        // Placeholder; re-ajustado dinámicamente en attachWeapon (ver abajo).
+        this.handAlign = new THREE.Quaternion();
+      } else {
+        const handQ = firingHand.getWorldQuaternion(new THREE.Quaternion());
+        const groupQ = this.group.getWorldQuaternion(new THREE.Quaternion());
+        this.handAlign = groupQ.invert().multiply(handQ).invert()
+          .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+      }
       this.weaponMount.quaternion.copy(this.handAlign);
       firingHand.add(this.weaponMount);
     } else {
@@ -151,6 +258,10 @@ export class Character {
 
   setColor(color) {
     if (!this.kitChar || color === undefined || color === null) return;
+    if (this.isUbc) {
+      this.kitChar.setBodyColor(color, 0.5);
+      return;
+    }
     const tint = new THREE.Color(color);
     // Solo teñimos la ropa exterior: piel, pelo, pantalones y botas conservan
     // el acabado realista del preset. Antes un 72% de tinte convertía a los 20
@@ -167,6 +278,10 @@ export class Character {
   /** Cambia aspecto en caliente (taquilla): reconstruye las piezas del preset. */
   async setAppearance(options = {}) {
     if (!this.kitChar) return;
+    if (this.isUbc) {
+      if (options.color !== undefined && options.color !== null) this.setColor(options.color);
+      return;
+    }
     const preset = presetFor(this.kit, options);
     this.preset = preset;
     await this.kitChar.apply({
@@ -178,8 +293,9 @@ export class Character {
   }
 
   play(name, fade = 0.2) {
-    if (name === this.current) return;
-    const clip = ANIM_MAP[name] || ANIM_MAP.idle;
+    const map = this.animMap || KIT_ANIM_MAP;
+    const clip = map[name] || map.idle || 'Idle_Loop';
+    if (name === this.current && this.kitChar?.playing === clip) return;
     this.current = name;
     this.kitChar.playClip(clip, {
       fade,
@@ -188,17 +304,33 @@ export class Character {
     }).catch((error) => console.warn('Animación no disponible:', clip, error));
   }
 
-  setLocomotion(speed, grounded) {
+  setLocomotion(speed, grounded, opts = {}) {
     this.storedSpeed = speed;
     this.storedGrounded = grounded;
-    if (this.dead || this.fireTimer > 0) return;
-    if (!grounded) this.play('jump', 0.15);
+    this.storedOpts = opts;
+    if (this.dead || this.fireTimer > 0 || this.reactionTimer > 0) return;
+    // Prioridad: acciones especiales > recargar > nadar/caer > apuntar > moverse.
+    const armed = !!opts.armed;
+    if (opts.reloading) this.play(opts.twoHand ? 'reload2' : 'reload', 0.12);
+    else if (opts.swimming) this.play(speed > 0.7 ? 'swimFwd' : 'swim', 0.2);
+    else if (opts.gliding) this.play('jump', 0.18);
+    else if (!grounded) this.play(speed > 1.0 ? 'jump' : 'jumpStart', 0.12);
+    else if (opts.crouchActive) this.play(speed > 0.5 ? 'crouchWalk' : 'crouch', 0.18);
+    else if (opts.ads) this.play(opts.twoHand ? 'aim2' : 'aim', 0.14);
+    else if (opts.strafe > 0.55) this.play('strafeR', 0.15);
+    else if (opts.strafe < -0.55) this.play('strafeL', 0.15);
+    else if (opts.back) this.play('back', 0.15);
+    else if (speed > 6.4) this.play('sprint', 0.22);
     else if (speed > 4.2) this.play('run', 0.25);
-    else if (speed > 0.6) this.play('walk', 0.2);
-    else this.play('idle', 0.25);
+    else if (speed > 0.6) this.play(armed ? 'walkArmed' : 'walk', 0.2);
+    else this.play(armed ? 'idleArmed' : 'idle', 0.25);
   }
 
   setWeaponType(type) {
+    this.weaponType = type || null;
+    // Con UBC/UAL las animaciones ya incluyen la pose de brazos; el IK procedural
+    // y el retroceso extra las deforman y producen gestos raros al disparar.
+    if (this.isUbc) { this.supportBase = 0; this.supportBoost = 0; return; }
     this.supportBase = (type === 'pistol' || type === 'pickaxe') ? 0 : 0.82;
     if (type !== 'pistol') this.supportBoost = 0;
   }
@@ -206,33 +338,99 @@ export class Character {
   fire(type = 'pistol') {
     if (this.dead) return;
     this.fireTimer = 0.26;
-    this.weaponKick = Math.min(1.5, this.weaponKick + 0.95);
+    this.weaponKick = this.isUbc
+      ? Math.min(0.25, this.weaponKick + 0.12)
+      : Math.min(1.5, this.weaponKick + 0.95);
     this.play(type === 'pistol' ? 'fire' : 'fire2', 0.05);
     this.setWeaponType(type);
-    if (type === 'pistol') this.supportBoost = Math.min(0.85, this.supportBoost + 0.17);
+    if (!this.isUbc && type === 'pistol') this.supportBoost = Math.min(0.85, this.supportBoost + 0.17);
   }
 
   die() {
     if (this.dead) return;
     this.dead = true;
-    this.play('death', 0.1);
+    this.play(Math.random() < 0.5 ? 'death' : 'death2', 0.1);
+  }
+
+  /** Alinea una sola vez el mount del arma con el frente del personaje. El arma
+   *  queda hija del hueso de la mano y acompaña su rotación en todas las
+   *  animaciones (apuntar, recargar, correr...). No debe llamarse cada frame:
+   *  si se sobreescribiera, el arma se despegaría de la mano. */
+  updateWeaponMount() {
+    const mount = this.weaponMount;
+    const gun = mount.children[0];
+    if (!gun || !mount.parent) return;
+    this.group.updateWorldMatrix(true, true);
+    mount.parent.updateWorldMatrix(true, true);
+    gun.updateWorldMatrix(true, true);
+    const boneWorldQ = mount.parent.getWorldQuaternion(new THREE.Quaternion());
+    const groupQ = this.group.getWorldQuaternion(new THREE.Quaternion());
+    if (!boneWorldQ || !groupQ) return;
+    // El arma lleva una rotación offset (gun.quaternion, configurada por el
+    // editor). Queremos gunWorldQ == groupQ * offsetQ, así que:
+    // mountQ = boneWorld^-1 * groupQ  (el offset lo aporta el propio arma).
+    this.handAlign.copy(boneWorldQ.invert().multiply(groupQ));
+    mount.quaternion.copy(this.handAlign);
+  }
+
+  /** Reacción breve al recibir un impacto, sin cortar la animación de disparo. */
+  hit(strong = false) {
+    if (this.dead || this.fireTimer > 0) return;
+    this.reactionTimer = strong ? 0.36 : 0.24;
+    this.play(strong ? 'hit2' : 'hit', 0.08);
   }
 
   update(dt) {
+    this._dt = dt;
     this.kitChar.update(dt);
+    // El arma es hija del hueso de la mano y lo sigue rígidamente: NO
+    // sobrescribimos su rotación aquí, o se despegaría de la mano en cuanto
+    // la animación mueva el brazo (apuntar, recargar, correr...). La
+    // alineación con el frente se hace una sola vez, tras este primer update.
+    if (this.isUbc) {
+      if (this.alwaysAlignForward) {
+        this.updateWeaponMount();
+      } else if (this.needsGunAlign) {
+        this.gunAlignTimer += dt;
+        if (this.current === 'idleArmed' && this.gunAlignTimer > 0.45) {
+          this.updateWeaponMount();
+          this.needsGunAlign = false;
+        }
+      }
+    }
     if (this.fireTimer > 0) {
       this.fireTimer -= dt;
-      if (this.fireTimer <= 0) this.setLocomotion(this.storedSpeed, this.storedGrounded);
+      if (this.fireTimer <= 0) this.setLocomotion(this.storedSpeed, this.storedGrounded, this.storedOpts);
+    } else if (this.reactionTimer > 0) {
+      this.reactionTimer -= dt;
+      if (this.reactionTimer <= 0) this.setLocomotion(this.storedSpeed, this.storedGrounded, this.storedOpts);
     }
     this.weaponKick = Math.max(0, this.weaponKick - dt * 4.6);
     this.supportBoost = Math.max(0, this.supportBoost - dt * 0.4);
     this.applyRecoil();
+    if (this.isUbc) this.applyAimPose();
     this.applySupportIK();
+    // Right-hand IK targeting a point on the weapon (child of right hand) creates
+    // a feedback loop -> spinning/chasing arms when aiming. Keep right hand driven
+    // by animation+aim pose; only left hand IKs to the weapon support grip.
+    // if (this.isUbc) this.applyRightIK();
+    if (this.isUbc && this.world) this.applyFootIK(this.world);
   }
 
   applyRecoil() {
     if (!this.handAlign) return;
     this.weaponMount.quaternion.copy(this.handAlign);
+    if (this.isUbc) {
+      // UBC: apuntado por pose de torso/cabeza (applyAimPose). Solo un pequeño
+      // retroceso local estable en el arma, sin rotación por pitch (evita conflictos).
+      const k = this.weaponKick;
+      if (k > 0.001) {
+        this.weaponMount.position.set(0, 0, k * 0.05);
+      } else {
+        this.weaponMount.position.set(0, 0, 0);
+      }
+      return;
+    }
     const k = this.weaponKick;
     if (k > 0.001) {
       this.weaponMount.rotateX(-k * 0.17);
@@ -243,11 +441,36 @@ export class Character {
     }
   }
 
+  /** Apuntado estilo tercera persona: inclina torso/cabeza según el pitch de cámara
+   *  para que el arma apunte al objetivo sin bucles de IK entre manos. */
+  applyAimPose() {
+    const pitch = THREE.MathUtils.clamp(this.aimPitch || 0, -1.2, 0.8);
+    const yawDelta = 0; // yaw lo lleva el grupo del personaje
+    const hasWeapon = !!(this.weaponMount?.children?.length);
+    // Sin arma, postura neutra (suave) para no forzar animaciones.
+    const strength = hasWeapon ? 1 : 0.15;
+    const p = pitch * strength;
+    const apply = (bone, factor, axis = 'x') => {
+      if (!bone) return;
+      if (axis === 'x') bone.rotation.x += p * factor;
+      else if (axis === 'y') bone.rotation.y += yawDelta * factor;
+      bone.updateMatrixWorld(true);
+    };
+    // Distribución del pitch a lo largo de la columna (Fortnite-like)
+    apply(this.bones.spine, 0.18);
+    apply(this.bones.spine2, 0.22);
+    apply(this.bones.chest, 0.28);
+    apply(this.bones.neck, 0.12);
+    apply(this.bones.head, 0.08);
+  }
+
   applySupportIK() {
-    const influence = Math.min(0.92, this.supportBase + this.supportBoost);
-    const { shoulderL, upperL, lowerL, handL } = this.bones;
-    const weapon = this.weaponMount.children[0];
-    if (influence < 0.01 || !upperL || !lowerL || !handL || !weapon?.userData?.supportGrip) return;
+    const weapon = this.weaponMount?.children?.[0];
+    const ikStrength = this.isUbc ? (weapon?.userData?.ikStrengthLeft ?? weapon?.userData?.ikStrength ?? 0) : (this.supportBase + this.supportBoost);
+    const influence = Math.min(0.92, ikStrength);
+    if (influence < 0.01) return;
+    const { upperL, lowerL, handL } = this.bones;
+    if (!upperL || !lowerL || !handL || !weapon?.userData?.supportGrip) return;
     this.group.updateWorldMatrix(true, true);
     weapon.updateWorldMatrix(true, false);
     const target = weapon.localToWorld(weapon.userData.supportGrip.clone());
@@ -266,10 +489,75 @@ export class Character {
     for (let i = 0; i < 2; i++) {
       this.rotateBoneTowards(lowerL, handL, target, influence * 0.8);
       this.rotateBoneTowards(upperL, lowerL, target, influence * 0.55);
-      if (shoulderL) this.rotateBoneTowards(shoulderL, upperL, target, influence * 0.3);
+    }
+    // Aplicar rotación del agarre izquierdo a la mano.
+    if (weapon?.userData?.supportGripQuat) {
+      const wq = weapon.getWorldQuaternion(new THREE.Quaternion());
+      const sq = weapon.userData.supportGripQuat.clone();
+      const targetQ = wq.clone().multiply(sq);
+      if (handL.parent) {
+        const pq = handL.parent.getWorldQuaternion(new THREE.Quaternion());
+        handL.quaternion.copy(pq.invert().multiply(targetQ));
+      }
+    }
+  }
+  applyRightIK() {
+    const ikStrength = this.isUbc ? (this.weaponMount?.children?.[0]?.userData?.ikStrengthRight ?? 0) : 0;
+    const weapon = this.weaponMount?.children?.[0];
+    const influence = Math.min(0.5, ikStrength);
+    if (influence < 0.01) return;
+    const { upperR, lowerR, handR } = this.bones;
+    if (!upperR || !lowerR || !handR) return;
+    this.group.updateWorldMatrix(true, true);
+    weapon?.updateWorldMatrix(true, false);
+    let target;
+    if (weapon?.userData?.ikRightTarget) {
+      target = weapon.localToWorld(weapon.userData.ikRightTarget.clone());
+    } else {
+      const fwd = this.aimDir ? this.aimDir.clone() : new THREE.Vector3(0, 0, -1).applyQuaternion(this.group.quaternion);
+      target = this.group.position.clone().add(fwd.multiplyScalar(0.9)).add(new THREE.Vector3(0, 1.15, 0));
+    }
+    const shoulder = upperR.getWorldPosition(new THREE.Vector3());
+    const toTarget = target.clone().sub(shoulder);
+    const distance = toTarget.length();
+    const reach = (upperR.getWorldPosition(new THREE.Vector3()).distanceTo(lowerR.getWorldPosition(new THREE.Vector3())) + lowerR.getWorldPosition(new THREE.Vector3()).distanceTo(handR.getWorldPosition(new THREE.Vector3()))) * 0.97;
+    if (distance > reach) target.copy(shoulder).addScaledVector(toTarget, reach / distance);
+    for (let i = 0; i < 2; i++) {
+      this.rotateBoneTowards(lowerR, handR, target, influence * 0.7);
+      this.rotateBoneTowards(upperR, lowerR, target, influence * 0.4);
     }
   }
 
+  applyFootIK(world) {
+    if (!this.grounded) return;
+    this.footIKTimer -= (this._dt || 0.016);
+    if (this.footIKTimer > 0) return;
+    this.footIKTimer = 0.05;
+    const { thighL, calfL, footL, thighR, calfR, footR } = this.bones;
+    if (!thighL || !calfL || !footL) return;
+    this.group.updateWorldMatrix(true, true);
+    for (const side of ['L', 'R']) {
+      const thigh = side === 'L' ? thighL : thighR;
+      const calf = side === 'L' ? calfL : calfR;
+      const foot = side === 'L' ? footL : footR;
+      if (!thigh || !calf || !foot) continue;
+      const footPos = foot.getWorldPosition(new THREE.Vector3());
+      const groundY = world.heightAt ? world.heightAt(footPos.x, footPos.z) : footPos.y;
+      const target = new THREE.Vector3(footPos.x, groundY, footPos.z);
+      // simple 2-bone IK: pull thigh and calf toward target
+      const shoulder = thigh.getWorldPosition(new THREE.Vector3());
+      const toTarget = target.clone().sub(shoulder);
+      const dist = toTarget.length();
+      const upperLen = thigh.getWorldPosition(new THREE.Vector3()).distanceTo(calf.getWorldPosition(new THREE.Vector3()));
+      const lowerLen = calf.getWorldPosition(new THREE.Vector3()).distanceTo(foot.getWorldPosition(new THREE.Vector3()));
+      const reach = (upperLen + lowerLen) * 0.98;
+      if (dist > reach) target.copy(shoulder).addScaledVector(toTarget, reach / dist);
+      for (let i = 0; i < 2; i++) {
+        this.rotateBoneTowards(calf, foot, target, 0.6);
+        this.rotateBoneTowards(thigh, calf, target, 0.4);
+      }
+    }
+  }
   rotateBoneTowards(bone, effector, target, influence) {
     if (!bone?.parent || !effector || influence <= 0) return;
     const origin = bone.getWorldPosition(_v1);
@@ -329,10 +617,10 @@ export function createWeaponModel(type) {
       group.add(tip);
     }
     group.userData.muzzle = new THREE.Vector3(0, 0, -1.05);
-    group.userData.grip = new THREE.Vector3(0, -0.13, 0.28);
-    group.userData.supportGrip = new THREE.Vector3(0, -0.12, -0.22);
+    group.userData.grip = new THREE.Vector3(0, -0.1, 0.28);
+    group.userData.supportGrip = new THREE.Vector3(0, -0.1, -0.18);
     group.userData.length = 1.3;
-    group.scale.setScalar(1.35);
+    group.scale.setScalar(0.6);
     return group;
   }
 
@@ -382,17 +670,21 @@ export function createWeaponModel(type) {
   if (p.pump) box(0.2, 0.14, 0.34, wood, 0, -0.1, -bd / 2 - 0.25);
 
   group.userData.muzzle = new THREE.Vector3(0, 0.015, -bd / 2 - p.barrel - 0.04);
-  group.userData.grip = new THREE.Vector3(0, -0.19, bd / 2 - 0.22);
+  // Empuñadura: punto que se alinea con la mano del personaje.
+  group.userData.grip = type === 'pistol'
+    ? new THREE.Vector3(0, -0.12, bd / 2 - 0.18)
+    : new THREE.Vector3(0, -0.14, bd / 2 - 0.28);
   group.userData.supportGrip = type === 'pistol'
-    ? new THREE.Vector3(0, -0.1, 0.02)
-    : new THREE.Vector3(0, -0.07, -bd * 0.12);
+    ? new THREE.Vector3(0, -0.08, 0.02)
+    : new THREE.Vector3(0, -0.05, -bd * 0.18);
   group.userData.length = bd + p.barrel;
-  group.scale.setScalar(type === 'pistol' ? 1 : type === 'sniper' ? 1.05 : 1.1);
+  const scale = { pistol: 0.46, smg: 0.5, ar: 0.5, shotgun: 0.5, sniper: 0.52 }[type] || 0.5;
+  group.scale.setScalar(scale);
   return group;
 }
 
 /** Coloca un arma en la mano real del personaje y actualiza el modo de IK. */
-export function attachWeapon(character, type) {
+export async function attachWeapon(character, type) {
   const mount = character.weaponMount;
   while (mount.children.length) mount.remove(mount.children[0]);
   if (!type) return null;
@@ -400,6 +692,39 @@ export function attachWeapon(character, type) {
   if (model.userData.grip) model.position.copy(model.userData.grip).negate();
   mount.add(model);
   character.setWeaponType?.(type);
+  if (character.isUbc) {
+    // Relee la config del disco (por si el editor la acaba de guardar) antes de aplicar.
+    await loadGunConfig();
+    const cfg = getGunPlacement(type);
+    model.position.set(cfg.position[0], cfg.position[1], cfg.position[2]);
+    model.quaternion.set(cfg.quaternion[0], cfg.quaternion[1], cfg.quaternion[2], cfg.quaternion[3]);
+    // Soporte izquierdo (IK) configurable por arma.
+    if (cfg.supportGrip && cfg.supportGrip.position) {
+      model.userData.supportGrip = new THREE.Vector3(cfg.supportGrip.position[0], cfg.supportGrip.position[1], cfg.supportGrip.position[2]);
+    }
+    model.userData.ikStrengthLeft = (cfg.ikStrengthLeft != null) ? Number(cfg.ikStrengthLeft) : (cfg.ikStrength != null ? Number(cfg.ikStrength) : 0);
+    model.userData.ikStrengthRight = (cfg.ikStrengthRight != null) ? Number(cfg.ikStrengthRight) : 0;
+    model.userData.ikStrength = model.userData.ikStrengthLeft;
+    if (cfg.ikRightTarget?.position) {
+      model.userData.ikRightTarget = new THREE.Vector3(cfg.ikRightTarget.position[0], cfg.ikRightTarget.position[1], cfg.ikRightTarget.position[2]);
+    }
+    // UBC/Unreal rig: ajustar el mount del arma para que el cañón apunte
+    // junto al frente del personaje (grupo): boneWorld * mountQ * gunLocalQ
+    // debe resultar == groupQ.
+    character.group.updateWorldMatrix(true, true);
+    mount.parent?.updateWorldMatrix(true, true);
+    const boneWorldQ = mount.parent?.getWorldQuaternion(new THREE.Quaternion());
+    const groupQ = character.group.getWorldQuaternion(new THREE.Quaternion());
+    if (boneWorldQ && groupQ) {
+      // mountQ alinea el arma con el frente del personaje; el offset local
+      // (model.quaternion, ajustable en el editor) lo aplica el propio arma.
+      character.handAlign = boneWorldQ.invert().multiply(groupQ);
+      mount.quaternion.copy(character.handAlign);
+    }
+    // Re-alinear con la pose armada ya aplicada en el primer update (tras attach).
+    character.needsGunAlign = true;
+    character.gunAlignTimer = 0;
+  }
   return model;
 }
 

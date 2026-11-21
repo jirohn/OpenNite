@@ -3,6 +3,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clamp, fbm, hash2, hashString, lerp, makeRandom, noise2, rayAABB, smoothstep } from '../core/utils.js';
+import { WorldDebug } from './debug.js';
+import { BUILD_PIECES, KIT_BASE_PATH, KIT_CATALOG, KIT_FLOOR_H, KIT_MODULE, KIT_SLAB_H, KIT_WALL_H, cloneKitPiece, kitPieceGameplayCollider, loadBuildingKit, tintKitPiece } from './kit-pieces.js';
+
 
 const CHUNK_SIZE = 256;
 const CHUNK_SEGMENTS = 24;
@@ -57,11 +60,11 @@ const KIT_VARIANTS = [
   { model: 'Bush_Common', count: 46, maxRadius: 0.7, scale: 0.9, shadow: false, flat: true, allowPoi: true },
   { model: 'Bush_Common_Flowers', count: 32, maxRadius: 0.68, scale: 0.9, shadow: false, flat: true, allowPoi: true },
   { model: 'Fern_1', count: 24, maxRadius: 0.66, scale: 0.48, shadow: false, flat: true, allowPoi: true },
-  { model: 'Grass_Common_Short', count: 170, maxRadius: 0.76, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
-  { model: 'Grass_Wispy_Tall', count: 115, maxRadius: 0.74, scale: 0.9, shadow: false, flat: true, allowPoi: true, clearance: 0.5 },
-  { model: 'Flower_3_Group', count: 44, maxRadius: 0.7, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
-  { model: 'Flower_4_Group', count: 36, maxRadius: 0.7, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.45 },
-  { model: 'Clover_1', count: 52, maxRadius: 0.74, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.4 },
+  { model: 'Grass_Common_Short', count: 260, maxRadius: 0.78, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.35 },
+  { model: 'Grass_Wispy_Tall', count: 180, maxRadius: 0.76, scale: 0.95, shadow: false, flat: true, allowPoi: true, clearance: 0.35 },
+  { model: 'Flower_3_Group', count: 70, maxRadius: 0.72, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.35 },
+  { model: 'Flower_4_Group', count: 60, maxRadius: 0.72, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.35 },
+  { model: 'Clover_1', count: 90, maxRadius: 0.76, scale: 1, shadow: false, flat: true, allowPoi: true, clearance: 0.3 },
   { model: 'Pebble_Round_1', count: 54, maxRadius: 0.78, scale: 1.1, shadow: false, allowPoi: true, clearance: 0.4, yOffset: 0.03 },
   { model: 'Pebble_Square_1', count: 44, maxRadius: 0.78, scale: 1.1, shadow: false, allowPoi: true, clearance: 0.4, yOffset: 0.03 },
   { model: 'Mushroom_Common', count: 22, maxRadius: 0.64, scale: 1, shadow: false, clearance: 0.6 },
@@ -311,6 +314,8 @@ export class World {
     this.chunkQueue = new Map();
     this.colliders = [];
     this.colliderGrid = new Map();
+    /** Debug overlay: colores de colisionadores/ejes (activado con F5). */
+    this.debug = null;
     this.lootSpots = [];
     this.spawnPoints = [];
     this.pois = [];
@@ -334,12 +339,18 @@ export class World {
     // San Borondon es un mapa procedural pequeño; el antiguo mapa GLB sigue
     // soportado por si queda instalado en algún equipo.
     this.procedural = map.type !== 'glb';
+    this.gridSize = map.gridSize || 4;
+    this.gridSnap = map.gridSnap !== false;
     this.useKitAssets = this.procedural && map.useKitAssets !== false;
     this.kitBase = map.modelBase || './models/quaternius/glTF/';
     this.propBase = map.propBase || './models/quaternius/props/glTF/';
     this.kitModels = {};
     this.propModels = {};
     this.propRequests = [];
+    // Kit modular de construcción (paredes/suelos/techos/escaleras) y piezas sandbox.
+    this.buildKitBase = map.buildKitBase || KIT_BASE_PATH;
+    this.buildKitModels = {};
+    this.buildKitReady = null;
 
     if (this.procedural) {
       this.waterLevel = map.waterLevel ?? 0;
@@ -370,22 +381,498 @@ export class World {
 
   /** Isla pequeña hecha con terreno propio y objetos del Stylized Nature MegaKit. */
   async loadIsland() {
-    this.generateRoads();
-    this.generateSanBorondonLandmarks();
-    this.setupWater();
-    this.setupJumpPads();
+    const customPieces = await this.fetchCustomPieces();
+    if (customPieces && customPieces.length) {
+      // Mapa limpio del editor: terreno + agua + piezas personalizadas + naturaleza zonificada.
+      this.setupWater();
+      const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
+      for (let cx = -range; cx <= range; cx++) {
+        for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+      }
+      if (this.useKitAssets) {
+        await Promise.all([this.loadKitModels(), this.loadBuildKit()]);
+        // Colocar primero piezas (crea colisionadores) y luego naturaleza para evitar solapes.
+        this.placeCustomPieces(customPieces);
+        this.placeNatureZones();
+        this.placePropObjects();
+      } else {
+        await this.loadBuildKit();
+        this.placeCustomPieces(customPieces);
+      }
+    } else {
+      this.generateRoads();
+      this.generateSanBorondonLandmarks();
+      this.setupWater();
+      this.setupJumpPads();
 
-    const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
-    for (let cx = -range; cx <= range; cx++) {
-      for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
-    }
+      const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
+      for (let cx = -range; cx <= range; cx++) {
+        for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+      }
 
-    if (this.useKitAssets) {
-      await this.loadKitModels();
-      this.placeKitObjects();
-      this.placePropObjects();
+      if (this.useKitAssets) {
+        await Promise.all([this.loadKitModels(), this.loadBuildKit()]);
+        this.placeNatureZones();
+        this.placeForestCabins();
+        this.placePropObjects();
+      } else {
+        await this.loadBuildKit();
+      }
     }
     this.loaded = true;
+  }
+
+  async loadBuildKit(names = null) {
+    if (this.buildKitReady) return this.buildKitReady;
+    this.buildKitReady = (async () => {
+      try {
+        const models = await loadBuildingKit(this.buildKitBase, names);
+        this.buildKitModels = { ...this.buildKitModels, ...models };
+      } catch (e) {
+        console.warn('No se pudo cargar el kit de construcción:', e);
+      }
+      return this.buildKitModels;
+    })();
+    return this.buildKitReady;
+  }
+
+  _cloneBuildKit(name, tint = null) {
+    const t = this.buildKitModels?.[name];
+    if (!t) return null;
+    const c = cloneKitPiece(t);
+    if (tint != null) tintKitPiece(c, tint);
+    return c;
+  }
+
+  _placeKitPart(parent, kitName, lx, ly, lz, ry = 0, tint = null, collide = true, wx = null, wy = null, wz = null, wrot = 0) {
+    const obj = this._cloneBuildKit(kitName, tint);
+    if (!obj) return null;
+    obj.position.set(lx, ly, lz);
+    obj.rotation.y = ry;
+    parent.add(obj);
+    if (collide) {
+      const bx = wx ?? lx, by = wy ?? ly, bz = wz ?? lz, br = wrot ?? ry;
+      const c = kitPieceGameplayCollider(kitName, bx, by, bz, br);
+      if (c) this.addCollider(c.minX, c.maxX, c.minY, c.maxY, c.minZ, c.maxZ);
+    }
+    return obj;
+  }
+
+  getNatureZone(x, z) {
+    if (!this.procedural) return 'terrain';
+    const y = this.heightAt(x, z);
+    const coast = y - (this.waterLevel || 0);
+    // Distancia normalizada a "costa" (donde el terreno está cerca del nivel del agua).
+    const shore = coast < 3.2;
+    const n = noise2(x * 0.018 + 40, z * 0.018 - 25, this.seed + 881);
+    const n2 = noise2(x * 0.006 - 15, z * 0.006 + 60, this.seed + 177);
+    if (shore) return 'beach';
+    // Bosques en zonas interiores con patrón orgánico; evitar picos muy altos/rocosos.
+    const interior = coast > 3.5 && coast < 18;
+    const forestMask = n * 0.65 + n2 * 0.35;
+    if (interior && forestMask > 0.46) return 'forest';
+    // Pequeños claros y praderas en terreno general
+    return forestMask > 0.62 ? 'forest' : 'terrain';
+  }
+
+  /** Coloca naturaleza Quaternius por zonas: bosque, terreno general y playa. */
+  placeNatureZones() {
+    const density = this.settings.get('vegetation') ?? 1;
+    if (density <= 0) return;
+    const shadows = !!this.settings.get('shadows');
+    const dummy = new THREE.Object3D();
+    const materials = new Set();
+    const has = (name) => this.kitModels?.[name]?.length;
+    const pick = (list) => list.filter(has);
+    const rnd = makeRandom(this.seed ^ 0x51a7c);
+
+    const zones = {
+      beach: {
+        tries: 1200, density: 0.55,
+        models: [
+          { names: pick(['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3','Pebble_Round_1','Pebble_Square_1']), count: 90, scale: [0.5, 1.2], y: 0.05 },
+          { names: pick(['Grass_Common_Short','Grass_Wispy_Tall']), count: 140, scale: [0.7, 1.2], y: 0 },
+          { names: pick(['Bush_Common']), count: 24, scale: [0.6, 1.0], y: 0 },
+        ],
+      },
+      forest: {
+        tries: 2200, density: 1.0,
+        models: [
+          { names: pick(['CommonTree_1','CommonTree_2','CommonTree_3']), count: 170, scale: [0.85, 1.25], y: 0, shadow: true },
+          { names: pick(['Pine_1','Pine_2','Pine_4']), count: 120, scale: [0.8, 1.2], y: 0, shadow: true },
+          { names: pick(['Bush_Common','Bush_Common_Flowers']), count: 110, scale: [0.6, 1.1], y: 0 },
+          { names: pick(['Grass_Common_Short','Grass_Wispy_Tall','Fern_1']), count: 260, scale: [0.6, 1.3], y: 0 },
+          { names: pick(['Mushroom_Common','Clover_1','Flower_3_Group','Flower_4_Group']), count: 90, scale: [0.7, 1.2], y: 0 },
+          { names: pick(['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3','Pebble_Round_1']), count: 60, scale: [0.4, 0.9], y: 0.05 },
+        ],
+      },
+      terrain: {
+        tries: 1600, density: 0.5,
+        models: [
+          { names: pick(['CommonTree_1','CommonTree_2','Pine_1','Pine_2']), count: 60, scale: [0.8, 1.15], y: 0, shadow: true },
+          { names: pick(['Bush_Common']), count: 70, scale: [0.6, 1.0], y: 0 },
+          { names: pick(['Grass_Common_Short','Grass_Wispy_Tall','Fern_1']), count: 180, scale: [0.6, 1.2], y: 0 },
+          { names: pick(['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3']), count: 70, scale: [0.5, 1.1], y: 0.06 },
+          { names: pick(['Flower_3_Group','Flower_4_Group','Clover_1']), count: 50, scale: [0.7, 1.1], y: 0 },
+        ],
+      },
+    };
+
+    // Precomputar posiciones candidatas por zona para distribuir bien.
+    const buckets = { beach: [], forest: [], terrain: [] };
+    const totalTries = Math.floor((zones.beach.tries + zones.forest.tries + zones.terrain.tries) * density);
+    for (let i = 0; i < totalTries; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.05 + Math.sqrt(rnd()) * 0.9);
+      const x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.abs(x) > this.half - 6 || Math.abs(z) > this.half - 6) continue;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 0.4) continue;
+      if (this.nearRoad(x, z, 2.5)) continue;
+      const zone = this.getNatureZone(x, z);
+      if (buckets[zone].length < zones[zone].tries) buckets[zone].push({ x, y, z });
+    }
+
+    const placeGroup = (zoneName, groupDef) => {
+      const { names, count, scale, y: yOff = 0 } = groupDef;
+      if (!names || !names.length) return;
+      const pts = buckets[zoneName];
+      if (!pts.length) return;
+      const target = Math.max(0, Math.round(count * density * (zones[zoneName].density || 1)));
+      if (!target) return;
+      // repartir por modelos del grupo
+      for (let m = 0; m < names.length; m++) {
+        const name = names[m];
+        const parts = this.kitModels[name];
+        if (!parts?.length) continue;
+        const share = Math.ceil(target / names.length);
+        const meshes = parts.map(({ geometry, material }) => {
+          const mesh = new THREE.InstancedMesh(geometry, material, share);
+          mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+          mesh.frustumCulled = false;
+          mesh.castShadow = shadows && groupDef.shadow !== false;
+          mesh.receiveShadow = shadows;
+          this.root.add(mesh);
+          this.disposables.push(geometry);
+          materials.add(material);
+          return mesh;
+        });
+        let placed = 0;
+        for (let i = 0; i < share; i++) {
+          let ok = false; let px = 0, py = 0, pz = 0;
+          for (let t = 0; t < 8 && !ok; t++) {
+            const p = pts[(rnd() * pts.length) | 0];
+            if (!p) continue;
+            // evitar solape con colisionadores grandes (casas/cabañas)
+            if (this.collidesAt(p.x, p.z, p.y, 1.2)) continue;
+            px = p.x + (rnd() - 0.5) * 1.6; pz = p.z + (rnd() - 0.5) * 1.6;
+            py = this.heightAt(px, pz);
+            if (py < this.waterLevel + 0.3) continue;
+            if (this.getNatureZone(px, pz) !== zoneName) continue;
+            ok = true;
+          }
+          if (!ok) { dummy.position.set(0, -1000, 0); dummy.scale.setScalar(0.0001); }
+          else {
+            const s = scale[0] + rnd() * (scale[1] - scale[0]);
+            dummy.position.set(px, py + yOff, pz);
+            dummy.rotation.set(0, rnd() * Math.PI * 2, 0);
+            dummy.scale.set(s, s * (0.9 + rnd() * 0.2), s);
+            placed++;
+          }
+          dummy.updateMatrix();
+          for (const mesh of meshes) mesh.setMatrixAt(i, dummy.matrix);
+        }
+        for (const mesh of meshes) mesh.instanceMatrix.needsUpdate = true;
+        if (placed === 0) { /* zona sin espacio, ok */ }
+      }
+    };
+
+    for (const z of ['beach', 'forest', 'terrain']) {
+      for (const g of zones[z].models) placeGroup(z, g);
+    }
+    for (const mat of materials) {
+      this.disposables.push(mat);
+      if (mat.map) this.disposables.push(mat.map);
+      if (mat.normalMap) this.disposables.push(mat.normalMap);
+    }
+  }
+
+  /** Coloca cabañas de madera (piezas de kit) en zonas de bosque. */
+  placeForestCabins() {
+    if (!this.buildKitModels || !Object.keys(this.buildKitModels).length) return;
+    const rnd = makeRandom(this.seed ^ 0xCAB1);
+    const wanted = 6;
+    let placed = 0;
+    for (let tries = 0; tries < 400 && placed < wanted; tries++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.18 + Math.sqrt(rnd()) * 0.55);
+      const x = Math.round((Math.cos(a) * r) / KIT_MODULE) * KIT_MODULE;
+      const z = Math.round((Math.sin(a) * r) / KIT_MODULE) * KIT_MODULE;
+      if (Math.abs(x) > this.half - 12 || Math.abs(z) > this.half - 12) continue;
+      if (this.getNatureZone(x, z) !== 'forest') continue;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 2.5) continue;
+      if (this.nearRoad(x, z, 5)) continue;
+      if (this.nearPOI(x, z, 1.1)) continue;
+      // comprobar terreno razonablemente plano en huella pequeña (4x4u)
+      let flat = true;
+      for (const [ox, oz] of [[-2,-2],[2,-2],[-2,2],[2,2],[0,0]]) {
+        if (Math.abs(this.heightAt(x + ox, z + oz) - y) > 0.9) { flat = false; break; }
+      }
+      if (!flat) continue;
+      if (this.collidesAt(x, z, y, 3.5)) continue;
+      const rot = Math.round(rnd() * 4) * (Math.PI / 2);
+      const g = new THREE.Group();
+      g.position.set(x, y, z);
+      g.rotation.y = rot;
+      g.name = 'forest-cabin';
+      this._buildKitCabin(g, x, y, z, rot, 1);
+      this.root.add(g);
+      placed++;
+    }
+  }
+
+  /** Construye una cabaña de madera con piezas del kit (módulo 2u, planta 2.5u). */
+  _buildKitCabin(parent, wx, wy, wz, rot, floors = 1) {
+    const woodWall = 0xc2a06a;
+    const woodDark = 0x8a6336;
+    const roofColor = 0x7a4a2a;
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const w2 = (lx, lz) => ({ x: wx + lx * cos + lz * sin, z: wz - lx * sin + lz * cos });
+    const part = (kitName, lx, ly, lz, ry = 0, tint = null, collide = true) => {
+      const wp = w2(lx, lz);
+      return this._placeKitPart(parent, kitName, lx, ly, lz, ry, tint, collide, wp.x, wy + ly, wp.z, rot + ry);
+    };
+    // Huella 4x4u (2 módulos). Centro en (0,0) local.
+    const offsets = [[-1,-1], [1,-1], [-1,1], [1,1]];
+    // Suelo base
+    for (const [ox, oz] of offsets) part('floor', ox, 0, oz, 0, woodDark, true);
+    for (let f = 0; f < floors; f++) {
+      const by = f * KIT_FLOOR_H + KIT_SLAB_H;
+      // Paredes perímetro (cada lado 4u = 2 módulos)
+      // Norte (z=-2, mirando +Z hacia dentro? paredes alineadas en borde): piezas de 2u a lo largo de X en z=-2
+      part('wall_window_square', -1, by, -2, 0, woodWall, true);
+      part('wall_window_square',  1, by, -2, 0, woodWall, true);
+      // Sur (z=+2) con puerta en el centro
+      part('wall', -1, by, 2, Math.PI, woodWall, true);
+      part('wall_doorway_round', 1, by, 2, Math.PI, woodWall, true);
+      // Oeste (x=-2) a lo largo de Z
+      part('wall', -2, by, -1, Math.PI / 2, woodWall, true);
+      part('wall_window_square', -2, by, 1, Math.PI / 2, woodWall, true);
+      // Este (x=2)
+      part('wall_window_square', 2, by, -1, -Math.PI / 2, woodWall, true);
+      part('wall', 2, by, 1, -Math.PI / 2, woodWall, true);
+      // Losa/techo de planta o tejado
+      const topY = by + KIT_WALL_H;
+      for (const [ox, oz] of offsets) part('roof_flat_center', ox, topY, oz, 0, f === floors - 1 ? roofColor : woodDark, true);
+    }
+    // base de apoyo pequeña para terreno irregular
+    const base = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.3, 4.4), new THREE.MeshStandardMaterial({ color: 0x6b4c2a, roughness: 0.95 }));
+    base.position.set(0, -0.15, 0);
+    base.receiveShadow = true; base.castShadow = true;
+    parent.add(base);
+  }
+
+  async fetchCustomPieces() {
+    let data = null;
+    for (const url of ['./maps/custom-map.json', '/maps/custom-map.json']) {
+      try {
+        const res = await fetch(url + '?t=' + Date.now());
+        if (res.ok) { data = await res.json(); break; }
+      } catch {}
+    }
+    if (!data) return null;
+    const pieces = Array.isArray(data) ? data : data.pieces;
+    return Array.isArray(pieces) && pieces.length ? pieces : null;
+  }
+
+  _cloneNatureModel(name) {
+    const parts = this.kitModels?.[name];
+    if (!parts?.length) return null;
+    const g = new THREE.Group();
+    for (const { geometry, material } of parts) {
+      const m = new THREE.Mesh(geometry, material);
+      m.castShadow = true; m.receiveShadow = true;
+      g.add(m);
+    }
+    return g;
+  }
+
+  placeCustomPieces(pieces) {
+    const group = new THREE.Group();
+    group.name = 'custom-map-pieces';
+    const rotAABB = (w, d, rot) => {
+      const k = ((Math.round((rot || 0) / (Math.PI / 2)) % 4) + 4) % 4;
+      return k % 2 ? { w: d, d: w } : { w, d };
+    };
+    const addBoxCollider = (x, yBase, z, w, h, d, rot) => {
+      const r = rotAABB(w, d, rot);
+      this.addCollider(x - r.w / 2, x + r.w / 2, yBase, yBase + h, z - r.d / 2, z + r.d / 2);
+    };
+    const addMesh = (parent, geo, mat, px, py, pz, rx=0, ry=0, rz=0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(px, py, pz);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true; m.receiveShadow = true;
+      parent.add(m);
+      return m;
+    };
+
+    const cosS = (rot) => Math.cos(rot), sinS = (rot) => Math.sin(rot);
+
+    for (const p of pieces) {
+      if (!p || !p.type) continue;
+      const x = +p.x || 0, z = +p.z || 0, rot = +p.rot || 0;
+      const y = (p.y != null ? +p.y : this.heightAt(x, z)) || 0;
+      const g = new THREE.Group();
+      g.position.set(x, y, z);
+      g.rotation.y = rot;
+      const floors = Math.max(1, Math.min(3, Math.round(+p.floors || 1)));
+
+      if (p.type === 'house') {
+        this._buildCustomHouse(g, x, y, z, rot, floors);
+      } else if (p.type === 'cabin') {
+        this._buildKitCabin(g, x, y, z, rot, floors);
+      } else if (p.type === 'wall' || p.type === 'wall_door' || p.type === 'wall_window' || p.type === 'floor' || p.type === 'roof' || p.type === 'stairs') {
+        // Pieza individual de kit (alineada al módulo). Se coloca con su base en y.
+        const kitName = BUILD_PIECES[p.type]?.kit || (p.type === 'wall' ? 'wall' : p.type === 'floor' ? 'floor' : p.type === 'roof' ? 'roof_flat_center' : p.type === 'stairs' ? 'stairs_closed' : 'wall');
+        const obj = this._cloneBuildKit(kitName);
+        if (obj) {
+          g.add(obj);
+          const c = kitPieceGameplayCollider(kitName, x, y, z, rot);
+          if (c) this.addCollider(c.minX, c.maxX, c.minY, c.maxY, c.minZ, c.maxZ);
+        } else {
+          // fallback primitivo alineado a módulo 2u
+          if (p.type === 'wall' || p.type === 'wall_door' || p.type === 'wall_window') {
+            addMesh(g, new THREE.BoxGeometry(0.2, KIT_WALL_H, 2), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, KIT_WALL_H / 2, 0);
+            addBoxCollider(x, y, z, 0.3, KIT_WALL_H, 2, rot);
+          } else if (p.type === 'floor' || p.type === 'roof') {
+            addMesh(g, new THREE.BoxGeometry(2, 0.1, 2), new THREE.MeshStandardMaterial({ color: 0x8a7a5e, roughness: 0.9 }), 0, 0.05, 0);
+          } else if (p.type === 'stairs') {
+            addMesh(g, new THREE.BoxGeometry(1.3, 2.5, 4), new THREE.MeshStandardMaterial({ color: 0x7b5738, roughness: 0.8 }), 0, 1.25, 0);
+            addBoxCollider(x, y, z, 1.3, 2.5, 4, rot);
+          }
+        }
+      } else if (p.type === 'tree') {
+        const modelName = p.model || (['CommonTree_1','CommonTree_2','CommonTree_3','Pine_1','Pine_2'][Math.abs(((x*73856093)^(z*19349663))|0) % 5]);
+        const tree = this._cloneNatureModel(modelName) || this._cloneNatureModel('CommonTree_1');
+        if (tree) {
+          const s = p.scale || 1;
+          tree.scale.setScalar(s);
+          g.add(tree);
+        } else {
+          addMesh(g, new THREE.CylinderGeometry(0.3, 0.4, 4, 8), new THREE.MeshStandardMaterial({ color: 0x7b5738 }), 0, 2, 0);
+          addMesh(g, new THREE.SphereGeometry(2.5, 8, 8), new THREE.MeshStandardMaterial({ color: 0x2f6b3e, roughness: 0.9 }), 0, 5.5, 0);
+        }
+        addBoxCollider(x, y, z, 1.2, 5, 1.2, rot);
+      } else if (p.type === 'rock') {
+        const modelName = p.model || (['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3'][Math.abs(((x*83492791)^(z*19349663))|0) % 3]);
+        const rock = this._cloneNatureModel(modelName) || this._cloneNatureModel('Rock_Medium_1');
+        if (rock) {
+          const s = p.scale || 1;
+          rock.scale.setScalar(s);
+          g.add(rock);
+        } else {
+          addMesh(g, new THREE.DodecahedronGeometry(1.5), new THREE.MeshStandardMaterial({ color: 0x777b74, roughness: 0.95 }), 0, 0.8, 0);
+        }
+        addBoxCollider(x, y, z, 2.2, 1.6, 2.2, rot);
+      } else if (p.type === 'road') {
+        // Baldosa 4x4u (2x2 módulos) alineada a grid 2
+        const roadMat = new THREE.MeshStandardMaterial({ color: 0x5a5a5a, roughness: 0.95 });
+        addMesh(g, new THREE.BoxGeometry(4, 0.12, 4), roadMat, 0, 0.06, 0);
+        // Registrar para que la naturaleza evite colocarse sobre caminos
+        if (this.roadCircles) this.roadCircles.push({ x, z, radius: 1.9 });
+      } else if (p.type === 'tower') {
+        addMesh(g, new THREE.CylinderGeometry(2.6, 2.8, 2, 8), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, 1, 0);
+        addMesh(g, new THREE.CylinderGeometry(2, 2.5, 12, 8), new THREE.MeshStandardMaterial({ color: 0xd4c4a8, roughness: 0.85 }), 0, 8, 0);
+        addMesh(g, new THREE.CylinderGeometry(2.6, 2.6, 0.4, 8), new THREE.MeshStandardMaterial({ color: 0x8c4f3c, roughness: 0.8 }), 0, 14.2, 0);
+        addBoxCollider(x, y, z, 5.6, 14.4, 5.6, rot);
+      } else if (p.type === 'container') {
+        addMesh(g, new THREE.BoxGeometry(6.2, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, 0.15, 0);
+        addMesh(g, new THREE.BoxGeometry(6, 2.4, 2.4), new THREE.MeshStandardMaterial({ color: 0xe2843c, roughness: 0.6, metalness: 0.3 }), 0, 1.5, 0);
+        addBoxCollider(x, y, z, 6.2, 2.8, 2.6, rot);
+      } else {
+        continue;
+      }
+      group.add(g);
+    }
+    if (group.children.length) this.root.add(group);
+  }
+
+  /** Casa modular compuesta con piezas del kit (módulo 2u, altura de planta 2.5u). Huella 8x6u. */
+  _buildCustomHouse(g, wx, wy, wz, rot, floors) {
+    const floorsN = Math.max(1, Math.min(3, Math.round(floors || 1)));
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const w2 = (lx, lz) => ({ x: wx + lx * cos + lz * sin, z: wz - lx * sin + lz * cos });
+    const part = (kitName, lx, ly, lz, ry = 0, tint = null, collide = true) => {
+      const wp = w2(lx, lz);
+      const obj = this._placeKitPart(g, kitName, lx, ly, lz, ry, tint, collide, wp.x, wy + ly, wp.z, rot + ry);
+      return obj;
+    };
+    const wallTint = 0xd4c4a8;
+    const wallTint2 = 0xc2b08a;
+    const floorTint = 0x8a7a5e;
+    const roofTint = 0x8c4f3c;
+
+    // Cimiento/plataforma (losa simple para asentar en terreno irregular)
+    const base = new THREE.Mesh(new THREE.BoxGeometry(8.4, 0.4, 6.4), new THREE.MeshStandardMaterial({ color: 0x9a8b70, roughness: 0.95 }));
+    base.position.set(0, -0.2, 0);
+    base.receiveShadow = true; base.castShadow = true;
+    g.add(base);
+
+    // Huella 8 (X: -3,-1,1,3) x 6 (Z: -2,0,2) módulos de 2u
+    const xs = [-3, -1, 1, 3];
+    const zs = [-2, 0, 2];
+
+    // Suelo de planta baja
+    for (const ox of xs) for (const oz of zs) part('floor', ox, 0, oz, 0, floorTint, true);
+
+    for (let f = 0; f < floorsN; f++) {
+      const by = f * KIT_FLOOR_H + KIT_SLAB_H; // base de muros sobre losa
+      // Pared trasera (z = +3, borde norte, mirando hacia -Z dentro) - 4 módulos de 2u a lo largo de X
+      part('wall_window_square', -3, by, 3, 0, wallTint, true);
+      part('wall_window_square', -1, by, 3, 0, wallTint, true);
+      part('wall_window_square',  1, by, 3, 0, wallTint, true);
+      part('wall_window_square',  3, by, 3, 0, wallTint, true);
+      // Pared frontal (z = -3, mirando hacia +Z dentro)
+      if (f === 0) {
+        part('wall_window_square', -3, by, -3, Math.PI, wallTint, true);
+        part('wall_doorway_round', -1, by, -3, Math.PI, wallTint, true);
+        part('wall',                1, by, -3, Math.PI, wallTint, true);
+        part('wall_window_square',  3, by, -3, Math.PI, wallTint, true);
+      } else {
+        part('wall_window_square', -3, by, -3, Math.PI, wallTint, true);
+        part('wall_window_square', -1, by, -3, Math.PI, wallTint, true);
+        part('wall_window_square',  1, by, -3, Math.PI, wallTint, true);
+        part('wall_window_square',  3, by, -3, Math.PI, wallTint, true);
+      }
+      // Lados (x = -4 y +4) a lo largo de Z, 3 módulos
+      part('wall_window_square', -4, by, -2, Math.PI / 2, wallTint2, true);
+      part('wall',               -4, by,  0, Math.PI / 2, wallTint2, true);
+      part('wall_window_square', -4, by,  2, Math.PI / 2, wallTint2, true);
+      part('wall_window_square',  4, by, -2, -Math.PI / 2, wallTint2, true);
+      part('wall',                4, by,  0, -Math.PI / 2, wallTint2, true);
+      part('wall_window_square',  4, by,  2, -Math.PI / 2, wallTint2, true);
+
+      const topY = by + KIT_WALL_H;
+      // Techo/losa superior de planta
+      if (f < floorsN - 1) {
+        for (const ox of xs) for (const oz of zs) part('floor', ox, topY, oz, 0, floorTint, true);
+      } else {
+        for (const ox of xs) for (const oz of zs) part('roof_flat_center', ox, topY, oz, 0, roofTint, true);
+      }
+    }
+
+    // Escaleras interiores para plantas superiores (kit stairs: 4u fondo, 2.5 alto) colocadas a un lado
+    if (floorsN >= 2) {
+      const stairX = 3; // junto al lateral este
+      for (let f = 0; f < floorsN - 1; f++) {
+        const sy = f * KIT_FLOOR_H + KIT_SLAB_H;
+        // Escalera sube en dirección -Z a +Z (profundidad 4u cubre z=-2..2)
+        part('stairs_closed', stairX, sy, 0, 0, 0x7b5738, true);
+        // Relleno de hueco de escalera en losa superior (losas restantes ya puestas; stair ocupa parte central)
+      }
+    }
   }
 
   async loadKitModels() {
@@ -695,17 +1182,17 @@ export class World {
     this.sky = new Sky();
     this.sky.scale.setScalar(450000);
     const u = this.sky.material.uniforms;
-    u.turbidity.value = 4.2;
-    u.rayleigh.value = 2.15;
-    u.mieCoefficient.value = 0.0045;
-    u.mieDirectionalG.value = 0.79;
-    // Sol más bajo y cálido: sombras largas y cielo con profundidad real.
-    const phi = THREE.MathUtils.degToRad(64);
-    const theta = THREE.MathUtils.degToRad(138);
+    u.turbidity.value = 2.4;
+    u.rayleigh.value = 3.4;
+    u.mieCoefficient.value = 0.0036;
+    u.mieDirectionalG.value = 0.8;
+    // Sol elevado y cálido: cielo abierto, sombras fáciles de ver.
+    const phi = THREE.MathUtils.degToRad(50);
+    const theta = THREE.MathUtils.degToRad(130);
     this.sunDirection = new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
     u.sunPosition.value.copy(this.sunDirection);
     this.root.add(this.sky);
-    this.scene.fog = new THREE.Fog(this.theme.sky, 700, 3000);
+    this.scene.fog = new THREE.Fog(this.theme.sky, 650, 2600);
     this.scene.background = new THREE.Color(this.theme.sky);
   }
 
@@ -714,22 +1201,22 @@ export class World {
   }
 
   setupLights() {
-    this.hemi = new THREE.HemisphereLight(this.theme.sky, this.theme.grass, 1.05 * this.theme.sun);
+    this.hemi = new THREE.HemisphereLight(this.theme.sky, this.theme.grass, 1.15 * this.theme.sun);
     this.root.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xffe9c4, 2.35 * this.theme.sun);
+    this.sun = new THREE.DirectionalLight(0xffe2b0, 3.0 * this.theme.sun);
     this.sun.position.copy(this.sunDirection).multiplyScalar(500);
     this.sun.target.position.set(0, 0, 0);
     this.root.add(this.sun, this.sun.target);
     const size = this.settings.get('shadows') ? this.settings.get('shadowMapSize') : 1024;
     this.sun.shadow.mapSize.set(size, size);
-    this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 1800;
-    const s = 240;
+    this.sun.shadow.camera.near = 0.5;
+    this.sun.shadow.camera.far = 800;
+    const s = 330;
     Object.assign(this.sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s });
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.035;
+    this.sun.shadow.bias = -0.0008;
+    this.sun.shadow.normalBias = 0.02;
     this.sun.castShadow = !!this.settings.get('shadows');
-    this.fill = new THREE.DirectionalLight(0x9fc2ff, 0.35);
+    this.fill = new THREE.DirectionalLight(0xb8d4ff, 0.42);
     this.fill.position.set(-200, 300, -100);
     this.root.add(this.fill);
   }
@@ -927,6 +1414,9 @@ export class World {
     let h = (b.baseHeight ?? 10) + (n - 0.5) * (b.amplitude ?? 9) * 2
       + (broad - 0.5) * (b.amplitude ?? 9) * 1.1
       + ridge * ridge * (b.roughness ?? 3.5) * 1.8 + detail * 1.6;
+    // Pequeño ruido orgánico en el terreno (no un lamblog perfecto).
+    const wobble = noise2(x * 0.0042, z * 0.0042, this.seed + 909);
+    h += (wobble - 0.5) * 0.9;
 
     const mountainField = fbm(x * f * 0.6 + 120, z * f * 0.6 - 85, this.seed + 3337, 3);
     const peak = Math.pow(clamp((mountainField - 0.48) / 0.28, 0, 1), 1.4);
@@ -936,11 +1426,14 @@ export class World {
       const angle = Math.atan2(z, x);
       // Costa irregular: lóbulos, cabos y ensenadas en vez de un círculo perfecto.
       const coastNoise = fbm(x * 0.0042 + 61, z * 0.0042 - 37, this.seed + 7777, 3);
-      const lobes = 0.09 * Math.sin(angle * 3 + 0.9)
-        + 0.065 * Math.sin(angle * 5.4 - 1.7)
-        + 0.04 * Math.sin(angle * 8.1 + 2.3)
-        + (coastNoise - 0.5) * 0.34;
-      const coastR = this.half * clamp(0.98 + lobes, 0.76, 1.12);
+      const coastNoise2 = fbm(x * 0.009 + 11, z * 0.009 + 23, this.seed + 8123, 2);
+      const lobes = 0.14 * Math.sin(angle * 3 + 0.9)
+        + 0.1 * Math.sin(angle * 5.2 - 1.5)
+        + 0.07 * Math.sin(angle * 7.8 + 2.1)
+        + 0.045 * Math.sin(angle * 11.0 - 0.6)
+        + (coastNoise - 0.5) * 0.42
+        + (coastNoise2 - 0.5) * 0.18;
+      const coastR = this.half * clamp(1.0 + lobes, 0.68, 1.18);
       const r = Math.hypot(x, z) / coastR;
 
       // Hundimiento progresivo del terreno a partir de la línea de costa.
@@ -1235,6 +1728,7 @@ export class World {
   }
 
   tick(dt) {
+    this.debug?.update(dt);
     if (this.water) this.water.material.uniforms.uTime.value += dt;
     if (this.clouds) this.clouds.rotation.y += dt * 0.0008;
     if (this.jumpPadRingMesh && this.jumpPads?.length) {
@@ -1293,6 +1787,18 @@ export class World {
     }
   }
 
+  triangle(ctx, x, y, z, base, height, mat = 'wall', rotY = 0, collide = true) {
+    this._matKey = mat;
+    const geo = new THREE.BufferGeometry();
+    const verts = new Float32Array([-base / 2, 0, 0, base / 2, 0, 0, 0, height, 0]);
+    const uvs = new Float32Array([0, 0, 1, 0, 0.5, 1]);
+    geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    geo.setIndex([0, 1, 2]);
+    geo.computeVertexNormals();
+    this.addGeo(ctx.buckets, geo, x, y, z, rotY);
+    if (collide) this.addCollider(x - base / 2, x + base / 2, y, y + height, z - 0.15, z + 0.15);
+  }
   cylinder(ctx, x, y, z, r, h, mat = 'metal', collide = false) {
     this._matKey = mat;
     const geo = new THREE.CylinderGeometry(r, r, h, 10);
@@ -1333,12 +1839,25 @@ export class World {
     place(0, d / 2, w, t, wallMat);
     place(-w / 2, 0, t, d, wallMat);
     place(w / 2, 0, t, d, wallMat);
-    // Ventanas
+    // Ventanas (frontal y trasera)
     if (opts.windows !== false) {
-      for (const lx of [-w * 0.27, w * 0.27]) {
-        const wx = x + lx * cos + (d / 2) * sin;
-        const wz = z - lx * sin + (d / 2) * cos;
-        this.box(ctx, wx, y + 1.75, wz, 1.15, 1.1, 0.08, 'glass', front);
+      for (const lzSign of [-1, 1]) {
+        for (const lx of [-w * 0.27, w * 0.27]) {
+          const wx = x + lx * cos + (lzSign * d / 2) * sin;
+          const wz = z - lx * sin + (lzSign * d / 2) * cos;
+          this.box(ctx, wx, y + 1.75, wz, 1.15, 1.1, 0.08, 'glass', front);
+        }
+      }
+    }
+    // Paredes triangulares de los hastiales (gable ends)
+    if (opts.gable !== false) {
+      const slope = 0.45;
+      const triH = (w / 2) * slope;
+      for (const lzSign of [-1, 1]) {
+        const lx = 0, lz = lzSign * d / 2;
+        const wx = x + lx * cos + lz * sin;
+        const wz = z - lx * sin + lz * cos;
+        this.triangle(ctx, wx, y + h + 0.2, wz, w + 0.4, triH, wallMat, front, true);
       }
     }
     // Techo
@@ -1607,11 +2126,11 @@ export class World {
         ctx.spawns.push(new THREE.Vector3(sx, sy + 1.5, sz));
       }
     };
-    const hut = (x, z, w, d, h, rot = 0, wallMat = 'wood', roofMat = 'roof', twoFloor = false) => {
+    const hut = (x, z, w, d, h, rot = 0, wallMat = 'wood', roofMat = 'roof', opts = {}) => {
       if (this.heightAt(x, z) < this.waterLevel + 1.8) return;
       if (this.nearRoad(x, z, 2.8)) return;
       this.makeBuilding(ctx, x, z, w, d, h, {
-        front: rot, wallMat, roofMat, windows: true, twoFloor,
+        front: rot, wallMat, roofMat, windows: opts.windows !== false, gable: opts.gable !== false, twoFloor: !!opts.twoFloor,
       });
     };
     const crate = (x, z, model = 'Crate_Wooden') => {
@@ -1859,9 +2378,12 @@ export class World {
           const x = town.x + Math.cos(a) * ring.radius;
           const z = town.z + Math.sin(a) * ring.radius;
           const twoFloor = idx % 7 === 3;
+          const gable = rnd() > 0.25;
+          const windows = rnd() > 0.15;
           hut(x, z, ring.w + rnd() * 1.5, ring.d + rnd(), 3.1 + rnd() * 1.1,
             -a + Math.PI / 2 + (rnd() - 0.5) * 0.3,
-            idx % 4 === 0 ? 'wall2' : idx % 3 === 0 ? 'wall' : 'wood', 'roof', twoFloor);
+            idx % 4 === 0 ? 'wall2' : idx % 3 === 0 ? 'wall' : 'wood', 'roof',
+            { twoFloor, gable, windows });
           if (idx % 3 === 0) {
             const nx = Math.cos(a + Math.PI / 2);
             const nz = Math.sin(a + Math.PI / 2);
@@ -1979,8 +2501,33 @@ export class World {
     }
     if (wreckSpot) shipwreck(wreckSpot.x, wreckSpot.z, wreckSpot.a);
 
+    // Casas sueltas en montañas con loot garantizado.
+    let mountainHuts = 0;
+    for (let i = 0; i < 220 && mountainHuts < 18; i++) {
+      const a = rnd() * Math.PI * 2;
+      const r = this.half * (0.12 + rnd() * 0.62);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      const y = this.heightAt(x, z);
+      if (y < this.waterLevel + 7.5) continue;
+      if (this.nearPOI(x, z, 0.8)) continue;
+      if (this.nearRoad(x, z, 3)) continue;
+      const rot = rnd() * Math.PI * 2;
+      const w = 6 + rnd() * 4;
+      const d = 5 + rnd() * 3.5;
+      const h = 2.8 + rnd() * 0.8;
+      hut(x, z, w, d, h, rot, rnd() > 0.5 ? 'wood' : 'wall2', 'roof', { windows: true, gable: rnd() > 0.3 });
+      crate(x + 2.5, z + 1.5, rnd() > 0.5 ? 'Crate_Wooden' : 'FarmCrate_Apple');
+      barrel(x - 2.5, z - 1.5, rnd() > 0.5 ? 'Barrel' : 'Barrel_Apples');
+      ctx.loot.push(new THREE.Vector3(x + 1.2, y + 1, z + 1.2));
+      ctx.loot.push(new THREE.Vector3(x - 1.8, y + 1, z + 0.8));
+      ctx.spawns.push(new THREE.Vector3(x + 3.5, y + 1.5, z + 3.5));
+      if (rnd() > 0.5) prop('Torch_Metal', x + 3.2, z - 2.2, rot);
+      mountainHuts++;
+    }
+
     // Cabañas aisladas, almacenes y botín disperso por el interior.
-    for (let i = 0; i < 26; i++) {
+    for (let i = 0; i < 20; i++) {
       const a = rnd() * Math.PI * 2;
       const r = this.half * (0.16 + rnd() * 0.48);
       const x = Math.cos(a) * r;
@@ -2217,24 +2764,35 @@ export class World {
       this.roadCircles.push({ x: poi.x, z: poi.z, radius });
     };
 
-    // Red principal: todas las zonas conectadas, con dos bucles para no tener
-    // que volver siempre por el mismo camino.
-    const links = this.map.roads || [[1, 0], [1, 2], [1, 3], [1, 4], [3, 4], [0, 4]];
+    // Caminos modulares solo en ngcleos poblacionales (pueblo/puerto).
+    const isNucleus = (p) => p && (p.type === 'town' || p.type === 'harbor');
+    const links = this.map.roads || [];
     for (const [aIdx, bIdx] of links) {
-      addPath(pois[aIdx], pois[bIdx], { kind: 'dirt', width: 6.6, density: 0.55 });
+      const a = pois[aIdx], b = pois[bIdx];
+      if (isNucleus(a) && isNucleus(b)) {
+        addPath(a, b, { kind: 'dirt', width: 5.8, density: 0.7 });
+      }
     }
 
     const town = pois.find((p) => p.type === 'town');
     if (town) {
       addPlaza(town, 8.5);
-      addLoop(town, 21, { kind: 'cobble', width: 4.6 });
-      addLoop(town, 36, { kind: 'cobble', width: 4.2 });
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2 + 0.22;
+      addLoop(town, 18, { kind: 'cobble', width: 4.4, segments: 36 });
+      addLoop(town, 30, { kind: 'cobble', width: 4.0, segments: 40 });
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.22;
         addPath(
           { x: town.x + Math.cos(a) * 8, z: town.z + Math.sin(a) * 8 },
-          { x: town.x + Math.cos(a) * 43, z: town.z + Math.sin(a) * 43 },
-          { kind: 'cobble', width: 3.6, density: 0.7 },
+          { x: town.x + Math.cos(a) * 34, z: town.z + Math.sin(a) * 34 },
+          { kind: 'cobble', width: 3.4, density: 0.85 },
+        );
+      }
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.75;
+        addPath(
+          { x: town.x + Math.cos(a) * 12, z: town.z + Math.sin(a) * 12 },
+          { x: town.x + Math.cos(a + 0.45) * 24, z: town.z + Math.sin(a + 0.45) * 24 },
+          { kind: 'cobble', width: 3.0, density: 0.9 },
         );
       }
     }
@@ -2245,32 +2803,20 @@ export class World {
       const ox = harbor.x / m;
       const oz = harbor.z / m;
       const planks = [];
-      for (let i = 0; i <= 10; i++) {
-        const d = 8 + i * 7;
+      for (let i = 0; i <= 8; i++) {
+        const d = 8 + i * 6;
         planks.push({ x: harbor.x + ox * d, z: harbor.z + oz * d });
       }
-      addRibbon(planks, 'plank', 5.4, { fixedY: this.waterLevel + 1.38 });
-      addLoop(harbor, 16, { kind: 'dirt', width: 4.2, segments: 48 });
-    }
-
-    for (const poi of pois) {
-      if (poi.type === 'tower' || poi.type === 'ruins' || poi.type === 'outpost') {
-        addLoop(poi, Math.min(14, poi.radius * 0.55), {
-          kind: 'dirt', width: 3.4, segments: 40,
-        });
+      addRibbon(planks, 'plank', 5.0, { fixedY: this.waterLevel + 1.38 });
+      addLoop(harbor, 14, { kind: 'dirt', width: 3.8, segments: 36 });
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * Math.PI * 2 + 0.5;
+        addPath(
+          { x: harbor.x + Math.cos(a) * 6, z: harbor.z + Math.sin(a) * 6 },
+          { x: harbor.x + Math.cos(a) * 18, z: harbor.z + Math.sin(a) * 18 },
+          { kind: 'dirt', width: 3.2, density: 0.9 },
+        );
       }
-    }
-
-    // Sendas hacia el interior: dan sentido al mapa más allá de los POIs.
-    const rnd = makeRandom(this.seed + 9911);
-    for (let i = 0; i < 12; i++) {
-      const from = pois[i % Math.max(1, pois.length)];
-      if (!from) break;
-      const a = rnd() * Math.PI * 2;
-      const r = this.half * (0.28 + rnd() * 0.42);
-      const to = { x: Math.cos(a) * r, z: Math.sin(a) * r };
-      if (this.heightAt(to.x, to.z) < this.waterLevel + 2) continue;
-      addPath(from, to, { kind: 'dirt', width: 3.1, density: 0.5 });
     }
 
     for (const kind of kinds) {

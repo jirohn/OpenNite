@@ -46,6 +46,9 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "config/**/*",
+      "tools/**/*",
+      "src/**/*",
       "package.json"
     ],
     "publish": {

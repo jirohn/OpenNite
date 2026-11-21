@@ -79,6 +79,9 @@ export class MapManager {
   }
 
   async getMapData(id) {
+    // Un id obsoleto (de una versión anterior) o corrupto nunca debe poder
+    // cargar: se sustituye por el primer mapa disponible.
+    if (!this.entries.has(id)) id = this.list()[0]?.id || 'san-borondon';
     const installed = this.installed.get(id);
     const entry = this.entries.get(id);
     const bundledVersion = Number(entry?.version || 0);
@@ -87,14 +90,17 @@ export class MapManager {
     // una copia antigua descargada. Así los cambios de tamaño llegan siempre.
     if (installed && (!bundledVersion || installedVersion >= bundledVersion)) return installed;
 
-    const res = await fetch(`./maps/${id}.json`);
-    if (!res.ok) {
-      if (installed) return installed;
-      throw new Error(`Mapa "${id}" no encontrado`);
+    let data = null;
+    try {
+      const res = await fetch(`./maps/${id}.json`);
+      if (res.ok && /json/i.test(res.headers.get('content-type') || '')) data = await res.json();
+    } catch { /* se intenta la copia instalada a continuación */ }
+    if (data) {
+      if (installed) this.installed.set(id, data);
+      return data;
     }
-    const data = await res.json();
-    if (installed) this.installed.set(id, data);
-    return data;
+    if (installed) return installed;
+    throw new Error(`Mapa "${id}" no encontrado`);
   }
 
   async refreshCatalog(force = true) {

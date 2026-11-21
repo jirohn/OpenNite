@@ -183,6 +183,8 @@ export function LobbyScreen() {
           </div>
         </div>
         <div className="panel-foot">
+          <Button className="small" onClick={() => window.openniteApp?.openEditor?.()} style={{ background: '#21456e' }}>🔫 EDITOR DE ARMAS</Button>
+          <Button className="small" onClick={() => window.openniteApp?.openMapEditor?.()} style={{ background: '#2a4a2a' }}>🗺️ EDITOR DE MAPA</Button>
           <Button className="small" onClick={() => bridge.ui.showMenu()}>Volver</Button>
           <Button className="primary" style={{ minWidth: 190, justifyContent: 'center' }}
             onClick={() => bridge.app.startMatch(bridge.ui.selectedMap)}>DESPLEGAR ▶</Button>
@@ -249,6 +251,7 @@ export function SettingsScreen({ back = 'menu' }) {
               <Toggle label="Invertir eje Y" value={s.invertY} onChange={(v) => set('invertY', v)} />
               <Toggle label="Mostrar FPS" value={s.showFPS} onChange={(v) => set('showFPS', v)} />
               <Toggle label="Números de daño" value={s.showDamageNumbers} onChange={(v) => set('showDamageNumbers', v)} />
+              <Toggle label="Modo debug (cajas de colisión + ejes X/Y/Z)" value={s.debugMode} onChange={(v) => set('debugMode', v)} />
             </div>
           </div>
           <p className="hint" style={{ marginTop: 18 }}>Los cambios se guardan automáticamente. Si tu equipo es modesto, usa el perfil <b>Baja</b>: resolución 68%, sin sombras ni bloom y menos vegetación.</p>
@@ -594,11 +597,13 @@ export function AccountScreen() {
           </div>
           {error && <p className="hint error-text">{error}</p>}
           {!configured && (
-            <p className="hint offline-note">
-              Para sincronizar tu progreso entre equipos, copia <code>.env.example</code> a <code>.env.local</code>,
-              rellena los datos de tu proyecto Firebase y despliega las reglas y funciones de <code>functions/</code>.
-              Mientras tanto, créditos, pase y taquilla se guardan localmente.
-            </p>
+            <div className="hint offline-note">
+              <b>Inicio con Google / Firebase no disponible</b>: faltan las variables de entorno del proyecto.<br />
+              1) Copia <code>.env.example</code> a <code>.env.local</code> (local, sin subir secretos).<br />
+              2) Rellena <code>VITE_FIREBASE_API_KEY</code>, <code>AUTH_DOMAIN</code>, <code>PROJECT_ID</code>, <code>APP_ID</code>, etc.<br />
+              3) Habilita Google en Firebase Auth, añade dominios autorizados y despliega <code>firestore.rules</code> y <code>functions/</code>.<br />
+              4) Recompila/reinicia la app. Mientras tanto, créditos, pase y taquilla se guardan solo en este equipo.
+            </div>
           )}
           <div className="account-stats">
             <div><b>¢ {creditsLabel(profile?.credits)}</b><span>Créditos</span></div>
