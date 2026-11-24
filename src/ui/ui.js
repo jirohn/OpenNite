@@ -27,7 +27,7 @@ export class UI {
 
   setScreen(screen, props = {}) {
     this.current = screen;
-    this.app.game?.setSkinPreview?.(screen === 'lobby');
+    this.app.game?.setSkinPreview?.(screen === 'taquilla');
     uiStore.setState({ screen, props });
   }
 

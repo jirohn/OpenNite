@@ -100,8 +100,24 @@ export function Hud() {
       </div>
 
       {h.pickupVisible && (
-        <div className="pickup-prompt" id="pickup-prompt">
-          <kbd>{/ESPACIO/i.test(h.pickupText || '') ? 'ESPACIO' : 'E'}</kbd>
+        <div className="pickup-prompt" id="pickup-prompt" style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+          {h.chestOpening?.active ? (
+            <div style={{ width:44, height:44, position:'relative', flex:'0 0 44px' }}>
+              <svg viewBox="0 0 44 44" style={{ width:44, height:44, transform:'rotate(-90deg)' }}>
+                <circle cx="22" cy="22" r="18" stroke="rgba(255,255,255,0.18)" strokeWidth="5" fill="none" />
+                <circle cx="22" cy="22" r="18" stroke="#7CFFB2" strokeWidth="5" fill="none"
+                  strokeLinecap="round"
+                  strokeDasharray={`${2*Math.PI*18}`}
+                  strokeDashoffset={`${2*Math.PI*18*(1-(h.chestOpening.progress||0))}`}
+                  style={{ transition:'stroke-dashoffset 0.08s linear' }} />
+              </svg>
+              <div style={{ position:'absolute', inset:0, display:'grid', placeItems:'center', fontSize:'11px', fontWeight:700, color:'#fff' }}>
+                {Math.round((h.chestOpening.progress||0)*100)}%
+              </div>
+            </div>
+          ) : (
+            <kbd>{/ESPACIO/i.test(h.pickupText || '') ? 'ESPACIO' : 'E'}</kbd>
+          )}
           <span id="pickup-text">{h.pickupText}</span>
         </div>
       )}

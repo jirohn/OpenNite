@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld('opennite', {
     quit: () => safe('app:quit'),
     openExternal: (url) => safe('app:open-external', url),
     writeFile: (relativePath, text) => safe('app:writeFile', relativePath, text),
+    readFile: (relativePath) => safe('app:readFile', relativePath),
+    saveMapFile: (relativePath, text) => safe('app:saveMapFile', relativePath, text),
+    openMapFile: () => safe('app:openMapFile'),
+  },
+  window: {
+    setDisplayMode: (mode) => safe('window:set-display-mode', mode),
   },
   settings: {
     get: () => safe('settings:get'),

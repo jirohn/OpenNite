@@ -1,0 +1,1 @@
+(() => { try { window.openniteApp.startMatch(); return 'STARTED'; } catch(e){ return 'ERR:'+e.message; } })()

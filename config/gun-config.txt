@@ -1,26 +1,22 @@
-=== OpenNite — Editor de armas (rig UBC/Unreal) — configuración exportada ===
-Fecha: 20/11/2026, 17:59:01
+=== OpenNite — Editor de armas (UBC/Unreal) — configuración exportada ===
+Fecha: 23/11/2026, 0:17:28
 Tipo de arma: Fusil AR (ar)
 
-Datos de posición (para src/game/character.js):
-  Posición local del arma (gun.position):    0.03 0.12 0.19
-  Rotación local del arma (gun.quaternion):  0 -1 0 0
-  handAlign (w, x, y, z):                    -0.025 0.007 -0.77 -0.638
+Datos de posición:
+  Posición local del arma (gun.position):    -0.07 -0.33 0.23
+  Rotación local del arma (gun.quaternion):  0.007 -0.834 -0.552 0.011
+  handAlign (w, x, y, z):                    0.171 -0.503 0.083 -0.843
   Muzzle (local):                            0 0.015 -0.97
   Grip (local):                              0 -0.14 0.17
-  SupportGrip (local):                       0.69 -0.86 -2
-  IK Fuerza izq.:                            1
-  IK Fuerza der.:                            1
-  IK objetivo der. (local):                  0.12 -0.3 0.76
   Length:                                    1.38
 
-Alineación del arma (gunWorldForward): 0.534 -0.071 0.842
+Alineación del arma (gunWorldForward): 0.272 -0.913 0.303
 Frente del personaje (charForward): -0.565 0 -0.825
 
 Clips (motor → UAL) para el tipo de arma:
   fire → Pistol_Shoot
-  fire2 → Pistol_Shoot
+  fire2 → Shotgun_Shoot
   reload → Pistol_Reload
   reload2 → Pistol_Reload
-  idleArmed → Pistol_Idle_Loop
+  idleArmed → Idle_Loop
   ads → (sin clip)

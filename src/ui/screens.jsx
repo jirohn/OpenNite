@@ -8,9 +8,41 @@ import { formatTime } from '../core/utils.js';
 import { bridge, click, hover } from './bridge.js';
 import { bumpUi, useAccount, useUi } from './store.js';
 
-const SKINS = [0xffb45c, 0x6f8a5b, 0x5f83a6, 0xa35f52, 0x7a6b4e, 0x4e6470, 0xb59a5e, 0x8b7a6a];
-const SKIN_NAMES = ['Ámbar', 'Musgo', 'Acero', 'Teja', 'Arena', 'Pizarra', 'Oro viejo', 'Piedra'];
+const DEFAULT_SKINS_UI = [
+  { id: 'skin_preset_1', name: 'Ámbar', color: 0xffb45c },
+  { id: 'skin_preset_2', name: 'Musgo', color: 0x6f8a5b },
+  { id: 'skin_preset_3', name: 'Acero', color: 0x5f83a6 },
+  { id: 'skin_preset_4', name: 'Teja', color: 0xa35f52 },
+  { id: 'skin_preset_5', name: 'Arena', color: 0x7a6b4e },
+  { id: 'skin_preset_6', name: 'Pizarra', color: 0x4e6470 },
+  { id: 'skin_preset_7', name: 'Oro viejo', color: 0xb59a5e },
+  { id: 'skin_preset_8', name: 'Piedra', color: 0x8b7a6a },
+];
 const hexColor = (c) => `#${Number(c).toString(16).padStart(6, '0')}`;
+function normalizeSkinColor(s, i) {
+  if (typeof s?.color === 'string') return parseInt(s.color.replace('#', ''), 16) || DEFAULT_SKINS_UI[i % DEFAULT_SKINS_UI.length].color;
+  return Number(s?.color) || DEFAULT_SKINS_UI[i % DEFAULT_SKINS_UI.length].color;
+}
+function useSkinCatalog() {
+  const [skins, setSkins] = useState(DEFAULT_SKINS_UI);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await fetch('/config/character-skins.json', { cache: 'no-store' });
+        if (!r.ok) return;
+        const d = await r.json();
+        const list = Array.isArray(d?.skins) ? d.skins : Array.isArray(d) ? d : [];
+        if (alive && list.length) setSkins(list.map((s, i) => ({ id: s.id || `skin_${i}`, name: s.name || `Skin ${i+1}`, color: normalizeSkinColor(s, i), modelPath: s.modelPath })));
+      } catch {}
+    };
+    load();
+    const onSkins = (e) => { const list = Array.isArray(e?.detail) ? e.detail : []; if (list.length) setSkins(list.map((s, i) => ({ id: s.id || `skin_${i}`, name: s.name || `Skin ${i+1}`, color: normalizeSkinColor(s, i), modelPath: s.modelPath }))); };
+    window.addEventListener('opennite:skins', onSkins);
+    return () => { alive = false; window.removeEventListener('opennite:skins', onSkins); };
+  }, []);
+  return skins;
+}
 const creditsLabel = (n) => new Intl.NumberFormat('es-ES').format(n || 0);
 const presetName = (id) => PRESETS.find((p) => p.id === id)?.name || id;
 
@@ -71,10 +103,12 @@ export function MenuScreen({ version }) {
   return (
     <div className="screen menu-screen">
       <div className="menu-top">
-        <div className="brand"><div className="brand-mark">O</div><div>
-          <div className="brand-name">OPENNITE</div>
-          <div className="brand-tag">Battle Royale · código abierto</div>
-        </div></div>
+        <div className="brand">
+          <img className="brand-logo" src="./assets/opennite-logo.png" alt="OpenNite" draggable="false" />
+          <div className="brand-copy">
+            <div className="brand-tag">Battle Royale · código abierto</div>
+          </div>
+        </div>
         <Button className="account-chip interactive" onClick={() => bridge.ui.showAccount()}>
           <span className="account-chip-avatar">{(profile?.displayName || 'J').slice(0, 1).toUpperCase()}</span>
           <span className="account-chip-text">
@@ -91,6 +125,7 @@ export function MenuScreen({ version }) {
         <div className="menu-sub">Un battle royale libre para PC en la isla de San Borondon: naturaleza y cofres CC0, gráficos escalables y actualizaciones automáticas desde GitHub.</div>
         <div className="menu-actions menu-actions-extended">
           <Button className="primary wide" onClick={() => bridge.ui.showLobby()}><span className="btn-icon">▶</span> JUGAR AHORA</Button>
+          <Button className="wide" onClick={() => bridge.app.startTraining()}><span className="btn-icon">◎</span> ENTRENAMIENTO</Button>
           <Button onClick={() => bridge.ui.showTienda()}><span className="btn-icon">🛒</span> TIENDA <span className="key">T</span></Button>
           <Button onClick={() => bridge.ui.showTaquilla()}><span className="btn-icon">🎽</span> TAQUILLA <span className="key">L</span></Button>
           <Button onClick={() => bridge.ui.showBattlePass()}><span className="btn-icon">🏆</span> PASE DE BATALLA <span className="key">B</span></Button>
@@ -116,6 +151,7 @@ export function LobbyScreen() {
   const selectedMap = bridge.ui.selectedMap;
   const s = bridge.settings.all();
   const set = (key, value) => bridge.settings.set(key, value);
+  const skinCatalog = useSkinCatalog();
 
   return (
     <div className="screen panel-screen lobby-screen">
@@ -160,17 +196,17 @@ export function LobbyScreen() {
                 </select>
               </div>
               <div className="field">
-                <label>Aspecto (skin) <span className="value">{SKIN_NAMES[SKINS.indexOf(s.playerColor)] || 'Personalizado'}</span></label>
-                <p className="hint" style={{ margin: '-2px 0 9px' }}>8 modelos 3D animados en la galería de la derecha. Pulsa uno para equiparlo.</p>
+                <label>Aspecto (skin) <span className="value">{skinCatalog.find(sk => sk.color === s.playerColor)?.name || 'Personalizado'}</span></label>
+                <p className="hint" style={{ margin: '-2px 0 9px' }}>{skinCatalog.length} modelos en la galería de la derecha. Pulsa uno para equiparlo.</p>
                 <div className="skin-row">
-                  {SKINS.map((c, i) => (
-                    <button key={c} type="button" className={`interactive skin-swatch ${c === s.playerColor ? 'selected' : ''}`}
-                      title={`${SKIN_NAMES[i]} · ${hexColor(c)}`}
+                  {skinCatalog.map((sk, i) => (
+                    <button key={sk.id || sk.color || i} type="button" className={`interactive skin-swatch ${sk.color === s.playerColor ? 'selected' : ''}`}
+                      title={`${sk.name} · ${hexColor(sk.color)}`}
                       onMouseEnter={hover}
-                      onClick={click(() => set('playerColor', c))}
-                      style={{ borderColor: c === s.playerColor ? 'var(--accent)' : 'var(--line)' }}>
-                      <span className="skin-dot" style={{ background: hexColor(c) }} />
-                      <span className="skin-name">{SKIN_NAMES[i]}</span>
+                      onClick={click(() => set('playerColor', sk.color))}
+                      style={{ borderColor: sk.color === s.playerColor ? 'var(--accent)' : 'var(--line)' }}>
+                      <span className="skin-dot" style={{ background: hexColor(sk.color) }} />
+                      <span className="skin-name">{sk.name}</span>
                     </button>
                   ))}
                 </div>
@@ -185,12 +221,14 @@ export function LobbyScreen() {
         <div className="panel-foot">
           <Button className="small" onClick={() => window.openniteApp?.openEditor?.()} style={{ background: '#21456e' }}>🔫 EDITOR DE ARMAS</Button>
           <Button className="small" onClick={() => window.openniteApp?.openMapEditor?.()} style={{ background: '#2a4a2a' }}>🗺️ EDITOR DE MAPA</Button>
+          <Button className="small" onClick={() => window.openniteApp?.openPartsEditor?.()} style={{ background: '#4a3520' }}>🧱 EDITOR DE PARTES</Button>
+          <Button className="small" onClick={() => window.openniteApp?.openCharacterEditor?.()} style={{ background: '#5b2d6e' }}>👤 EDITOR DE SKINS</Button>
           <Button className="small" onClick={() => bridge.ui.showMenu()}>Volver</Button>
           <Button className="primary" style={{ minWidth: 190, justifyContent: 'center' }}
             onClick={() => bridge.app.startMatch(bridge.ui.selectedMap)}>DESPLEGAR ▶</Button>
         </div>
       </div>
-      <div className="skin-gallery-label"><span>Galería 3D</span><strong>8 skins animados</strong></div>
+      <div className="skin-gallery-label"><span>Galería 3D</span><strong>{skinCatalog.length} skins</strong></div>
     </div>
   );
 }
@@ -224,9 +262,24 @@ export function SettingsScreen({ back = 'menu' }) {
           </div>
           <div className="two-col">
             <div>
-              <p className="section-title">Gráficos</p>
+              <p className="section-title">Pantalla y gráficos</p>
+              <div className="field">
+                <label>Modo de pantalla <span className="value">{({ fullscreen: 'Pantalla completa', windowed: 'Ventana', borderless: 'Ventana sin bordes' })[s.displayMode || 'fullscreen'] || 'Pantalla completa'}</span></label>
+                <select value={s.displayMode || 'fullscreen'} onChange={(e) => {
+                  const mode = e.target.value;
+                  set('displayMode', mode);
+                  window.opennite?.window?.setDisplayMode?.(mode);
+                }}>
+                  <option value="fullscreen">Pantalla completa</option>
+                  <option value="windowed">Ventana</option>
+                  <option value="borderless">Ventana sin bordes</option>
+                </select>
+              </div>
+              <p className="hint" style={{ margin: '-2px 0 14px' }}>Por defecto se inicia en pantalla completa. Cambiar entre ventana y modos sin bordes puede requerir reiniciar el juego para aplicar el marco correctamente.</p>
               <Slider label="Escala de resolución" min={0.5} max={1.25} step={0.05} value={s.resolutionScale} format={pct} onChange={(v) => set('resolutionScale', v)} />
               <Slider label="Distancia de dibujo" min={2} max={10} step={1} value={s.viewDistance} format={(v) => `${v * 256} m`} onChange={(v) => set('viewDistance', v)} />
+              <Slider label="Distancia de renderizado" min={120} max={1200} step={20} value={s.renderDistance ?? 320} format={(v) => `${v} m`} onChange={(v) => set('renderDistance', v)} />
+              <Slider label="Distancia de detalles" min={60} max={800} step={10} value={s.detailDistance ?? 180} format={(v) => `${v} m`} onChange={(v) => set('detailDistance', v)} />
               <Slider label="Densidad de vegetación" min={0} max={1.5} step={0.05} value={s.vegetation} format={pct} onChange={(v) => set('vegetation', v)} />
               <Slider label="Intensidad de efectos" min={0} max={1.5} step={0.05} value={s.effects} format={pct} onChange={(v) => set('effects', v)} />
               <Slider label="Resolución de sombras" min={512} max={4096} step={512} value={s.shadowMapSize} format={(v) => `${v} px`} onChange={(v) => set('shadowMapSize', v)} />
@@ -254,7 +307,7 @@ export function SettingsScreen({ back = 'menu' }) {
               <Toggle label="Modo debug (cajas de colisión + ejes X/Y/Z)" value={s.debugMode} onChange={(v) => set('debugMode', v)} />
             </div>
           </div>
-          <p className="hint" style={{ marginTop: 18 }}>Los cambios se guardan automáticamente. Si tu equipo es modesto, usa el perfil <b>Baja</b>: resolución 68%, sin sombras ni bloom y menos vegetación.</p>
+          <p className="hint" style={{ marginTop: 18 }}>Los cambios se guardan automáticamente. Si tu equipo es modesto, usa el perfil <b>Baja</b>, reduce la escala de resolución y usa pantalla completa para mejorar el rendimiento.</p>
         </div>
         <div className="panel-foot"><Button className="primary" onClick={backAction}>Volver</Button></div>
       </div>

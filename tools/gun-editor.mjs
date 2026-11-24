@@ -1,8 +1,7 @@
 /**
  * Editor de armas — arma editable sobre el modelo base UBC (Quaternius).
- * Valida la orientación en tiempo real y permite ajustar posición/rotación,
- * IK (mano izquierda/derecha), resolución, calidad, fondo y contorno.
- * Exporta a config/gun-config.json (sin diálogo).
+ * Ajusta posición/rotación del arma y exporta a config/gun-config.json.
+ * (IK eliminado: solo placement.)
  */
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -27,7 +26,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(55, canvas.clientWidth / canvas.clientHeight, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 200);
 camera.position.set(3.0, 1.9, 3.8);
 camera.lookAt(0, 0.95, 0);
 
@@ -59,6 +58,8 @@ orbit.dampingFactor = 0.08;
 orbit.minDistance = 1.2;
 orbit.maxDistance = 14;
 orbit.maxPolarAngle = Math.PI * 0.55;
+orbit.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
+orbit.enablePan = true;
 orbit.update();
 
 let character = null;
@@ -71,21 +72,16 @@ const clock = new THREE.Clock();
 let composer = null;
 let outlinePass = null;
 let axisGroup = null;
-let gizmoGroup = new THREE.Group();
+const gizmoGroup = new THREE.Group();
 scene.add(gizmoGroup);
 let gizmoDrag = null;
-let activeGizmoTarget = 'weaponPos';
 const undoStack = [];
 const redoStack = [];
+
 function snapshotState() {
   return {
     position: gun.position.clone(),
     quaternion: gun.quaternion.clone(),
-    supportGrip: gun.userData.supportGrip ? gun.userData.supportGrip.clone() : null,
-    supportGripQuat: gun.userData.supportGripQuat ? gun.userData.supportGripQuat.clone() : null,
-    ikStrengthLeft: gun.userData.ikStrengthLeft,
-    ikStrengthRight: gun.userData.ikStrengthRight,
-    ikRightTarget: gun.userData.ikRightTarget ? gun.userData.ikRightTarget.clone() : null,
   };
 }
 function pushUndo() { if (!gun) return; undoStack.push(snapshotState()); if (undoStack.length > 50) undoStack.shift(); redoStack.length = 0; }
@@ -93,17 +89,20 @@ function applyState(st) {
   if (!st || !gun) return;
   gun.position.copy(st.position);
   gun.quaternion.copy(st.quaternion);
-  if (st.supportGrip) gun.userData.supportGrip = st.supportGrip.clone();
-  if (st.supportGripQuat) gun.userData.supportGripQuat = st.supportGripQuat.clone();
-  gun.userData.ikStrengthLeft = st.ikStrengthLeft;
-  gun.userData.ikStrengthRight = st.ikStrengthRight;
-  gun.userData.ikStrength = gun.userData.ikStrengthLeft;
-  gun.userData.ikRightTarget = st.ikRightTarget ? st.ikRightTarget.clone() : undefined;
-  syncSlidersFromGun(); syncSupportSlidersFromGun(); syncRightIkSlidersFromGun(); setReadouts();
+  syncSlidersFromGun();
+  setReadouts();
 }
 function undo() { if (undoStack.length === 0) return; redoStack.push(snapshotState()); applyState(undoStack.pop()); }
 function redo() { if (redoStack.length === 0) return; undoStack.push(snapshotState()); applyState(redoStack.pop()); }
 
+const GAME_SKINS = [
+  { id: '100avatars_001_crimsom', name: '01 Crimsom', modelPath: '/models/opennite/characters/100avatars/100Avatars_001_Crimsom.fbx', color: '#e53935' },
+  { id: '100avatars_002_coolalien', name: '02 CoolAlien', modelPath: '/models/opennite/characters/100avatars/100Avatars_002_CoolAlien.fbx', color: '#43a047' },
+  { id: '100avatars_003_jimmy', name: '03 Jimmy', modelPath: '/models/opennite/characters/100avatars/100Avatars_003_Jimmy.fbx', color: '#1e88e5', default: true },
+  { id: '100avatars_004_oldmoustache', name: '04 OldMoustache', modelPath: '/models/opennite/characters/100avatars/100Avatars_004_OldMoustache.fbx', color: '#8d6e63' },
+  { id: '100avatars_005_skull', name: '05 Skull', modelPath: '/models/opennite/characters/100avatars/100Avatars_005_Skull.fbx', color: '#eeeeee' },
+  { id: '100avatars_006_cappy', name: '06 Cappy', modelPath: '/models/opennite/characters/100avatars/100Avatars_006_Cappy.fbx', color: '#fdd835' },
+];
 const animKeysByWeapon = {
   pistol: ['fire', 'fire2', 'reload', 'reload2', 'idleArmed', 'ads'],
   smg: ['fire', 'fire2', 'reload', 'reload2', 'idleArmed', 'ads'],
@@ -112,6 +111,7 @@ const animKeysByWeapon = {
   sniper: ['fire', 'reload', 'idleArmed', 'ads'],
   pickaxe: ['fire', 'idleArmed'],
 };
+const EXTRA_TEST_ANIMS = ['idle','walk','run','sprint','jump','fall','land','landRoll','slide','mantle','dance','swim','swimFwd','death','chestOpen','hit','pickup','interact'];
 
 function rotVec(q, v) {
   const x = q.x, y = q.y, z = q.z, w = q.w;
@@ -122,8 +122,7 @@ function rotVec(q, v) {
 function gunWorldForward() { gun.updateWorldMatrix(true, true); return rotVec(gun.getWorldQuaternion(new THREE.Quaternion()), [0, 0, -1]); }
 function gunWorldPosition() { gun.updateWorldMatrix(true, true); return gun.getWorldPosition(new THREE.Vector3()).toArray(); }
 function charForward() { character.group.updateWorldMatrix(true, true); return rotVec(character.group.getWorldQuaternion(new THREE.Quaternion()), [0, 0, -1]); }
-
-function readout(el, arr) { if (el) el.textContent = arr.map((v) => +v.toFixed(3)).join(', '); }
+function readout(el, arr) { if (el && arr) el.textContent = arr.map((v) => +Number(v).toFixed(3)).join(', '); }
 
 function buildComposer() {
   if (composer) return;
@@ -136,7 +135,7 @@ function buildComposer() {
   composer.addPass(new OutputPass());
   applyResolution(); applyOutlineTargets();
 }
-function applyOutlineTargets() { if (outlinePass) outlinePass.selectedObjects = [character.group, gun].filter(Boolean); }
+function applyOutlineTargets() { if (outlinePass) outlinePass.selectedObjects = [character?.group, gun].filter(Boolean); }
 function applyResolution() {
   const pr = Number(document.querySelector('#resScale')?.value ?? 1);
   const dpr = Math.min(window.devicePixelRatio || 1, 2) * pr;
@@ -174,52 +173,37 @@ function drawGunAxes() {
   }
 }
 
-// ===== Gizmo de ejes para los puntos IK (estilo Blender) =====
-const gizmoAxes = [[new THREE.Vector3(1,0,0), 0xff4444], [new THREE.Vector3(0,1,0), 0x3ccb3c], [new THREE.Vector3(0,0,1), 0x445bff]];
-const gizmoTargets = [
-  { name: 'support', color: 0xffcc33, getLocal: () => gun?.userData?.supportGrip, setLocal: (v) => { if (gun?.userData) gun.userData.supportGrip = v; } },
-  { name: 'rightIk', color: 0x33ccff, getLocal: () => gun?.userData?.ikRightTarget, setLocal: (v) => { if (gun?.userData) gun.userData.ikRightTarget = v; } },
-  { name: 'weaponPos', color: 0xffffff, getLocal: () => gun?.position, setLocal: (v) => { if (gun) { const m = gun.parent; if (m) { const local = m.worldToLocal(v.clone()); gun.position.copy(local); } } } },
-];
-function gizmoWorldPos(t) {
-  const local = t.getLocal(); if (!local || !gun) return null;
-  gun.updateWorldMatrix(true, true);
-  return gun.localToWorld(local.clone());
-}
 function drawGizmos() {
   while (gizmoGroup.children.length) { const c = gizmoGroup.children.pop(); c.geometry?.dispose?.(); c.material?.dispose?.(); }
   if (!gun) return;
   gun.updateWorldMatrix(true, true);
+  const pos = gun.getWorldPosition(new THREE.Vector3());
   const q = gun.getWorldQuaternion(new THREE.Quaternion());
   const localAxes = [new THREE.Vector3(1,0,0).applyQuaternion(q), new THREE.Vector3(0,1,0).applyQuaternion(q), new THREE.Vector3(0,0,1).applyQuaternion(q)];
   const colors = [0xff4444, 0x3ccb3c, 0x445bff];
-  for (const t of gizmoTargets) {
-    if (t.name !== activeGizmoTarget) continue;
-    const pos = gizmoWorldPos(t); if (!pos) continue;
-    const len = 0.17;
-    for (let ai = 0; ai < 3; ai++) {
-      const c = colors[ai];
-      const d = localAxes[ai];
-      const endp = pos.clone().addScaledVector(d, len);
-      const geo = new THREE.BufferGeometry().setFromPoints([pos, endp]);
-      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.9 }));
-      line.frustumCulled = false;
-      gizmoGroup.add(line);
-      const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, len, 8), new THREE.MeshBasicMaterial({ visible: false }));
-      const mid = pos.clone().addScaledVector(d, len / 2);
-      cyl.position.copy(mid); cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
-      cyl.userData = { target: t.name, axisIndex: ai };
-      gizmoGroup.add(cyl);
-      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.073, 10), new THREE.MeshBasicMaterial({ color: c }));
-      cone.position.copy(endp);
-      cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
-      cone.userData = { target: t.name, axisIndex: ai };
-      gizmoGroup.add(cone);
-    }
-    const sph = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 12), new THREE.MeshBasicMaterial({ color: t.color }));
-    sph.position.copy(pos); sph.userData = { target: t.name, axis: null };
-    gizmoGroup.add(sph);
+  const len = 0.17;
+  for (let ai = 0; ai < 3; ai++) {
+    const c = colors[ai];
+    const d = localAxes[ai];
+    const endp = pos.clone().addScaledVector(d, len);
+    const geo = new THREE.BufferGeometry().setFromPoints([pos, endp]);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.9 }));
+    line.frustumCulled = false;
+    gizmoGroup.add(line);
+    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, len, 8), new THREE.MeshBasicMaterial({ visible: false }));
+    const mid = pos.clone().addScaledVector(d, len / 2);
+    cyl.position.copy(mid); cyl.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
+    cyl.userData = { axisIndex: ai };
+    gizmoGroup.add(cyl);
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.073, 10), new THREE.MeshBasicMaterial({ color: c }));
+    cone.position.copy(endp);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), d);
+    cone.userData = { axisIndex: ai };
+    gizmoGroup.add(cone);
   }
+  const sph = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 12), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  sph.position.copy(pos);
+  gizmoGroup.add(sph);
 }
 function pickGizmo(ndcX, ndcY) {
   const ray = new THREE.Raycaster();
@@ -228,49 +212,43 @@ function pickGizmo(ndcX, ndcY) {
   const hits = ray.intersectObjects(meshes, false);
   if (hits.length === 0) return null;
   const h = hits[0].object;
-  if (h.userData && h.userData.target) {
-    if (h.userData.target !== activeGizmoTarget) return null;
-    const t = gizmoTargets.find(x => x.name === h.userData.target);
+  if (h.userData && h.userData.axisIndex != null) {
     gun.updateWorldMatrix(true, true);
     const q = gun.getWorldQuaternion(new THREE.Quaternion());
-    const idx = (h.userData.axisIndex != null) ? h.userData.axisIndex : 0;
+    const idx = h.userData.axisIndex;
     const base = [new THREE.Vector3(1,0,0), new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,1)][idx];
     const axis = base.clone().applyQuaternion(q);
-    return { target: t, axis, axisIndex: idx };
+    return { axis };
   }
   return null;
 }
 canvas.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || !gun) return;
   const rect = canvas.getBoundingClientRect();
   const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   const picked = pickGizmo(ndcX, ndcY);
   if (!picked) return;
-  const pos = gizmoWorldPos(picked.target);
-  if (!pos) return;
+  const pos = gun.getWorldPosition(new THREE.Vector3());
   const viewDir = camera.position.clone().sub(pos).normalize();
   const plane0 = new THREE.Plane().setFromNormalAndCoplanarPoint(viewDir, pos);
-  const rect0 = canvas.getBoundingClientRect();
-  const ndcX0 = ((e.clientX - rect0.left) / rect0.width) * 2 - 1;
-  const ndcY0 = -((e.clientY - rect0.top) / rect0.height) * 2 + 1;
   const ray0 = new THREE.Raycaster();
-  ray0.setFromCamera(new THREE.Vector2(ndcX0, ndcY0), camera);
+  ray0.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
   const initInter = new THREE.Vector3();
   if (!ray0.ray.intersectPlane(plane0, initInter)) initInter.copy(pos);
   pushUndo();
-  gizmoDrag = { target: picked.target, axis: picked.axis.clone(), startPos: pos.clone(), startLocal: picked.target.getLocal().clone(), initInter: initInter.clone() };
+  gizmoDrag = { axis: picked.axis.clone(), startPos: pos.clone(), initInter: initInter.clone() };
   orbit.enabled = false;
   e.preventDefault(); e.stopPropagation();
 }, true);
 canvas.addEventListener('mousemove', (e) => {
-  if (!gizmoDrag) return;
+  if (!gizmoDrag || !gun) return;
   const rect = canvas.getBoundingClientRect();
   const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   const ray = new THREE.Raycaster();
   ray.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
-  const { target, axis, startPos, initInter } = gizmoDrag;
+  const { axis, startPos, initInter } = gizmoDrag;
   const viewDir = camera.position.clone().sub(startPos).normalize();
   const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(viewDir, startPos);
   const inter = new THREE.Vector3();
@@ -278,24 +256,22 @@ canvas.addEventListener('mousemove', (e) => {
     const delta = inter.sub(initInter).dot(axis);
     const newPos = startPos.clone().addScaledVector(axis, delta);
     gun.updateWorldMatrix(true, true);
-    const local = gun.worldToLocal(newPos);
-    target.setLocal(local.clone());
-    if (target.name === 'support') {
-      gun.userData.supportGrip = local.clone();
-      syncSupportSlidersFromGun();
-    } else if (target.name === 'rightIk') {
-      gun.userData.ikRightTarget = local.clone();
-      syncRightIkSlidersFromGun();
-    } else if (target.name === 'weaponPos') {
-      syncSlidersFromGun();
+    const parent = gun.parent;
+    if (parent) {
+      parent.updateWorldMatrix(true, true);
+      gun.position.copy(parent.worldToLocal(newPos));
+    } else {
+      gun.position.copy(newPos);
     }
+    syncSlidersFromGun();
     setReadouts();
   }
 });
 window.addEventListener('mouseup', () => { gizmoDrag = null; });
 
 function setReadouts() {
-  const gd = gun.userData;
+  if (!gun) return;
+  const gd = gun.userData || {};
   readout(document.querySelector('#pvX'), [gun.position.x]);
   readout(document.querySelector('#pvY'), [gun.position.y]);
   readout(document.querySelector('#pvZ'), [gun.position.z]);
@@ -303,27 +279,30 @@ function setReadouts() {
   readout(document.querySelector('#rvX'), [r[0] * (180 / Math.PI)]);
   readout(document.querySelector('#rvY'), [r[1] * (180 / Math.PI)]);
   readout(document.querySelector('#rvZ'), [r[2] * (180 / Math.PI)]);
-  const ha = character.handAlign;
-  readout(document.querySelector('#handAlign'), [ha.x, ha.y, ha.z, ha.w]);
-  readout(document.querySelector('#muzzleLocal'), fmt(gd.muzzle.toArray()));
-  readout(document.querySelector('#gripLocal'), fmt(gd.grip.toArray()));
-  readout(document.querySelector('#supportLocal'), fmt(gd.supportGrip.toArray()));
-  readout(document.querySelector('#lengthVal'), [gd.length]);
-  readout(document.querySelector('#gunFwd'), fmt(gunWorldForward()));
+  const ha = character?.handAlign;
+  if (ha) readout(document.querySelector('#handAlign'), [ha.w ?? 1, ha.x ?? 0, ha.y ?? 0, ha.z ?? 0]);
+  if (gd.muzzle) readout(document.querySelector('#muzzleLocal'), fmt(gd.muzzle.toArray()));
+  if (gd.grip) readout(document.querySelector('#gripLocal'), fmt(gd.grip.toArray()));
+  if (gd.length != null) readout(document.querySelector('#lengthVal'), [gd.length]);
+  const fwd = gunWorldForward();
+  readout(document.querySelector('#gunFwd'), fmt(fwd));
   readout(document.querySelector('#gunPosWorld'), fmt(gunWorldPosition()));
-  readout(document.querySelector('#gunFwdAng'), [Math.max(0, -gunWorldForward()[1])]);
+  readout(document.querySelector('#gunFwdAng'), [Math.max(0, -fwd[1])]);
 }
 
 function buildAnimOptions() {
   const sel = document.querySelector('#animSel');
-  sel.innerHTML = animKeysByWeapon[weaponType]
-    .map((k) => `<option value="${k}"${k === 'fire' ? ' selected' : ''}>${UBC_ANIM_MAP[k] || k} → ${k}</option>`)
+  if (!sel) return;
+  const keys = [...(animKeysByWeapon[weaponType] || []), ...EXTRA_TEST_ANIMS.filter(k => !(animKeysByWeapon[weaponType]||[]).includes(k))];
+  sel.innerHTML = keys
+    .map((k) => `<option value="${k}"${k === 'idleArmed' ? ' selected' : ''}>${UBC_ANIM_MAP[k] || k} - ${k}</option>`)
     .join('');
-  sel.onchange = () => { character.play(sel.value); };
+  sel.onchange = () => { character?.play(sel.value); };
 }
 
 function buildWeaponOptions() {
   const sel = document.querySelector('#weaponType');
+  if (!sel) return;
   sel.innerHTML = Object.keys(WEAPONS)
     .map((id) => `<option value="${id}"${id === weaponType ? ' selected' : ''}>${WEAPONS[id].name}</option>`)
     .join('');
@@ -331,37 +310,40 @@ function buildWeaponOptions() {
     // Guardar en memoria los ajustes de la arma actual antes de cambiar.
     try {
       const gq = gun.quaternion;
-      const sq = gun.userData.supportGripQuat || new THREE.Quaternion();
-      const placement = { position: gun.position.toArray(), quaternion: [gq.x, gq.y, gq.z, gq.w], supportGrip: { position: (gun.userData.supportGrip || new THREE.Vector3()).toArray(), quaternion: [sq.x, sq.y, sq.z, sq.w] }, ikStrengthLeft: gun.userData.ikStrengthLeft ?? gun.userData.ikStrength ?? 0, ikStrengthRight: gun.userData.ikStrengthRight ?? 0, ikRightTarget: gun.userData.ikRightTarget ? { position: gun.userData.ikRightTarget.toArray() } : undefined };
+      const placement = { position: gun.position.toArray(), quaternion: [gq.x, gq.y, gq.z, gq.w] };
       setGunPlacement(placement, weaponType);
       if (weaponType === 'ar' || weaponType === 'pistol') setGunPlacement(placement, 'default');
     } catch {}
     weaponType = sel.value;
     attachWeapon(character, weaponType).then(() => {
       gun = character.weaponMount.children[0];
-      setReadouts(); buildAnimOptions(); syncSupportSlidersFromGun(); syncRightIkSlidersFromGun();
+      syncSlidersFromGun(); setReadouts(); buildAnimOptions();
       if (outlineOn) applyOutlineTargets();
     });
   };
 }
 
 function applySliders() {
-  if (!character.manualGunAlign) return;
+  if (!character?.manualGunAlign || !gun) return;
   gun.position.set(Number(document.querySelector('#posX').value), Number(document.querySelector('#posY').value), Number(document.querySelector('#posZ').value));
   gun.quaternion.setFromEuler(new THREE.Euler(Number(document.querySelector('#rotX').value) * D2R, Number(document.querySelector('#rotY').value) * D2R, Number(document.querySelector('#rotZ').value) * D2R, 'XYZ'));
 }
 function syncSlidersFromGun() {
+  if (!gun) return;
   const set = (id, v) => { const el = document.querySelector('#' + id); if (el) el.value = Number(v).toFixed(2); };
   const r = new THREE.Euler().setFromQuaternion(gun.quaternion);
   set('posX', gun.position.x); set('posY', gun.position.y); set('posZ', gun.position.z);
   set('rotX', (r.x * 180) / Math.PI); set('rotY', (r.y * 180) / Math.PI); set('rotZ', (r.z * 180) / Math.PI);
 }
 function setManual(on) {
-  manualMode = on;
-  document.querySelector('#manualLabel').textContent = on ? 'Movimiento manual (ON)' : 'Movimiento manual (OFF)';
-  character.manualGunAlign = on;
-  if (on) { syncSlidersFromGun(); applySliders(); }
-  else {
+  manualMode = !!on;
+  const label = document.querySelector('#manualLabel');
+  if (label) label.textContent = manualMode ? 'Movimiento manual (ON)' : 'Movimiento manual (OFF)';
+  const dot = document.querySelector('#manualDot');
+  if (dot) dot.classList.toggle('on', manualMode);
+  if (character) character.manualGunAlign = manualMode;
+  if (manualMode) { syncSlidersFromGun(); applySliders(); }
+  else if (gun) {
     const cfg = getGunPlacement(weaponType);
     gun.position.set(cfg.position[0], cfg.position[1], cfg.position[2]);
     gun.quaternion.set(cfg.quaternion[0], cfg.quaternion[1], cfg.quaternion[2], cfg.quaternion[3]);
@@ -371,109 +353,55 @@ function setManual(on) {
 function onSlider() { if (manualMode) applySliders(); setReadouts(); }
 function onApply() { if (!manualMode) setManual(true); else applySliders(); setReadouts(); }
 
-function syncSupportSlidersFromGun() {
-  if (!gun?.userData?.supportGrip) return;
-  const sg = gun.userData.supportGrip;
-  const set = (id, v) => { const el = document.querySelector('#' + id); if (el) el.value = Number(v).toFixed(2); };
-  set('sgX', sg.x); set('sgY', sg.y); set('sgZ', sg.z);
-  const q = gun.userData.supportGripQuat || new THREE.Quaternion();
-  const r = new THREE.Euler().setFromQuaternion(q);
-  set('sgrX', (r.x * 180) / Math.PI); set('sgrY', (r.y * 180) / Math.PI); set('sgrZ', (r.z * 180) / Math.PI);
-  const str = document.querySelector('#ikStr'); if (str) str.value = Number(gun.userData.ikStrengthLeft ?? gun.userData.ikStrength ?? 0).toFixed(2);
-  const strR = document.querySelector('#ikStrR'); if (strR) strR.value = Number(gun.userData.ikStrengthRight ?? 0).toFixed(2);
-  applySupportReadouts();
-}
-function applySupportSliders() {
-  if (!gun?.userData) return;
-  gun.userData.supportGrip = new THREE.Vector3(Number(document.querySelector('#sgX').value), Number(document.querySelector('#sgY').value), Number(document.querySelector('#sgZ').value));
-  gun.userData.supportGripQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(Number(document.querySelector('#sgrX').value) * D2R, Number(document.querySelector('#sgrY').value) * D2R, Number(document.querySelector('#sgrZ').value) * D2R, 'XYZ'));
-  gun.userData.ikStrengthLeft = Number(document.querySelector('#ikStr').value);
-  gun.userData.ikStrengthRight = Number(document.querySelector('#ikStrR').value);
-  gun.userData.ikStrength = gun.userData.ikStrengthLeft;
-  applySupportReadouts();
-}
-function applySupportReadouts() {
-  const set = (id, v) => { const el = document.querySelector('#' + id + 'v'); if (el) el.textContent = (typeof v === 'number') ? v.toFixed(2) : v; };
-  const sg = gun?.userData?.supportGrip;
-  if (sg) { set('sgX', sg.x); set('sgY', sg.y); set('sgZ', sg.z); }
-  const q = gun?.userData?.supportGripQuat;
-  if (q) {
-    const r = new THREE.Euler().setFromQuaternion(q);
-    set('sgrX', (r.x * 180) / Math.PI); set('sgrY', (r.y * 180) / Math.PI); set('sgrZ', (r.z * 180) / Math.PI);
-  }
-  const sL = gun?.userData?.ikStrengthLeft ?? gun?.userData?.ikStrength;
-  if (sL != null) set('ikStr', sL);
-  const sR = gun?.userData?.ikStrengthRight;
-  if (sR != null) set('ikStrR', sR);
-}
-function syncRightIkSlidersFromGun() {
-  const t = gun?.userData?.ikRightTarget;
-  const set = (id, v) => { const el = document.querySelector('#' + id); if (el) el.value = Number(v).toFixed(2); };
-  set('rikX', t ? t.x : 0); set('rikY', t ? t.y : 0); set('rikZ', t ? t.z : 0);
-  applyRightIkReadouts();
-}
-function applyRightIkSliders() {
-  if (!gun?.userData) return;
-  gun.userData.ikRightTarget = new THREE.Vector3(Number(document.querySelector('#rikX').value), Number(document.querySelector('#rikY').value), Number(document.querySelector('#rikZ').value));
-  applyRightIkReadouts();
-}
-function applyRightIkReadouts() {
-  const t = gun?.userData?.ikRightTarget;
-  const set = (id, v) => { const el = document.querySelector('#' + id + 'v'); if (el) el.textContent = Number(v).toFixed(2); };
-  if (t) { set('rikX', t.x); set('rikY', t.y); set('rikZ', t.z); }
-}
-
 function onReset() {
   attachWeapon(character, weaponType).then(() => {
     gun = character.weaponMount.children[0];
     setManual(false);
     buildAnimOptions();
-    syncSupportSlidersFromGun();
-    syncRightIkSlidersFromGun();
+    syncSlidersFromGun();
     const sel = document.querySelector('#animSel');
     if (sel) { sel.value = 'idleArmed'; sel.dispatchEvent(new Event('change', { bubbles: true })); }
     if (outlineOn) applyOutlineTargets();
   });
 }
 
+function placementFromGun() {
+  const gq = gun.quaternion;
+  return { position: gun.position.toArray(), quaternion: [gq.x, gq.y, gq.z, gq.w] };
+}
+
 function generateExport() {
-  const gd = gun.userData;
-  const ha = character.handAlign;
+  const gd = gun.userData || {};
+  const ha = character?.handAlign || new THREE.Quaternion();
   const fwd = gunWorldForward();
   const lines = [];
-  lines.push('=== OpenNite — Editor de armas (rig UBC/Unreal) — configuración exportada ===');
+  lines.push('=== OpenNite — Editor de armas (UBC/Unreal) — configuración exportada ===');
   lines.push(`Fecha: ${new Date().toLocaleString()}`);
-  lines.push(`Tipo de arma: ${WEAPONS[weaponType].name} (${weaponType})`);
+  lines.push(`Tipo de arma: ${WEAPONS[weaponType]?.name || weaponType} (${weaponType})`);
   lines.push('');
-  lines.push('Datos de posición (para src/game/character.js):');
+  lines.push('Datos de posición:');
   lines.push(`  Posición local del arma (gun.position):    ${fmt(gun.position.toArray()).join(' ')}`);
   const gq = gun.quaternion;
   lines.push(`  Rotación local del arma (gun.quaternion):  ${fmt([gq.x, gq.y, gq.z, gq.w]).join(' ')}`);
   lines.push(`  handAlign (w, x, y, z):                    ${fmt([ha.w, ha.x, ha.y, ha.z]).join(' ')}`);
-  lines.push(`  Muzzle (local):                            ${fmt(gd.muzzle.toArray()).join(' ')}`);
-  lines.push(`  Grip (local):                              ${fmt(gd.grip.toArray()).join(' ')}`);
-  lines.push(`  SupportGrip (local):                       ${fmt(gd.supportGrip.toArray()).join(' ')}`);
-  lines.push(`  IK Fuerza izq.:                            ${fmt([gd.ikStrengthLeft ?? gd.ikStrength ?? 0])[0]}`);
-  lines.push(`  IK Fuerza der.:                            ${fmt([gd.ikStrengthRight ?? 0])[0]}`);
-  if (gd.ikRightTarget) lines.push(`  IK objetivo der. (local):                  ${fmt(gd.ikRightTarget.toArray()).join(' ')}`);
-  lines.push(`  Length:                                    ${fmt([gd.length])[0]}`);
+  if (gd.muzzle) lines.push(`  Muzzle (local):                            ${fmt(gd.muzzle.toArray()).join(' ')}`);
+  if (gd.grip) lines.push(`  Grip (local):                              ${fmt(gd.grip.toArray()).join(' ')}`);
+  if (gd.length != null) lines.push(`  Length:                                    ${fmt([gd.length])[0]}`);
   lines.push('');
   lines.push(`Alineación del arma (gunWorldForward): ${fmt(fwd).join(' ')}`);
   lines.push(`Frente del personaje (charForward): ${fmt(charForward()).join(' ')}`);
   lines.push('');
   lines.push('Clips (motor → UAL) para el tipo de arma:');
-  for (const k of animKeysByWeapon[weaponType]) lines.push(`  ${k} → ${UBC_ANIM_MAP[k] || '(sin clip)'}`);
+  for (const k of (animKeysByWeapon[weaponType] || [])) lines.push(`  ${k} → ${UBC_ANIM_MAP[k] || '(sin clip)'}`);
   return lines.join('\n');
 }
 
 function onExport() {
   const text = generateExport();
   const ta = document.querySelector('#configText');
-  ta.value = text;
+  if (ta) ta.value = text;
   try {
-    const gq = gun.quaternion;
-    const sq = gun.userData.supportGripQuat || new THREE.Quaternion();
-    const placement = { position: gun.position.toArray(), quaternion: [gq.x, gq.y, gq.z, gq.w], supportGrip: { position: (gun.userData.supportGrip || new THREE.Vector3()).toArray(), quaternion: [sq.x, sq.y, sq.z, sq.w] }, ikStrength: gun.userData.ikStrengthLeft ?? gun.userData.ikStrength ?? 0, ikStrengthLeft: gun.userData.ikStrengthLeft ?? gun.userData.ikStrength ?? 0, ikStrengthRight: gun.userData.ikStrengthRight ?? 0, ikRightTarget: gun.userData.ikRightTarget ? { position: gun.userData.ikRightTarget.toArray() } : undefined };
+    const placement = placementFromGun();
     setGunPlacement(placement, weaponType);
     if (weaponType === 'ar' || weaponType === 'pistol') setGunPlacement(placement, 'default');
     const all = getAllGunConfig();
@@ -483,13 +411,14 @@ function onExport() {
 }
 
 function showInspector(name) {
-  activeGizmoTarget = (name === 'support') ? 'support' : (name === 'rightIk') ? 'rightIk' : (name === 'scene') ? activeGizmoTarget : 'weaponPos';
   for (const sec of document.querySelectorAll('.section')) {
     sec.classList.toggle('active', sec.dataset.for === name);
   }
   const hint = document.querySelector('#activeHint');
-  const labels = { weaponPos: 'Arma (mano derecha)', support: 'IK mano izquierda', rightIk: 'IK mano derecha', scene: 'Escena / visual' };
+  const labels = { weaponPos: 'Arma (mano derecha)', scene: 'Escena / visual' };
   if (hint) hint.textContent = 'Activo: ' + (labels[name] || name);
+  document.querySelector('#selWeapon')?.classList.toggle('activeSel', name === 'weaponPos');
+  document.querySelector('#selScene')?.classList.toggle('activeSel', name === 'scene');
 }
 function bindVisualControls() {
   const res = document.querySelector('#resScale');
@@ -503,70 +432,76 @@ function bindVisualControls() {
   for (const btn of document.querySelectorAll('[data-bg]')) btn.addEventListener('click', () => setBackground(btn.getAttribute('data-bg')));
   const outlineDot = document.querySelector('#outlineDot');
   outlineDot?.addEventListener('click', () => { const on = !outlineOn; outlineDot.classList.toggle('on', on); setOutline(on); });
+  const manualDot = document.querySelector('#manualDot');
+  manualDot?.addEventListener('click', () => setManual(!manualMode));
+}
+
+function populateSkinSelect() {
+  const sel = document.querySelector('#skinSel');
+  if (!sel) return;
+  sel.innerHTML = GAME_SKINS.map(s => `<option value="${s.id}" ${s.default ? 'selected' : ''}>${s.name}</option>`).join('');
+}
+async function loadCharacterSkin(skinId) {
+  const skin = GAME_SKINS.find(s => s.id === skinId) || GAME_SKINS.find(s => s.default) || GAME_SKINS[0];
+  if (!skin) return;
+  if (character?.kitChar?.dispose) { try { character.kitChar.dispose(); } catch {} }
+  else if (character?.group) { try { character.group.removeFromParent(); } catch {} }
+  character = await CharacterWrapper.create(window.__openniteGunKit, { color: skin.color || 0xffb45c, modelPath: skin.modelPath });
+  character.group.position.set(0, 0, 0);
+  character.group.rotation.y = 0.6;
+  character.manualGunAlign = manualMode;
+  character.play('idleArmed');
+  scene.add(character.group);
+  await attachWeapon(character, weaponType);
+  gun = character.weaponMount.children[0];
+  syncSlidersFromGun(); setReadouts(); buildAnimOptions();
+  const animSel0 = document.querySelector('#animSel');
+  if (animSel0) animSel0.value = 'idleArmed';
+  if (outlineOn) applyOutlineTargets();
+  console.log('[gun-editor] Skin cargada:', skin.name);
 }
 
 async function main() {
   try {
     const ubcKit = await loadUbcKit('/models/opennite/ubc/');
     const kit = { type: 'ubc', ubc: ubcKit };
-    character = await CharacterWrapper.create(kit, { color: 0xffb45c });
-    character.group.position.set(0, 0, 0);
-    character.group.rotation.y = 0.6;
-    character.play('idleArmed');
-    scene.add(character.group);
+    window.__openniteGunKit = kit;
     await loadGunConfig();
-    attachWeapon(character, 'ar').then((m) => {
-      gun = character.weaponMount.children[0];
-      syncSupportSlidersFromGun();
-      syncRightIkSlidersFromGun();
-    });
     weaponType = 'ar';
-
+    populateSkinSelect();
+    const defSkin = GAME_SKINS.find(s => s.default) || GAME_SKINS[0];
+    await loadCharacterSkin(defSkin?.id);
     buildWeaponOptions();
-    buildAnimOptions();
-    const animSel0 = document.querySelector('#animSel');
-    if (animSel0) animSel0.value = 'idleArmed';
+    const skinSel = document.querySelector('#skinSel');
+    if (skinSel) skinSel.onchange = () => loadCharacterSkin(skinSel.value);
     bindVisualControls();
     document.querySelector('#apply').onclick = onApply;
     document.querySelector('#reset').onclick = onReset;
-    const setSel = (name, label) => {
-      activeGizmoTarget = name;
-      const h = document.querySelector('#activeHint'); if (h) h.textContent = 'Activo: ' + label;
-      for (const id of ['selWeapon','selSupport','selRightIk']) document.querySelector('#'+id)?.classList.remove('activeSel');
-    };
-    document.querySelector('#selWeapon').onclick = () => { setSel('weaponPos', 'Arma (mano derecha)'); showInspector('weaponPos'); };
-    document.querySelector('#selSupport').onclick = () => { setSel('support', 'IK mano izquierda'); showInspector('support'); };
-    document.querySelector('#selRightIk').onclick = () => { setSel('rightIk', 'IK mano derecha'); showInspector('rightIk'); };
+    document.querySelector('#selWeapon').onclick = () => showInspector('weaponPos');
     document.querySelector('#selScene').onclick = () => showInspector('scene');
     document.querySelector('#undo').onclick = undo;
     document.querySelector('#redo').onclick = redo;
     document.querySelector('#export').onclick = onExport;
     document.querySelector('#copy').onclick = onExport;
-    document.querySelector('#manualDot').onclick = () => setManual(document.querySelector('#manualDot').checked);
     for (const id of ['posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ']) {
       const el = document.querySelector('#' + id); if (el) el.oninput = onSlider;
     }
-    for (const id of ['sgX','sgY','sgZ','sgrX','sgrY','sgrZ','ikStr','ikStrR','rikX','rikY','rikZ']) {
-      const el = document.querySelector('#' + id);
-      if (el) el.oninput = () => { if (id.startsWith('rik')) applyRightIkSliders(); else applySupportSliders(); setReadouts(); };
-    }
     applyResolution();
+    syncSlidersFromGun();
+    setReadouts();
+
     window.openniteEditorDebug = () => ({
       editor: true, characterUbc: !!character?.isUbc, characterInScene: !!character?.group?.parent,
       gunAttached: !!gun, weaponType, manualMode, outlineOn,
-      resScale: Number(document.querySelector('#resScale')?.value ?? 1),
-      bg: '#' + scene.background.getHexString?.(),
       gunFwd: gun ? gunWorldForward() : null, gunPos: gun ? gunWorldPosition() : null, charFwd: charForward(),
-      gunInBone: gun ? (() => { const bone = gun.parent; const p = gun.getWorldPosition(new THREE.Vector3()); if (bone) bone.worldToLocal(p); return p.toArray().map(v=>+v.toFixed(3)); })() : null,
       playing: character?.current,
     });
     window.openniteEditorShot = () => { if (outlineOn && composer) composer.render(); else renderer.render(scene, camera); return canvas.toDataURL('image/png'); };
   } catch (error) {
     console.error('Editor de armas: error de carga', error);
-    document.body.style.background = '#220a0a';
     const overlay = document.querySelector('#error-overlay');
     if (overlay) { overlay.style.display = 'block'; overlay.textContent = `Error cargando el editor: ${error?.message || error}\n\nComprueba que /tools/ y /node_modules/ se sirven.`; }
-    document.querySelector('#editor-canvas').style.display = 'none';
+    if (canvas) canvas.style.display = 'none';
   }
 }
 
@@ -575,13 +510,13 @@ function tick() {
   const dt = Math.min(0.05, clock.getDelta());
   orbit.enabled = !gizmoDrag;
   orbit.update();
-  drawGunAxes();
-  drawGizmos();
   if (character && gun) {
     character.update(dt);
     if (manualMode) applySliders();
     setReadouts();
   }
+  drawGunAxes();
+  drawGizmos();
   if (outlineOn && composer) composer.render(); else renderer.render(scene, camera);
 }
 
@@ -595,6 +530,7 @@ document.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('resize', () => {
   const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
   camera.aspect = w / h; camera.updateProjectionMatrix(); applyResolution();
 });
 

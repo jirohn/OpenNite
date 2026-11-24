@@ -186,30 +186,28 @@ function getNatureZone(x, z, heightAt, waterLevel, seed) {
 
 function placePiece(pieces, occ, heightAt, waterLevel, type, x, z, rot = 0, extra = null) {
   x = snap(x); z = snap(z);
-  const sizes = {
-    house: [8, 6, 3], cabin: [4, 4, 2], tower: [5, 5, 2], container: [6, 2.4, 1], wall: [2, 0.4, 1],
-    tree: [3, 3, 1], rock: [2.5, 2.5, 1], road: [4, 4, 0],
-  };
-  const [w, d, margin] = sizes[type] || [4, 4, 1];
+  const [w, d, margin] = pieceFootprint(type);
   if (occupied(occ, x, z, w, d, rot)) return false;
 
-  const info = sampleFootprint(heightAt, x, z, w, d, rot);
-  if (type !== 'road' && type !== 'tree' && type !== 'rock') {
+  const info = sampleFootprint(heightAt, x, z, Math.max(w, 2), Math.max(d, 2), rot);
+  const small = type === 'crate' || type === 'barrel' || type === 'lamp' || type === 'bench' || type === 'bush' || type === 'fence' || type === 'column';
+  if (type !== 'road' && type !== 'tree' && type !== 'rock' && !small) {
     if (info.centerY < waterLevel + 2.4) return false;
     if (info.minY < waterLevel + 1.8) return false;
-    if (info.range > 0.9) return false; // huella suficientemente plana para construir (base + cimiento)
+    if (info.range > 1.1) return false; // huella suficientemente plana para construir (base + cimiento)
   } else if (type === 'road') {
     if (info.centerY < waterLevel + 1.8) return false;
-    if (info.minY < waterLevel + 1.3) return false;
-    if (info.range > 1.0) return false;
+    if (info.minY < waterLevel + 1.2) return false;
+    if (info.range > 1.35) return false; // permite caminos suaves en laderas ligeras
   } else {
-    if (info.centerY < waterLevel + 2.0) return false;
-    if (info.minY < waterLevel + 1.5) return false;
+    if (info.centerY < waterLevel + 1.8) return false;
+    if (info.minY < waterLevel + 1.2) return false;
+    if (!small && info.range > 1.4) return false;
   }
 
   // Base nivelada: alinear a rejilla vertical de 2 studs (2x2x2) minimizando huecos
   let baseY = info.centerY;
-  if (type !== 'road' && type !== 'tree' && type !== 'rock') {
+  if (type !== 'road' && type !== 'tree' && type !== 'rock' && !small) {
     baseY = Math.round(info.maxY / GRID) * GRID;
     if (baseY < info.maxY - 0.05) baseY += GRID; // asegurar que no se hunda
   } else if (type === 'road') {
@@ -225,16 +223,25 @@ function placePiece(pieces, occ, heightAt, waterLevel, type, x, z, rot = 0, extr
   return true;
 }
 
-function tryPlaceNear(pieces, occ, heightAt, waterLevel, type, cx, cz, radius, rotChoices, tries=30, rnd=Math.random) {
+function tryPlaceNear(pieces, occ, heightAt, waterLevel, type, cx, cz, radius, rotChoices, tries = 30, rnd = Math.random, extra = null) {
   for (let i = 0; i < tries; i++) {
     const a = rnd() * Math.PI * 2;
     const r = rnd() * radius;
     const x = snap(cx + Math.cos(a) * r);
     const z = snap(cz + Math.sin(a) * r);
     const rot = rotChoices[Math.floor(rnd() * rotChoices.length)];
-    if (placePiece(pieces, occ, heightAt, waterLevel, type, x, z, rot)) return true;
+    if (placePiece(pieces, occ, heightAt, waterLevel, type, x, z, rot, extra)) return true;
   }
   return false;
+}
+
+function pieceFootprint(type) {
+  const sizes = {
+    house: [8, 6, 3], cabin: [4, 4, 2], tower: [5, 5, 2], container: [6, 2.4, 1], wall: [2, 0.4, 1], wall_corner: [2, 2, 1], column: [0.5, 0.5, 0],
+    tree: [3, 3, 1], rock: [2.5, 2.5, 1], bush: [1.6, 1.6, 0], road: [4, 4, 0],
+    crate: [1.2, 1.2, 0], barrel: [1.2, 1.2, 0], lamp: [0.8, 0.8, 0], bench: [2, 1, 0], fence: [2, 0.4, 0],
+  };
+  return sizes[type] || [4, 4, 1];
 }
 
 function main() {
@@ -244,178 +251,323 @@ function main() {
   const rnd = makeRandom(seed + 4242);
   const pieces = [];
   const occ = new Set();
-  const ROTS = [0, Math.PI/2, Math.PI, Math.PI*1.5];
+  const ROTS = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+  const settlementCenters = [];
 
-  // Find flat plain centers by scanning (zonas amplias y utilizables como llanuras de construcción)
-  function findPlains(count, minDist) {
+  function canBuildArea(cx, cz, radius = 10, maxRange = 1.7) {
+    const offsets = [[0, 0], [radius * 0.5, 0], [-radius * 0.5, 0], [0, radius * 0.5], [0, -radius * 0.5], [radius, 0], [-radius, 0], [0, radius], [0, -radius]];
+    for (const [dx, dz] of offsets) {
+      const info = sampleFootprint(heightAt, cx + dx, cz + dz, 6, 6, 0);
+      if (info.centerY < waterLevel + 2.2 || info.minY < waterLevel + 1.6) return false;
+      if (info.range > maxRange) return false;
+    }
+    return true;
+  }
+
+  function findPlains(count, minDist, opts = {}) {
     const found = [];
+    const maxAttempts = opts.maxAttempts || 14000;
+    const maxRange = opts.maxRange || 1.9;
+    const radius = opts.radius || 12;
     let attempts = 0;
-    while (found.length < count && attempts < 8000) {
+    while (found.length < count && attempts < maxAttempts) {
       attempts++;
-      const x = snap((rnd() * 2 - 1) * (half * 0.66));
-      const z = snap((rnd() * 2 - 1) * (half * 0.66));
-      if (!isPlain(heightAt, waterLevel, x, z, 14, 1.2)) continue;
-      if (found.some(p => Math.hypot(p.x - x, p.z - z) < minDist)) continue;
-      // comprobar un área amplia alrededor para asegurar llanura utilizable
-      let ok = true;
-      const offsets = [[0,0],[8,0],[-8,0],[0,8],[0,-8],[16,0],[-16,0],[0,16],[0,-16],[12,12],[-12,12],[12,-12],[-12,-12],[20,0],[-20,0],[0,20],[0,-20]];
-      for (const [dx,dz] of offsets) {
-        const info = sampleFootprint(heightAt, x + dx, z + dz, 8, 8, 0);
-        if (info.centerY < waterLevel + 2.4 || info.minY < waterLevel + 1.8 || info.range > 1.4) { ok = false; break; }
-      }
-      if (!ok) continue;
+      const x = snap((rnd() * 2 - 1) * (half * 0.7));
+      const z = snap((rnd() * 2 - 1) * (half * 0.7));
+      if (!canBuildArea(x, z, radius, maxRange)) continue;
+      if (found.some((p) => Math.hypot(p.x - x, p.z - z) < minDist)) continue;
       found.push({ x, z, y: heightAt(x, z) });
     }
     return found;
   }
 
-  function buildVillage(center, opts = {}) {
-    const { houses = 4, roads = true, walls = false } = opts;
-    const cx = snap(center.x), cz = snap(center.z);
-    // central cross of road tiles (modular, grid-aligned, 4x4u)
-    if (roads) {
-      for (let i = -3; i <= 3; i++) {
-        placePiece(pieces, occ, heightAt, waterLevel, 'road', cx + i*4, cz, 0);
-        placePiece(pieces, occ, heightAt, waterLevel, 'road', cx, cz + i*4, 0);
-      }
-      // small plaza ring
-      for (const [dx,dz] of [[4,4],[4,-4],[-4,4],[-4,-4]]) {
-        placePiece(pieces, occ, heightAt, waterLevel, 'road', cx+dx, cz+dz, 0);
-      }
+  function flattenSpot(x, z, tries = 18, radius = 8) {
+    let bx = snap(x), bz = snap(z), br = 99;
+    const base = sampleFootprint(heightAt, bx, bz, 4, 4, 0);
+    br = base.range;
+    for (let i = 0; i < tries; i++) {
+      const a = (i / tries) * Math.PI * 2;
+      const r = (i % 3) * (radius / 2);
+      const tx = snap(x + Math.cos(a) * r), tz = snap(z + Math.sin(a) * r);
+      const info = sampleFootprint(heightAt, tx, tz, 4, 4, 0);
+      if (info.centerY < waterLevel + 2.0 || info.minY < waterLevel + 1.4) continue;
+      if (info.range < br) { br = info.range; bx = tx; bz = tz; }
+      if (br <= 1.2) break;
     }
-    // houses around center with spacing
-    const houseSlots = [
-      [-14, -10, 0], [14, -10, Math.PI], [-14, 10, 0], [14, 10, Math.PI],
-      [-14, 0, Math.PI/2], [14, 0, -Math.PI/2], [0, -14, 0], [0, 14, Math.PI],
-      [-24, -10, 0], [24, -10, Math.PI], [-24, 10, 0], [24, 10, Math.PI],
-    ];
-    let placedH = 0;
-    for (const [dx,dz,rot] of houseSlots) {
-      if (placedH >= houses) break;
-      let done = false;
-      for (let r = 0; r <= 10 && !done; r += 2) {
-        for (let a = 0; a < 8 && !done; a++) {
-          const ang = (a / 8) * Math.PI * 2;
-          const jx = r === 0 ? 0 : snap(Math.cos(ang) * r);
-          const jz = r === 0 ? 0 : snap(Math.sin(ang) * r);
-          const hx = snap(cx + dx + jx), hz = snap(cz + dz + jz);
-          const floors = (placedH % 3 === 1) ? 2 : 1;
-          if (placePiece(pieces, occ, heightAt, waterLevel, 'house', hx, hz, rot, { floors })) { placedH++; done = true; }
-        }
-      }
-    }
-    // some containers and details
-    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 18, ROTS, 12, rnd);
-    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 18, ROTS, 12, rnd);
-    // perimeter walls (optional, short kit-wall segments 2u)
-    if (walls) {
-      for (let i = -4; i <= 4; i += 1) {
-        placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx + i*2, cz - 22, 0);
-        placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx + i*2, cz + 22, 0);
-      }
-    }
-    // Naturaleza decorativa la aporta el mundo por zonas (bosque/terreno/playa) para evitar duplicados.
+    return { x: bx, z: bz, y: heightAt(bx, bz), range: br };
   }
 
-  function buildHamlet(center) {
-    const cx = snap(center.x), cz = snap(center.z);
-    // short road
-    for (let i = -1; i <= 1; i++) placePiece(pieces, occ, heightAt, waterLevel, 'road', cx + i*4, cz, 0);
-    placePiece(pieces, occ, heightAt, waterLevel, 'road', cx, cz + 4, 0);
-    const slots = [[-10,-8,0],[10,-8,Math.PI],[0,-12,Math.PI/2]];
-    let n = 0;
-    for (const [dx,dz,rot] of slots) {
-      if (n >= 2) break;
-      let done = false;
-      for (let r = 0; r <= 10 && !done; r += 2) {
-        for (let a = 0; a < 8 && !done; a++) {
-          const ang = (a / 8) * Math.PI * 2;
-          const jx = r === 0 ? 0 : snap(Math.cos(ang) * r);
-          const jz = r === 0 ? 0 : snap(Math.sin(ang) * r);
-          const hx = snap(cx + dx + jx), hz = snap(cz + dz + jz);
-          const floors = (n === 0 && rnd() < 0.4) ? 2 : 1;
-          if (placePiece(pieces, occ, heightAt, waterLevel, 'house', hx, hz, rot, { floors })) { n++; done = true; }
-        }
-      }
-    }
-    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 14, ROTS, 8, rnd);
-    // Naturaleza decorativa la aporta el mundo por zonas.
+  function roadOk(x, z) {
+    const info = sampleFootprint(heightAt, x, z, 4, 4, 0);
+    return info.centerY >= waterLevel + 1.6 && info.minY >= waterLevel + 1.1 && info.range <= 1.7;
   }
 
-  function buildTowerOutpost(center) {
-    const cx = snap(center.x), cz = snap(center.z);
-    if (!isPlain(heightAt, waterLevel, cx, cz, 6, 0.8)) return false;
-    if (!placePiece(pieces, occ, heightAt, waterLevel, 'tower', cx, cz, 0)) return false;
-    for (const [dx,dz] of [[6,0],[-6,0],[0,6],[0,-6]]) placePiece(pieces, occ, heightAt, waterLevel, 'road', cx+dx, cz+dz, 0);
-    for (let i = 0; i < 4; i++) tryPlaceNear(pieces, occ, heightAt, waterLevel, 'wall', cx, cz, 10, ROTS, 15, rnd);
-    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 12, ROTS, 8, rnd);
+  function placeRoadTile(x, z) {
+    x = snap(x); z = snap(z);
+    if (!roadOk(x, z)) return false;
+    for (const p of pieces) if (p.type === 'road' && p.x === x && p.z === z) return true;
+    const info = sampleFootprint(heightAt, x, z, 4, 4, 0);
+    const y = Math.round(info.centerY * 20) / 20;
+    for (const p of pieces) if (p.x === x && p.z === z && p.type !== 'road') return false;
+    if (occupied(occ, x, z, 4, 4, 0)) {
+      const conflict = pieces.some((p) => p.type !== 'road' && Math.abs(p.x - x) < 2.5 && Math.abs(p.z - z) < 2.5);
+      if (conflict) return false;
+    }
+    pieces.push({ type: 'road', x, y, z, rot: 0 });
+    markOcc(occ, x, z, 4, 4, 0, 0);
     return true;
   }
 
-  // Build settlements
-  const plains = findPlains(8, 55);
-  const settlementCenters = [];
-  if (plains.length >= 1) { buildVillage(plains[0], { houses: 6, roads: true, walls: true }); settlementCenters.push(plains[0]); }
-  if (plains.length >= 2) { buildVillage(plains[1], { houses: 5, roads: true, walls: false }); settlementCenters.push(plains[1]); }
-  if (plains.length >= 3) { buildHamlet(plains[2]); settlementCenters.push(plains[2]); }
-  if (plains.length >= 4) { buildHamlet(plains[3]); settlementCenters.push(plains[3]); }
-  if (plains.length >= 5) { if (buildTowerOutpost(plains[4])) settlementCenters.push(plains[4]); }
-  if (plains.length >= 6) { buildHamlet(plains[5]); settlementCenters.push(plains[5]); }
-  if (plains.length >= 7) { if (buildTowerOutpost(plains[6])) settlementCenters.push(plains[6]); }
-  if (plains.length >= 8) { buildHamlet(plains[7]); settlementCenters.push(plains[7]); }
-
-  // Extra standalone houses on plains if we found few
-  if (plains.length < 3) {
-    const extras = findPlains(6, 40);
-    for (const c of extras) { buildHamlet(c); settlementCenters.push(c); }
+  function carveRoadPath(x1, z1, x2, z2) {
+    let x = snap(x1), z = snap(z1);
+    const tx = snap(x2), tz = snap(z2);
+    let placed = 0;
+    const maxSteps = 260;
+    for (let i = 0; i < maxSteps; i++) {
+      if (placeRoadTile(x, z)) placed++;
+      if (x === tx && z === tz) break;
+      const dx = tx - x, dz = tz - z;
+      const stepX = dx === 0 ? 0 : Math.sign(dx) * 4;
+      const stepZ = dz === 0 ? 0 : Math.sign(dz) * 4;
+      let nx = x, nz = z;
+      if (Math.abs(dx) >= Math.abs(dz) && stepX) { nx = x + stepX; nz = z; }
+      else if (stepZ) { nx = x; nz = z + stepZ; }
+      else if (stepX) { nx = x + stepX; nz = z; }
+      if (!roadOk(nx, nz)) {
+        if (nx !== x && stepZ && roadOk(x, z + stepZ)) { nx = x; nz = z + stepZ; }
+        else if (nz !== z && stepX && roadOk(x + stepX, z)) { nx = x + stepX; nz = z; }
+        else if (stepX && roadOk(x + stepX, z)) { nx = x + stepX; nz = z; }
+        else if (stepZ && roadOk(x, z + stepZ)) { nx = x; nz = z + stepZ; }
+        else { nx += stepX || 0; nz += stepZ || 0; }
+      }
+      x = snap(nx); z = snap(nz);
+    }
+    return placed;
   }
 
-  // Cabañas de madera en zonas de bosque (piezas de kit, mapa limpio)
-  function placeForestCabins(count = 10) {
+  function placeHouseSmart(cx, cz, rot, floors = 1, spread = 8) {
+    for (let r = 0; r <= spread; r += 2) {
+      const tries = r === 0 ? 1 : 10;
+      for (let a = 0; a < tries; a++) {
+        const ang = r === 0 ? 0 : (a / tries) * Math.PI * 2;
+        const jx = r === 0 ? 0 : snap(Math.cos(ang) * r);
+        const jz = r === 0 ? 0 : snap(Math.sin(ang) * r);
+        const hx = snap(cx + jx), hz = snap(cz + jz);
+        if (placePiece(pieces, occ, heightAt, waterLevel, 'house', hx, hz, rot, { floors })) return true;
+      }
+    }
+    return false;
+  }
+
+  function decorateAround(cx, cz, radius = 10, count = 4) {
+    const types = ['crate', 'barrel', 'lamp', 'bench', 'bush', 'rock'];
     let placed = 0;
-    for (let tries = 0; tries < 6000 && placed < count; tries++) {
+    for (let i = 0; i < count * 5 && placed < count; i++) {
+      const t = types[Math.floor(rnd() * types.length)];
+      if (tryPlaceNear(pieces, occ, heightAt, waterLevel, t, cx, cz, radius, ROTS, 10, rnd)) placed++;
+    }
+    return placed;
+  }
+
+  function placeSettlementWalls(cx, cz, half = 26, inner = 16) {
+    // Murales perimetrales modulares alrededor del asentamiento: vallas sin
+    // huecos, esquinas y ventanas. Los puertas se intentan sobre las rampas
+    // de carretera; si chocan con el ocupado, el muro está íntegro.
+    let placed = 0;
+    const runH = (sideZ, rot) => {
+      for (let x = snap(cx - inner); x <= snap(cx + inner) + 1; x += 4) {
+        if (placePiece(pieces, occ, heightAt, waterLevel, 'wall', x, sideZ, rot)) placed++;
+      }
+    };
+    const runV = (sideX, rot) => {
+      for (let z = snap(cz - inner); z <= snap(cz + inner) + 1; z += 4) {
+        if (placePiece(pieces, occ, heightAt, waterLevel, 'wall', sideX, z, rot)) placed++;
+      }
+    };
+    runH(snap(cz - half), 0);
+    runH(snap(cz + half), 0);
+    runV(snap(cx - half), Math.PI / 2);
+    runV(snap(cx + half), Math.PI / 2);
+    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'wall_door', cx, cz, 2, ROTS, 4, rnd);
+    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'column', cx, cz, 2, ROTS, 6, rnd);
+    placePiece(pieces, occ, heightAt, waterLevel, 'wall_corner', snap(cx - half), snap(cz - half), 0);
+    placePiece(pieces, occ, heightAt, waterLevel, 'wall_corner', snap(cx + half), snap(cz - half), 0);
+    placePiece(pieces, occ, heightAt, waterLevel, 'wall_corner', snap(cx - half), snap(cz + half), 0);
+    placePiece(pieces, occ, heightAt, waterLevel, 'wall_corner', snap(cx + half), snap(cz + half), 0);
+    return placed;
+  }
+
+  function buildTown(center, opts = {}) {
+    const c = flattenSpot(center.x, center.z, 24, 12);
+    const cx = c.x, cz = c.z;
+    const houses = opts.houses ?? 8;
+    settlementCenters.push({ x: cx, z: cz, y: c.y });
+
+    for (let i = -4; i <= 4; i++) {
+      placeRoadTile(cx + i * 4, cz);
+      placeRoadTile(cx, cz + i * 4);
+    }
+    for (let i = -2; i <= 2; i++) {
+      placeRoadTile(cx + i * 4, cz - 12);
+      placeRoadTile(cx + i * 4, cz + 12);
+      placeRoadTile(cx - 12, cz + i * 4);
+      placeRoadTile(cx + 12, cz + i * 4);
+    }
+    for (const [dx, dz] of [[4,4],[4,-4],[-4,4],[-4,-4],[8,8],[8,-8],[-8,8],[-8,-8]]) placeRoadTile(cx + dx, cz + dz);
+    placeSettlementWalls(cx, cz);
+
+    const slots = [
+      [-16, -8, Math.PI / 2], [-16, 8, Math.PI / 2], [16, -8, -Math.PI / 2], [16, 8, -Math.PI / 2],
+      [-8, -16, 0], [8, -16, 0], [-8, 16, Math.PI], [8, 16, Math.PI],
+      [-24, -8, Math.PI / 2], [24, -8, -Math.PI / 2], [-24, 8, Math.PI / 2], [24, 8, -Math.PI / 2],
+      [-8, -24, 0], [8, -24, 0], [-8, 24, Math.PI], [8, 24, Math.PI],
+    ];
+    let placedH = 0;
+    for (let i = 0; i < slots.length && placedH < houses; i++) {
+      const [dx, dz, rot] = slots[i];
+      const floors = (i % 4 === 1) ? 2 : 1;
+      if (placeHouseSmart(cx + dx, cz + dz, rot, floors, 6)) placedH++;
+    }
+
+    if (opts.tower) {
+      placePiece(pieces, occ, heightAt, waterLevel, 'tower', cx - 6, cz - 6, 0) || tryPlaceNear(pieces, occ, heightAt, waterLevel, 'tower', cx, cz, 10, ROTS, 20, rnd);
+    }
+    for (let i = 0; i < (opts.containers || 3); i++) tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 18, ROTS, 20, rnd);
+    if (opts.walls) {
+      for (let i = -7; i <= 7; i++) {
+        if (Math.abs(i) <= 1) continue;
+        placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx + i * 2, cz - 22, 0);
+        placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx + i * 2, cz + 22, 0);
+        if (i % 2 === 0) placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx - 22, cz + i * 2, Math.PI / 2);
+        if (i % 2 === 0) placePiece(pieces, occ, heightAt, waterLevel, 'wall', cx + 22, cz + i * 2, Math.PI / 2);
+      }
+    }
+    decorateAround(cx, cz, 14, opts.decor || 10);
+    decorateAround(cx - 12, cz, 8, 3);
+    decorateAround(cx + 12, cz, 8, 3);
+    return { x: cx, z: cz };
+  }
+
+  function buildHamlet(center, opts = {}) {
+    const c = flattenSpot(center.x, center.z, 18, 10);
+    const cx = c.x, cz = c.z;
+    settlementCenters.push({ x: cx, z: cz, y: c.y });
+    for (let i = -2; i <= 2; i++) placeRoadTile(cx + i * 4, cz);
+    placeRoadTile(cx, cz + 4); placeRoadTile(cx, cz - 4); placeRoadTile(cx, cz + 8);
+    const slots = [[-10, -8, Math.PI / 2], [10, -8, -Math.PI / 2], [-10, 8, Math.PI / 2], [10, 8, -Math.PI / 2], [0, -14, 0]];
+    let n = 0;
+    for (let i = 0; i < slots.length && n < (opts.houses || 3); i++) {
+      const [dx, dz, rot] = slots[i];
+      const floors = (i === 0 && rnd() < 0.35) ? 2 : 1;
+      if (placeHouseSmart(cx + dx, cz + dz, rot, floors, 6)) n++;
+    }
+    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 12, ROTS, 10, rnd);
+    decorateAround(cx, cz, 10, 5);
+    return { x: cx, z: cz };
+  }
+
+  function buildOutpost(center) {
+    const c = flattenSpot(center.x, center.z, 18, 8);
+    const cx = c.x, cz = c.z;
+    settlementCenters.push({ x: cx, z: cz, y: c.y });
+    placePiece(pieces, occ, heightAt, waterLevel, 'tower', cx, cz, 0) || tryPlaceNear(pieces, occ, heightAt, waterLevel, 'tower', cx, cz, 6, ROTS, 20, rnd);
+    for (const [dx, dz] of [[6,0],[-6,0],[0,6],[0,-6],[4,4],[-4,4],[4,-4],[-4,-4],[10,0],[-10,0],[0,10],[0,-10]]) placeRoadTile(cx + dx, cz + dz);
+    placeSettlementWalls(cx, cz);
+    for (let i = 0; i < 8; i++) tryPlaceNear(pieces, occ, heightAt, waterLevel, 'wall', cx, cz, 10, ROTS, 18, rnd);
+    tryPlaceNear(pieces, occ, heightAt, waterLevel, 'container', cx, cz, 10, ROTS, 10, rnd);
+    decorateAround(cx, cz, 8, 4);
+    return { x: cx, z: cz };
+  }
+
+  const pois = (map.pois || []).map((p) => ({ ...p }));
+  const townPoi = pois.find((p) => /caser/i.test(p.name || '') || p.type === 'town') || pois[1] || pois[0];
+  const harborPoi = pois.find((p) => /puerto|harbor/i.test(p.name || '') || p.type === 'harbor');
+  const anchors = [];
+  if (townPoi) anchors.push({ kind: 'townMain', poi: townPoi });
+  if (harborPoi && harborPoi !== townPoi) anchors.push({ kind: 'town', poi: harborPoi });
+  for (const p of pois) {
+    if (!p || p === townPoi || p === harborPoi) continue;
+    if (/faro|torre|tower/i.test(p.name || '') || p.type === 'tower') anchors.push({ kind: 'outpost', poi: p });
+    else if (/ruina|ermita|ruins/i.test(p.name || '') || p.type === 'ruins') anchors.push({ kind: 'outpost', poi: p });
+    else anchors.push({ kind: 'hamlet', poi: p });
+  }
+
+  const built = [];
+  for (const a of anchors) {
+    const base = { x: snap(a.poi.x || 0), z: snap(a.poi.z || 0) };
+    if (a.kind === 'townMain') built.push(buildTown(base, { houses: 10, tower: true, walls: true, containers: 4, decor: 12 }));
+    else if (a.kind === 'town') built.push(buildTown(base, { houses: 7, tower: false, walls: false, containers: 3, decor: 10 }));
+    else if (a.kind === 'outpost') built.push(buildOutpost(base));
+    else built.push(buildHamlet(base, { houses: 3 }));
+  }
+
+  let plains = findPlains(6, 46, { maxAttempts: 16000, maxRange: 2.0, radius: 10 });
+  if (plains.length < 3) plains = plains.concat(findPlains(6, 34, { maxAttempts: 14000, maxRange: 2.4, radius: 8 }));
+  let extraIdx = 0;
+  for (const c of plains) {
+    if (settlementCenters.some((s) => Math.hypot(s.x - c.x, s.z - c.z) < 42)) continue;
+    if (extraIdx === 0 && built.length < 2) built.push(buildTown(c, { houses: 6, tower: false, walls: false, containers: 2, decor: 8 }));
+    else if (extraIdx % 3 === 1) built.push(buildOutpost(c));
+    else built.push(buildHamlet(c, { houses: extraIdx % 2 === 0 ? 4 : 3 }));
+    extraIdx++;
+    if (built.length >= 8) break;
+  }
+
+  for (let i = 1; i < built.length; i++) carveRoadPath(built[i - 1].x, built[i - 1].z, built[i].x, built[i].z);
+  if (built.length >= 3) carveRoadPath(built[0].x, built[0].z, built[built.length - 1].x, built[built.length - 1].z);
+  if (built.length >= 4) carveRoadPath(built[1].x, built[1].z, built[3].x, built[3].z);
+
+  function placeForestCabins(count = 12) {
+    let placed = 0;
+    for (let tries = 0; tries < 8000 && placed < count; tries++) {
       const x = snap((rnd() * 2 - 1) * (half * 0.72));
       const z = snap((rnd() * 2 - 1) * (half * 0.72));
       if (getNatureZone(x, z, heightAt, waterLevel, seed) !== 'forest') continue;
       const info = sampleFootprint(heightAt, x, z, 4, 4, 0);
-      if (info.centerY < waterLevel + 2.6 || info.minY < waterLevel + 2.0 || info.range > 1.1) continue;
+      if (info.centerY < waterLevel + 2.6 || info.minY < waterLevel + 2.0 || info.range > 1.25) continue;
       let nearSettlement = false;
-      for (const c of settlementCenters) { if (Math.hypot(c.x - x, c.z - z) < 26) { nearSettlement = true; break; } }
+      for (const c of settlementCenters) { if (Math.hypot(c.x - x, c.z - z) < 22) { nearSettlement = true; break; } }
       if (nearSettlement) continue;
       let closeCabin = false;
-      for (const p of pieces) { if (p.type === 'cabin' && Math.hypot(p.x - x, p.z - z) < 18) { closeCabin = true; break; } }
+      for (const p of pieces) { if (p.type === 'cabin' && Math.hypot(p.x - x, p.z - z) < 16) { closeCabin = true; break; } }
       if (closeCabin) continue;
       const rot = ROTS[Math.floor(rnd() * ROTS.length)];
       const floors = rnd() < 0.22 ? 2 : 1;
-      if (placePiece(pieces, occ, heightAt, waterLevel, 'cabin', x, z, rot, { floors })) placed++;
+      if (placePiece(pieces, occ, heightAt, waterLevel, 'cabin', x, z, rot, { floors })) {
+        placed++;
+        decorateAround(x, z, 6, 2);
+      }
     }
     return placed;
   }
-  placeForestCabins(10);
+  placeForestCabins(12);
 
-  // Filtro final de seguridad: mantener solo piezas en terreno válido y bien apoyadas
+  for (let i = 0; i < 40; i++) {
+    const x = snap((rnd() * 2 - 1) * (half * 0.7));
+    const z = snap((rnd() * 2 - 1) * (half * 0.7));
+    const t = rnd() < 0.45 ? 'rock' : 'bush';
+    tryPlaceNear(pieces, occ, heightAt, waterLevel, t, x, z, 4, ROTS, 4, rnd);
+  }
+
   const safe = [];
   for (const p of pieces) {
     const x = snap(p.x), z = snap(p.z), rot = p.rot || 0;
-    const sizes = {
-      house: [8, 6], cabin: [4, 4], tower: [5, 5], container: [6, 2.4], wall: [2, 0.4],
-      tree: [3, 3], rock: [2.5, 2.5], road: [4, 4],
-    };
-    const [w, d] = sizes[p.type] || [4, 4];
-    const info = sampleFootprint(heightAt, x, z, w, d, rot);
+    const [w, d] = pieceFootprint(p.type);
+    const info = sampleFootprint(heightAt, x, z, Math.max(w, 2), Math.max(d, 2), rot);
+    const small = p.type === 'crate' || p.type === 'barrel' || p.type === 'lamp' || p.type === 'bench' || p.type === 'bush' || p.type === 'fence';
     if (p.type === 'road') {
-      if (info.centerY < waterLevel + 1.8 || info.minY < waterLevel + 1.3 || info.range > 1.1) continue;
-    } else if (p.type === 'tree' || p.type === 'rock') {
-      if (info.centerY < waterLevel + 2.0 || info.minY < waterLevel + 1.5) continue;
+      if (info.centerY < waterLevel + 1.5 || info.minY < waterLevel + 1.0 || info.range > 1.8) continue;
+    } else if (p.type === 'tree' || p.type === 'rock' || p.type === 'bush') {
+      if (info.centerY < waterLevel + 1.8 || info.minY < waterLevel + 1.2) continue;
+    } else if (small) {
+      if (info.centerY < waterLevel + 1.8 || info.minY < waterLevel + 1.2) continue;
     } else {
-      if (info.centerY < waterLevel + 2.4 || info.minY < waterLevel + 1.8 || info.range > 1.0) continue;
+      if (info.centerY < waterLevel + 2.2 || info.minY < waterLevel + 1.6 || info.range > 1.4) continue;
     }
     let baseY;
-    if (p.type !== 'road' && p.type !== 'tree' && p.type !== 'rock') {
+    if (p.type !== 'road' && p.type !== 'tree' && p.type !== 'rock' && !small) {
       baseY = Math.round(info.maxY / GRID) * GRID;
       if (baseY < info.maxY - 0.05) baseY += GRID;
-    } else if (p.type === 'road') {
-      baseY = Math.round(info.centerY * 20) / 20;
     } else {
       baseY = Math.round(info.centerY * 20) / 20;
     }
@@ -425,7 +577,7 @@ function main() {
     safe.push(out);
   }
 
-  const payload = { base: 'san-borondon', pieces: safe, generated: true };
+  const payload = { base: 'san-borondon', waterVegetation: 0.55, pieces: safe, generated: true };
   const json = JSON.stringify(payload, null, 2);
 
   const targets = ['public/maps/custom-map.json', 'dist/maps/custom-map.json'];
@@ -435,7 +587,10 @@ function main() {
     fs.writeFileSync(t, json, 'utf8');
     console.log('Wrote', t, safe.length, 'pieces');
   }
-  console.log('Done. Plains found:', plains.length, 'Total pieces:', safe.length);
+  const roadCount = safe.filter((p) => p.type === 'road').length;
+  const houseCount = safe.filter((p) => p.type === 'house' || p.type === 'cabin').length;
+  const decorCount = safe.filter((p) => ['crate','barrel','lamp','bench','bush','rock','container','wall','fence','tower','tree'].includes(p.type)).length;
+  console.log('Done. Settlements:', settlementCenters.length, 'Roads:', roadCount, 'Buildings:', houseCount, 'Decor+others:', decorCount, 'Total:', safe.length);
 }
 
 main();

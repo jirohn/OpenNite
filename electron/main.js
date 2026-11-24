@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeImage, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, screen, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
@@ -16,6 +16,9 @@ const mapsIndex = join(mapsDir, 'index.json');
 
 let mainWindow = null;
 let server = null;
+let currentDisplayMode = 'fullscreen';
+
+const DISPLAY_MODES = new Set(['fullscreen', 'windowed', 'borderless']);
 
 const safeId = (id) => String(id || '').replace(/[^a-zA-Z0-9_-]/g, '');
 
@@ -29,6 +32,52 @@ async function readJSON(file, fallback) {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
 }
 
+function normalizeDisplayMode(mode) {
+  return DISPLAY_MODES.has(String(mode || '')) ? String(mode) : 'fullscreen';
+}
+
+function applyDisplayMode(win, mode) {
+  if (!win || win.isDestroyed()) return;
+  const m = normalizeDisplayMode(mode);
+  currentDisplayMode = m;
+  try {
+    win.setAutoHideMenuBar(true);
+    win.setMenuBarVisibility(false);
+    if (m === 'fullscreen') {
+      if (win.isMaximized()) win.unmaximize();
+      win.setResizable(true);
+      win.setFullScreen(true);
+      return;
+    }
+    if (win.isFullScreen()) win.setFullScreen(false);
+    if (m === 'borderless') {
+      const { bounds } = screen.getPrimaryDisplay();
+      if (win.isMaximized()) win.unmaximize();
+      win.setResizable(false);
+      win.setBounds(bounds);
+      win.show();
+      return;
+    }
+    // windowed
+    win.setResizable(true);
+    if (win.isMaximized()) win.unmaximize();
+    if (!win.isVisible()) win.show();
+    const [w, h] = [1366, 768];
+    const cur = win.getBounds();
+    if (cur.width < 960 || cur.height < 600) win.setSize(w, h);
+    else if (win.getBounds().width > 0) {
+      // keep current size if reasonable, but ensure within screen
+      const { workArea } = screen.getPrimaryDisplay();
+      if (cur.width > workArea.width || cur.height > workArea.height) win.setSize(Math.min(cur.width, w), Math.min(cur.height, h));
+    } else {
+      win.setSize(w, h);
+    }
+    win.center();
+  } catch (error) {
+    console.warn('No se pudo aplicar el modo de pantalla:', error);
+  }
+}
+
 function registerIPC() {
   ipcMain.handle('app:version', () => app.getVersion());
   ipcMain.handle('app:quit', () => app.quit());
@@ -38,8 +87,35 @@ function registerIPC() {
   ipcMain.handle('app:writeFile', async (_event, relativePath, text) => {
     const target = join(rootDir, String(relativePath || ''));
     if (!target.startsWith(rootDir + sep)) throw new Error('Ruta no permitida');
-    await writeFile(target, text, 'utf8');
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, String(text ?? ''), 'utf8');
     return target;
+  });
+  ipcMain.handle('app:readFile', async (_event, relativePath) => {
+    const target = join(rootDir, String(relativePath || ''));
+    if (!target.startsWith(rootDir + sep)) throw new Error('Ruta no permitida');
+    try { return await readFile(target, 'utf8'); } catch { return null; }
+  });
+  ipcMain.handle('app:saveMapFile', async (_event, relativePath, text) => {
+    const target = join(rootDir, String(relativePath || ''));
+    if (!target.startsWith(rootDir + sep)) throw new Error('Ruta no permitida');
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, String(text ?? ''), 'utf8');
+    return target;
+  });
+  ipcMain.handle('app:openMapFile', async () => {
+    const { dialog } = await import('electron');
+    const result = await dialog.showOpenDialog({ filters: [{ name: 'Mapa OpenNite', extensions: ['json'] }] });
+    if (result.canceled || !result.filePaths?.length) return null;
+    const target = resolve(result.filePaths[0]);
+    if (!target.startsWith(rootDir + sep)) throw new Error('Ruta no permitida');
+    return await readFile(target, 'utf8');
+  });
+  ipcMain.handle('window:set-display-mode', async (_event, mode) => {
+    const m = normalizeDisplayMode(mode);
+    currentDisplayMode = m;
+    if (mainWindow && !mainWindow.isDestroyed()) applyDisplayMode(mainWindow, m);
+    return m;
   });
 
   ipcMain.handle('settings:get', () => readJSON(settingsFile, null));
@@ -105,8 +181,13 @@ function registerIPC() {
 }
 
 async function createWindow() {
+  const saved = await readJSON(settingsFile, null);
+  const displayMode = normalizeDisplayMode(saved?.displayMode || 'fullscreen');
+  currentDisplayMode = displayMode;
   const iconPath = join(rootDir, 'assets/icons/icon.ico');
   const icon = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined;
+  // Sin marco en fullscreen/borderless por defecto para evitar bordes; en ventana se mantiene marco.
+  const framed = displayMode === 'windowed';
   mainWindow = new BrowserWindow({
     width: 1366,
     height: 768,
@@ -114,6 +195,9 @@ async function createWindow() {
     minHeight: 600,
     title: 'OpenNite',
     icon,
+    frame: framed,
+    autoHideMenuBar: true,
+    fullscreen: displayMode === 'fullscreen',
     backgroundColor: '#0b0d12',
     show: false,
     webPreferences: {
@@ -146,6 +230,7 @@ async function createWindow() {
     return { action: 'deny' };
   });
   mainWindow.once('ready-to-show', () => {
+    applyDisplayMode(mainWindow, currentDisplayMode);
     mainWindow?.show();
     mainWindow?.focus();
     mainWindow?.webContents.focus();
@@ -173,6 +258,7 @@ async function createWindow() {
     if (process.argv.includes('--editor')) startUrl = `http://127.0.0.1:${server.port}/tools/gun-editor.html`;
     if (process.argv.includes('--map-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/map-editor.html`;
     if (process.argv.includes('--parts-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/parts-editor.html`;
+    if (process.argv.includes('--character-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/character-editor.html`;
     await mainWindow.loadURL(startUrl);
   }
 }

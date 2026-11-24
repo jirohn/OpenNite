@@ -35,8 +35,12 @@ export class Effects {
     this.settings = settings;
     this.root = new THREE.Group();
     scene.add(this.root);
-    this.maxParticles = Math.max(100, settings.get('maxParticles') || 600);
-    this.maxTracers = 96;
+    const fx = this.scale;
+    this.maxParticles = Math.max(48, settings.get('maxParticles') || 320);
+    this.maxTracers = fx <= 0.3 ? 24 : fx <= 0.6 ? 48 : 96;
+    this.maxDecals = fx <= 0.3 ? 12 : fx <= 0.6 ? 24 : 48;
+    this.maxFlashes = fx <= 0.3 ? 8 : fx <= 0.6 ? 14 : 24;
+    this.maxWaves = fx <= 0.3 ? 2 : fx <= 0.6 ? 4 : 8;
     this.time = 0;
     this.floatingTexts = [];
     this.disposables = [];
@@ -118,7 +122,7 @@ export class Effects {
     const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.8, polygonOffset: true, polygonOffsetFactor: -4 });
     const geo = new THREE.PlaneGeometry(0.42, 0.42);
     this.decalPool = [];
-    for (let i = 0; i < 48; i++) {
+    for (let i = 0; i < this.maxDecals; i++) {
       const mesh = new THREE.Mesh(geo, mat.clone());
       mesh.visible = false;
       mesh.renderOrder = 3;
@@ -133,7 +137,7 @@ export class Effects {
     const tex = radialTexture('rgba(255,224,150,1)', 'rgba(255,110,20,0)');
     const geo = new THREE.PlaneGeometry(1, 1);
     this.flashPool = [];
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < this.maxFlashes; i++) {
       const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.visible = false;
@@ -147,7 +151,7 @@ export class Effects {
   initShockwaves() {
     const geo = new THREE.RingGeometry(0.6, 0.85, 32);
     this.wavePool = [];
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < this.maxWaves; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: 0xffb45a, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.visible = false;
@@ -207,17 +211,19 @@ export class Effects {
     core.mesh.visible = true;
     core.life = core.max;
 
-    const tail = this.flashPool[this.flashCursor++ % this.flashPool.length];
-    tail.mesh.position.copy(pos).addScaledVector(dir, 0.36);
-    tail.mesh.quaternion.setFromUnitVectors(facing, dir);
-    tail.mesh.scale.set(s * 1.6, s * 0.95, s);
-    tail.mesh.material.color.set(color);
-    tail.mesh.material.opacity = 0.88;
-    tail.mesh.visible = true;
-    tail.life = tail.max * 0.8;
+    if (this.scale > 0.35) {
+      const tail = this.flashPool[this.flashCursor++ % this.flashPool.length];
+      tail.mesh.position.copy(pos).addScaledVector(dir, 0.36);
+      tail.mesh.quaternion.setFromUnitVectors(facing, dir);
+      tail.mesh.scale.set(s * 1.6, s * 0.95, s);
+      tail.mesh.material.color.set(color);
+      tail.mesh.material.opacity = 0.88;
+      tail.mesh.visible = true;
+      tail.life = tail.max * 0.8;
+    }
 
-    this.burst(pos, 9, [color, 0xfff0b0], { speed: 4.2, size: 0.12, life: 0.14, gravity: 2 });
-    this.burst(pos, 4, 0x6b6258, { speed: 1.1, size: 0.22, life: 0.28, gravity: -0.3 });
+    this.burst(pos, this.scale <= 0.3 ? 3 : 9, [color, 0xfff0b0], { speed: 4.2, size: 0.12, life: 0.14, gravity: 2 });
+    if (this.scale > 0.35) this.burst(pos, 4, 0x6b6258, { speed: 1.1, size: 0.22, life: 0.28, gravity: -0.3 });
   }
 
   impact(pos, normal, surface = 'stone') {
@@ -229,8 +235,9 @@ export class Effects {
       flesh: [0xff4d5e, 0xd42c45, 0xff8a8a],
       shield: [0x4dc8ff, 0xa2e8ff, 0x2a8dff],
     }[surface] || [0xbfb7a5];
-    this.burst(pos, surface === 'flesh' ? 16 : 12, colors, { speed: surface === 'flesh' ? 3 : 5.5, size: 0.13, life: 0.45, gravity: 12 });
-    if (surface === 'metal' || surface === 'stone') {
+    const low = this.scale <= 0.3;
+    this.burst(pos, surface === 'flesh' ? (low ? 6 : 16) : (low ? 5 : 12), colors, { speed: surface === 'flesh' ? 3 : 5.5, size: 0.13, life: 0.45, gravity: 12 });
+    if ((surface === 'metal' || surface === 'stone') && !low) {
       // Chispas breves y destello en impactos duros.
       this.burst(pos, 8, [0xfff2b0, 0xffa83c], { speed: 7, size: 0.07, life: 0.16, gravity: 18 });
       const glow = this.flashPool[this.flashCursor++ % this.flashPool.length];
@@ -241,7 +248,7 @@ export class Effects {
       glow.mesh.material.opacity = 0.75;
       glow.mesh.visible = true;
       glow.life = glow.max * 0.55;
-    } else if (surface === 'terrain') {
+    } else if (surface === 'terrain' && !low) {
       this.burst(pos, 10, [0x9c8b68, 0x75835c], { speed: 2.4, size: 0.3, life: 0.6, gravity: 3 });
     }
     if (surface !== 'flesh' && surface !== 'shield') {
@@ -296,8 +303,10 @@ export class Effects {
   update(dt) {
     this.time += dt;
     // Partículas
+    let pActive = false;
     for (let i = 0; i < this.maxParticles; i++) {
-      if (this.pLife[i] <= 0) { if (this.pAlpha[i] !== 0) this.pAlpha[i] = 0; continue; }
+      if (this.pLife[i] <= 0) { if (this.pAlpha[i] !== 0) { this.pAlpha[i] = 0; pActive = true; } continue; }
+      pActive = true;
       this.pLife[i] -= dt;
       const k = i * 3;
       this.pVel[k + 1] -= this.pGrav[i] * dt;
@@ -307,14 +316,18 @@ export class Effects {
       const t = clamp(this.pLife[i] / this.pMax[i], 0, 1);
       this.pAlpha[i] = t * t;
     }
-    this.particles.geometry.attributes.position.needsUpdate = true;
-    this.particles.geometry.attributes.aAlpha.needsUpdate = true;
-    this.particles.geometry.attributes.aColor.needsUpdate = true;
-    this.particles.geometry.attributes.aSize.needsUpdate = true;
+    if (pActive) {
+      this.particles.geometry.attributes.position.needsUpdate = true;
+      this.particles.geometry.attributes.aAlpha.needsUpdate = true;
+      this.particles.geometry.attributes.aColor.needsUpdate = true;
+      this.particles.geometry.attributes.aSize.needsUpdate = true;
+    }
 
     // Trazadoras
+    let tActive = false;
     for (let i = 0; i < this.maxTracers; i++) {
       if (this.tLife[i] <= 0) continue;
+      tActive = true;
       this.tLife[i] -= dt;
       const t = clamp(this.tLife[i] / this.tMax[i], 0, 1);
       for (let j = 0; j < 6; j++) this.tCol[i * 6 + j] *= t > 0 ? 1 - dt * 2.2 : 0;
@@ -322,8 +335,10 @@ export class Effects {
         for (let j = 0; j < 6; j++) this.tCol[i * 6 + j] = 0;
       }
     }
-    this.tracers.geometry.attributes.color.needsUpdate = true;
-    this.tracers.geometry.attributes.position.needsUpdate = true;
+    if (tActive) {
+      this.tracers.geometry.attributes.color.needsUpdate = true;
+      this.tracers.geometry.attributes.position.needsUpdate = true;
+    }
 
     // Decals
     for (const d of this.decalPool) {

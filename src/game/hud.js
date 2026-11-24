@@ -17,6 +17,11 @@ export class HUD {
     this.fpsSmooth = 60;
     this.frameCount = 0;
     this.fpsTimer = 0;
+    this.uwDrops = []; // gotas en UV para el postprocesado
+    this.uwSpawnTimer = 0;
+    this.uwWasUnderwater = false;
+    this.uwDropTime = 0;
+    this.uwIntensity = 0;
     bridge.hud = this;
   }
 
@@ -35,12 +40,18 @@ export class HUD {
       ammo: '12', reserve: '/ 90', reloadHint: '', alive: 1, kills: 0, killFeed: [],
       heading: 0, headingLabel: 'N', stormTime: '',
       hit: false, hiddenCrosshair: false, pickupVisible: false, pickupText: '',
+      chestOpening: null,
       bannerVisible: false, bannerTitle: '', bannerSub: '', toasts: [], kills: [],
     });
+    this.uwDrops = [];
+    this.uwWasUnderwater = false;
+    this.uwDropTime = 0;
+    this.uwIntensity = 0;
   }
 
   unmount() {
     hudStore.setState({ mounted: false });
+    this.uwDrops = [];
   }
 
   toast(text, type = '') {
@@ -128,15 +139,40 @@ export class HUD {
     patch.hit = this.hitTime > 0;
     patch.hiddenCrosshair = player.ads && !!cur?.def.scope;
 
-    // Prompt de recogida / salto del autobús
+    // Prompt de recogida / salto del autobús / apertura cofre/puerta
+    const co = game.chestOpening;
+    const od = game.doorOpening;
+    const nearDoor = (!player.inBus && player.alive && game.world?.findNearestDoor) ? game.world.findNearestDoor(player.position, 2.6) : null;
     if (player.inBus) {
       patch.pickupVisible = true;
       patch.pickupText = 'Pulsa ESPACIO para saltar del autobús';
+      patch.chestOpening = null;
+    } else if (co && player.alive) {
+      const progress = Math.max(0, Math.min(1, co.time / (co.duration || 1)));
+      patch.pickupVisible = true;
+      patch.pickupText = 'Abriendo cofre...';
+      patch.chestOpening = { progress, active: true };
+    } else if (od && player.alive) {
+      const progress = Math.max(0, Math.min(1, od.time / (od.duration || 0.5)));
+      patch.pickupVisible = true;
+      patch.pickupText = od.entity?.targetOpen ? 'Cerrando puerta...' : 'Abriendo puerta...';
+      patch.chestOpening = { progress, active: true };
     } else {
       const near = loot.findNear(player.position, 3.4);
-      patch.pickupVisible = !!near && player.alive;
-      if (near) patch.pickupText = near.isChest ? 'Abrir cofre (E)' : `${near.item.name} (E)`;
-      else if (patch.pickupVisible === false) patch.pickupText = '';
+      if (near && player.alive) {
+        patch.pickupVisible = true;
+        patch.pickupText = near.isChest ? 'Mantén E para abrir cofre' : `${near.item.name} (E)`;
+      } else if (nearDoor && player.alive) {
+        patch.pickupVisible = true;
+        patch.pickupText = nearDoor.targetOpen ? 'Mantén E para cerrar puerta' : 'Mantén E para abrir puerta';
+      } else if (player.alive && player.glidePrompt) {
+        patch.pickupVisible = true;
+        patch.pickupText = 'Pulsa ESPACIO para abrir paracaídas';
+      } else {
+        patch.pickupVisible = false;
+        patch.pickupText = '';
+      }
+      patch.chestOpening = null;
     }
 
     // Banner / toasts
@@ -156,8 +192,76 @@ export class HUD {
     if (changed) patch.toasts = toasts;
 
     hudStore.setState(patch);
+    this.updateUnderwater(game, dt);
     this.drawMinimap(game);
     this.drawFloatingTexts(game);
+  }
+
+  updateUnderwater(game, dt) {
+    const pass = game.underwaterPass;
+    if (!pass) return;
+    const cam = game.camera;
+    let underwater = false;
+    let waterY = -Infinity;
+    if (cam && game.world) {
+      waterY = game.world.waterYAt ? game.world.waterYAt(cam.position.x, cam.position.z) : game.world.waterLevel;
+      underwater = Number.isFinite(waterY) && waterY > -50 && (cam.position.y < waterY + 0.15);
+    }
+
+    if (underwater && !this.uwWasUnderwater) {
+      // Las burbujas 3D las genera el personaje al caer al agua (Player), no la camara.
+      this.uwDropTime = 0;
+      this.uwDrops.length = 0;
+    } else if (!underwater && this.uwWasUnderwater) {
+      this.uwDropTime = 1.1;
+      this.uwSpawnTimer = 0;
+    }
+    this.uwWasUnderwater = underwater;
+    this.uwDropTime = Math.max(0, this.uwDropTime - dt);
+
+    const target = underwater ? 1 : 0;
+    this.uwIntensity += (target - this.uwIntensity) * Math.min(1, dt * (underwater ? 3.5 : 2.4));
+    if (this.uwIntensity < 0.002) this.uwIntensity = 0;
+
+    // Gotas pequeñas y realistas al salir: se ven como lentes, no como bolas gigantes.
+    if (this.uwDropTime > 0) {
+      this.uwSpawnTimer -= dt;
+      if (this.uwSpawnTimer <= 0) {
+        this.uwSpawnTimer = 0.13 + Math.random() * 0.17;
+        const n = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < n && this.uwDrops.length < 12; i++) {
+          this.uwDrops.push({
+            x: 0.06 + Math.random() * 0.88,
+            y: 1.03 + Math.random() * 0.08,
+            vy: -(0.20 + Math.random() * 0.18),
+            r: 0.012 + Math.random() * 0.014, // ~13-28px a 1080p
+            strength: 0.5 + Math.random() * 0.35,
+            wob: Math.random() * Math.PI * 2,
+            life: 1,
+          });
+        }
+      }
+    }
+
+    const u = pass.uniforms;
+    u.uTime.value += dt;
+    u.uUnderwater.value = this.uwIntensity;
+    const arr = u.uDrops.value;
+    let count = 0;
+    for (let i = this.uwDrops.length - 1; i >= 0; i--) {
+      const d = this.uwDrops[i];
+      d.wob += dt * 3;
+      d.x += Math.sin(d.wob) * 0.008 * dt;
+      d.y += d.vy * dt;
+      d.vy -= 0.30 * dt;
+      d.life -= dt * 0.3;
+      if (d.y < -0.06 || d.life <= 0) { this.uwDrops.splice(i, 1); continue; }
+      if (count < 12) {
+        arr[count].set(d.x, d.y, d.r, d.strength * Math.min(1, d.life * 2));
+        count++;
+      }
+    }
+    u.uDropCount.value = count;
   }
 
   drawMinimap(game) {

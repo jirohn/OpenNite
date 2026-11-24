@@ -1,0 +1,4 @@
+﻿const ws=new WebSocket("ws://127.0.0.1:9222/devtools/page/8D6EBD19E7EC26AA8DBDFCB3A50FCBC8");
+ws.addEventListener("open",()=>{ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",params:{expression:`(()=>{try{const e=window.__ed; const m=e.modelRoot; const info=[]; m.traverse(o=>{if(o.isMesh||o.isSkinnedMesh||o.isBone){const p=o.getWorldPosition(new e.THREE.Vector3()); if(Math.abs(p.x)>10||Math.abs(p.y)>10||Math.abs(p.z)>10) info.push({name:o.name,type:o.type,p:p.toArray(),s:o.scale.toArray()});}}); return JSON.stringify({info:info.slice(0,20),children:m.children.map(c=>({name:c.name,type:c.type,pos:c.position.toArray()}))});}catch(err){return String(err)}})()`,returnByValue:true}}));});
+ws.addEventListener("message",(e)=>{const d=JSON.parse(e.data); if(d.id===1){console.log(d.result?.result?.value); ws.close(); process.exit(0);} });
+setTimeout(()=>{console.log('timeout'); process.exit(0);},8000);

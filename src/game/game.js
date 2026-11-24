@@ -4,7 +4,10 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { UnderwaterPass } from './underwater-pass.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { clamp, distance2D, raySphere } from '../core/utils.js';
+import { applyCartoonStyle } from '../core/cartoon.mjs';
 import { randomLoot } from './weapons.js';
 import { loadCharacterModel, Character, createParachute, attachWeapon } from './character.js';
 import { World } from './world.js';
@@ -18,8 +21,30 @@ import { WEAPONS } from './weapons.js';
 import { WorldDebug } from './debug.js';
 import { BuildingManager } from './building.js';
 
-const SKIN_COLORS = [0xffb45c, 0x6f8a5b, 0x5f83a6, 0xa35f52, 0x7a6b4e, 0x4e6470, 0xb59a5e, 0x8b7a6a];
-const SKIN_ANIMS = ['dance', 'wave', 'idle', 'yes', 'dance', 'no', 'wave', 'idle'];
+const DEFAULT_SKIN_CATALOG = [
+  { id: '100avatars_003_jimmy', name: 'Jimmy', color: 0x1e88e5, modelPath: '/models/opennite/characters/100avatars/100Avatars_003_Jimmy.fbx', anim: 'idle' },
+];
+
+async function loadSkinCatalog() {
+  try {
+    const r = await fetch('/config/character-skins.json', { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      const skins = Array.isArray(d?.skins) ? d.skins : Array.isArray(d) ? d : [];
+      if (skins.length) {
+        return skins.map((s, i) => ({
+          id: s.id || `skin_${i}`,
+          name: s.name || `Skin ${i + 1}`,
+          color: typeof s.color === 'string' ? parseInt(s.color.replace('#',''), 16) : (Number(s.color) || DEFAULT_SKIN_CATALOG[i % DEFAULT_SKIN_CATALOG.length].color),
+          modelPath: s.modelPath || DEFAULT_SKIN_CATALOG[0].modelPath,
+          anim: s.anim || DEFAULT_SKIN_CATALOG[i % DEFAULT_SKIN_CATALOG.length].anim,
+          rarity: s.rarity || 'common',
+        }));
+      }
+    }
+  } catch {}
+  return DEFAULT_SKIN_CATALOG;
+}
 
 export class Game {
   constructor(canvas, uiRoot, settings, audio, input, app) {
@@ -43,14 +68,49 @@ export class Game {
     this.firedThisFrame = false;
     this.lastWeaponType = null;
     this.stormDamageTimer = 0;
+    this._cartoonCache = new Map();
+    this._cartoonTimer = 0;
 
     this.renderer = new THREE.WebGLRenderer({
       canvas, antialias: true, powerPreference: 'high-performance', stencil: false,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Colores planos saturados: sin compresión de tonos.
+    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = 1;
+    this.renderer.shadowMap.type = THREE.BasicShadowMap;
+
+    // Textura de escena sin agua para la refracción de la superficie.
+    this.refractionTarget = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    this.reflectionTarget = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    this.reflectionCamera = new THREE.PerspectiveCamera(70, 1, 0.1, 8000);
+    this.reflectionMatrix = new THREE.Matrix4();
+    this._reflectPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this._reflectNormal = new THREE.Vector3(0, 1, 0);
+    this._reflectPos = new THREE.Vector3();
+    this._reflectView = new THREE.Vector3();
+    this._reflectLook = new THREE.Vector3();
+    this._reflectTarget = new THREE.Vector3();
+    this._reflectRotation = new THREE.Matrix4();
+    this._biasMatrix = new THREE.Matrix4().set(
+      0.5, 0, 0, 0.5,
+      0, 0.5, 0, 0.5,
+      0, 0, 0.5, 0.5,
+      0, 0, 0, 1,
+    );
+    this._drawSize = new THREE.Vector2(1, 1);
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(this.settings.get('fov'), window.innerWidth / window.innerHeight, 0.1, 8000);
@@ -63,8 +123,9 @@ export class Game {
 
     this.hud = new HUD(uiRoot, settings);
     this.hud.input = this.input;
-    this.settings.onChange(() => {
+    this.settings.onChange((_, key) => {
       this.applyQuality();
+      if (key === 'waterQuality') this.resize();
       const color = this.settings.get('playerColor');
       const preset = this.settings.get('playerPreset');
       if (this.previewCharacter && this.mode === 'preview') {
@@ -100,13 +161,17 @@ export class Game {
     }, true);
     this.settings.onChange((_, key) => {
       if (key === 'debugMode') debugTarget()?.setEnabled(!!this.settings.get('debugMode'));
+      if (key === 'renderDistance' || key === 'detailDistance' || key === 'quality') this.applyViewDistances();
     });
     this.input.on('keydown', (code) => {
       if (code === 'F5') onDebugKey();
     });
 
     this.input.on('lockchange', (locked) => {
-      if (this.mode === 'playing' && !locked && !this.ending) this.app.requestPause();
+      // Al iniciar partida el cambio de foco puede soltar el puntero antes del primer frame.
+      if (this.mode !== 'playing' || locked || this.ending) return;
+      if (performance.now() < (this._lockGraceUntil || 0)) return;
+      this.app.requestPause();
     });
 
     // ESPACIO por pulsación: salir del bus, saltar o alternar el paracaídas.
@@ -127,20 +192,26 @@ export class Game {
     const h = window.innerHeight;
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.62, 0.55, 0.82);
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.28, 0.4, 0.92);
     this.composer.addPass(this.bloomPass);
+    this.underwaterPass = new UnderwaterPass();
+    this.underwaterPass.setSize(w, h);
+    this.composer.addPass(this.underwaterPass);
     this.composer.addPass(new OutputPass());
-    this.useComposer = false;
+    // Siempre por composer: el efecto de agua del HUD necesita el pase.
+    this.useComposer = true;
   }
 
   applyQuality() {
     const s = this.settings.all();
-    const pr = Math.min(window.devicePixelRatio || 1, 2) * s.resolutionScale;
-    this.renderer.setPixelRatio(pr);
+    const dpr = window.devicePixelRatio || 1;
+    const maxDpr = s.quality === 'low' ? 1 : s.quality === 'medium' ? 1.25 : 1.5;
+    const pr = Math.min(dpr, maxDpr) * (s.resolutionScale || 1);
+    this.renderer.setPixelRatio(Math.min(pr, 1.25));
     this.renderer.shadowMap.enabled = !!s.shadows;
     if (this.world?.sun) {
       this.world.sun.castShadow = !!s.shadows;
-      const size = s.shadowMapSize || 1024;
+      const size = s.shadowMapSize || 512;
       if (this.world.sun.shadow.mapSize.x !== size) {
         this.world.sun.shadow.mapSize.set(size, size);
         this.world.sun.shadow.map?.dispose();
@@ -148,12 +219,31 @@ export class Game {
       }
     }
     if (this.bloomPass) {
-      this.bloomPass.strength = 0.28 + 0.42 * (s.effects || 1);
+      this.bloomPass.strength = 0.1 + 0.14 * (s.effects || 1);
       this.bloomPass.enabled = !!s.bloom;
     }
-    this.useComposer = !!(s.bloom || s.ssao);
+    this.bloomEnabled = !!s.bloom;
+    // El composer solo se usa cuando hace falta (bloom o efecto de agua).
+    this.useComposer = this.bloomEnabled;
     this.renderer.info.autoReset = true;
+    this.applyViewDistances(s);
     this.resize();
+  }
+
+  applyViewDistances(s = this.settings.all()) {
+    const renderDist = Math.max(120, Number(s.renderDistance) || 320);
+    const detailDist = Math.min(renderDist, Math.max(60, Number(s.detailDistance) || 180));
+    if (this.camera) {
+      this.camera.far = Math.max(this.camera.far, renderDist + 80);
+      // Keep far at least renderDist+margin but also allow larger if needed
+      this.camera.far = renderDist + 120;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.scene?.fog) {
+      this.scene.fog.near = Math.max(30, renderDist * 0.25);
+      this.scene.fog.far = renderDist + 60;
+    }
+    if (this.world?.applyViewDistances) this.world.applyViewDistances(renderDist, detailDist);
   }
 
   resize() {
@@ -163,6 +253,23 @@ export class Game {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
+    this.renderer.getDrawingBufferSize(this._drawSize);
+    this.refractionTarget.setSize(
+      Math.max(1, Math.floor(this._drawSize.x * 0.5)),
+      Math.max(1, Math.floor(this._drawSize.y * 0.5)),
+    );
+    const waterQuality = Number(this.settings.get('waterQuality') || 0);
+    const reflectionScale = waterQuality >= 2 ? 0.5 : 0.35;
+    this.reflectionTarget.setSize(
+      Math.max(1, Math.floor(this._drawSize.x * reflectionScale)),
+      Math.max(1, Math.floor(this._drawSize.y * reflectionScale)),
+    );
+    this.world?.setRefractionTexture?.(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+    this.world?.setReflectionTexture?.(
+      waterQuality >= 1 ? this.reflectionTarget.texture : null,
+      this.reflectionMatrix,
+      waterQuality >= 1,
+    );
   }
 
   // ---------------------- Vista previa del menú ----------------------
@@ -170,10 +277,10 @@ export class Game {
   async setupPreview() {
     this.preview = new THREE.Group();
     this.scene.add(this.preview);
-    const hemi = new THREE.HemisphereLight(0xa8c8ff, 0x30302c, 2.0);
-    const key = new THREE.DirectionalLight(0xffd8a0, 3.2);
+    const hemi = new THREE.HemisphereLight(0xa8c8ff, 0x30302c, 1.1);
+    const key = new THREE.DirectionalLight(0xffd8a0, 1.8);
     key.position.set(5, 8, 4);
-    const rim = new THREE.DirectionalLight(0x26d3c7, 2.2);
+    const rim = new THREE.DirectionalLight(0x26d3c7, 0.6);
     rim.position.set(-5, 3, -4);
     this.preview.add(hemi, key, rim);
     const pedestal = new THREE.Mesh(
@@ -195,13 +302,16 @@ export class Game {
     try {
       const kit = await loadCharacterModel();
       if (this.mode !== 'preview') return;
+      const _cat = this.skinCatalog || DEFAULT_SKIN_CATALOG;
+      const _sel = _cat.find(s => s.color === this.settings.get('playerColor')) || _cat[0] || {};
       const ch = await Character.create(kit, {
-        color: this.settings.get('playerColor'),
+        color: _sel.color ?? this.settings.get('playerColor'),
         preset: this.settings.get('playerPreset'),
+        modelPath: _sel.modelPath,
       });
       ch.group.position.set(0, 0, 0);
       ch.group.rotation.y = -0.5;
-      ch.play('dance');
+      ch.play('idle');
       attachWeapon(ch, 'ar');
       this.preview.add(ch.group);
       this.previewCharacter = ch;
@@ -211,12 +321,21 @@ export class Game {
       this.previewDebug.setEnabled(!!this.settings.get('debugMode'));
 
       // Ocho maniquíes 3D animados, uno por aspecto, para elegir en el lobby.
-      const skins = await Promise.all(SKIN_COLORS.map(async (color, i) => {
-        const skin = await Character.create(kit, { color, presetIndex: i });
-        skin.group.position.set(3.85 + i * 0.5, 0, 0);
+      // Skins de lobby: desde config/character-skins.json o defaults.
+      const catalog = await loadSkinCatalog();
+      this.skinCatalog = catalog;
+      this.app.skinCatalog = catalog;
+      try { window.dispatchEvent(new CustomEvent('opennite:skins', { detail: catalog })); } catch {}
+      const skins = await Promise.all(catalog.map(async (entry, i) => {
+        const color = entry.color ?? DEFAULT_SKIN_CATALOG[i % DEFAULT_SKIN_CATALOG.length].color;
+        const opts = { color, presetIndex: i % 8 };
+        if (entry.modelPath) opts.modelPath = entry.modelPath;
+        const skin = await Character.create(kit, opts);
+        const centerX = catalog.length === 1 ? 3.0 : 3.85;
+        skin.group.position.set(centerX + i * 0.5, 0, 0);
         skin.group.rotation.y = -0.35;
         skin.group.scale.setScalar(1.05);
-        skin.play(SKIN_ANIMS[i]);
+        skin.play(entry.anim || 'idle');
         await attachWeapon(skin, i % 3 === 0 ? 'pistol' : i % 3 === 1 ? 'smg' : 'ar');
         skin.alwaysAlignForward = true;
         const disc = new THREE.Mesh(
@@ -226,7 +345,10 @@ export class Game {
         disc.position.y = -0.05;
         skin.group.add(disc);
         skin.group.userData.color = color;
+        skin.group.userData.skinId = entry.id;
+        skin.group.userData.modelPath = entry.modelPath || '';
         skin.group.userData.disc = disc;
+        skin.group.visible = this.skinPreviewMode;
         this.preview.add(skin.group);
         return skin;
       }));
@@ -242,10 +364,11 @@ export class Game {
   /** Activa la galería de skins 3D (lobby) o el héroe singular (menú). */
   setSkinPreview(active) {
     this.skinPreviewMode = !!active;
-    if (this.previewCharacter) this.previewCharacter.group.visible = !this.skinPreviewMode;
-    for (const skin of this.previewSkins) skin.group.visible = this.skinPreviewMode;
-    if (this.previewPedestal) this.previewPedestal.visible = !this.skinPreviewMode;
-    if (this.previewRing) this.previewRing.visible = !this.skinPreviewMode;
+    const showGallery = this.skinPreviewMode;
+    if (this.previewCharacter) this.previewCharacter.group.visible = !showGallery;
+    for (const skin of this.previewSkins) skin.group.visible = showGallery;
+    if (this.previewPedestal) this.previewPedestal.visible = !showGallery;
+    if (this.previewRing) this.previewRing.visible = !showGallery;
     this.setPreviewSkin(this.selectedPreviewColor);
   }
 
@@ -304,13 +427,23 @@ export class Game {
     this.world.debug.setEnabled(!!this.settings.get('debugMode'));
     this.app.setLoading?.(40, config.map.type === 'glb' ? 'Cargando escena 3D completa...' : 'Creando San Borondon y colocando la naturaleza...');
     await this.world.load();
+    applyCartoonStyle(this.scene, this._cartoonCache);
+    this.world.setRefractionTexture?.(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+    this.world.setReflectionTexture?.(
+      Number(this.settings.get('waterQuality') || 0) >= 1 ? this.reflectionTarget.texture : null,
+      this.reflectionMatrix,
+      Number(this.settings.get('waterQuality') || 0) >= 1,
+    );
     this.building = new BuildingManager(this.scene, this.world, this.settings);
     this.app.setLoading?.(55, 'Colocando botín y jugadores...');
 
     this.effects = new Effects(this.scene, this.settings);
+    const _cat = this.skinCatalog || DEFAULT_SKIN_CATALOG;
+    const _sel = _cat.find(s => s.color === this.settings.get('playerColor')) || _cat[0] || {};
     const playerCharacter = await Character.create(kit, {
-      color: this.settings.get('playerColor'),
+      color: _sel.color ?? this.settings.get('playerColor'),
       preset: this.settings.get('playerPreset'),
+      modelPath: _sel.modelPath,
     });
     this.player = new Player(this.camera, playerCharacter, this.world, this.settings, this.input, this.audio);
     this.player.onFallDamage = (damage) => {
@@ -325,8 +458,8 @@ export class Game {
     this.scene.add(this.player.character.group);
     this.player.character.world = this.world;
     this.player.character.group.castShadow = true;
+    this.training = !!config.training || config.map?.type === 'training';
     this.player.equipStarting();
-    this.player.placeOnBus();
     await this.syncWeaponModel();
 
     this.chute = createParachute();
@@ -335,36 +468,80 @@ export class Game {
 
     this.bus = this.createBus();
     this.scene.add(this.bus);
+    this.bus.visible = !this.training;
 
     this.loot = new LootManager(this.scene, this.world, this);
     await this.loot.load();
-    this.loot.spawn(Math.round(78 * (config.map.lootDensity || 1)));
+    if (!this.training) this.loot.spawn(Math.round(78 * (config.map.lootDensity || 1)));
     this.storm = new Storm(this.scene, this.world, this);
     this.storm.onStormEvent = (text, type) => this.hud.toast(text, type);
     this.storm.onStormFinal = () => this.hud.toast('La tormenta ha terminado', 'good');
 
     this.bots = [];
-    const count = clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
-    // Los bots bajan con el jugador desde el autobús (punto de despliegue).
+    const count = this.training ? 0 : clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
     const dropZone = new THREE.Vector3(0, 220, this.world.half + 120);
     const spots = this.world.spawnPoints || [];
     const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
-      const nearDrop = i % 2 === 0;
+      const nearDrop = !this.training && i % 2 === 0;
       const px = nearDrop ? (Math.random() - 0.5) * 24 : sp.x;
       const pz = nearDrop ? (Math.random() - 0.5) * 24 : sp.z;
-      const botSpawn = { x: dropZone.x + px, y: dropZone.y + (nearDrop ? 20 + Math.random() * 180 : 30), z: dropZone.z + pz };
+      const botSpawn = this.training
+        ? { x: sp.x, y: 0, z: sp.z }
+        : { x: dropZone.x + px, y: dropZone.y + (nearDrop ? 20 + Math.random() * 180 : 30), z: dropZone.z + pz };
+      const _cat = this.skinCatalog || DEFAULT_SKIN_CATALOG;
+      const _botSkin = _cat[(i + 1) % _cat.length] || _cat[0] || {};
       const ch = await Character.create(kit, {
-        color: botColors[i % botColors.length],
+        color: this.training ? 0x7fd0ff : (_botSkin.color ?? botColors[i % botColors.length]),
         presetIndex: i + 1,
+        modelPath: _botSkin.modelPath,
       });
       this.scene.add(ch.group);
       const bot = new Bot(ch, this.world, this, i, botSpawn);
       bot.dropping = nearDrop;
+      bot.trainingDummy = !!this.training;
+      bot.passive = !!this.training;
+      if (this.training) {
+        bot.dropping = false;
+        ch.group.traverse((o) => {
+          if (o.isMesh) {
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            o.material = mats.map((m) => {
+              const mm = m.clone ? m.clone() : m;
+              mm.transparent = true;
+              mm.opacity = 0.45;
+              mm.emissive = new THREE.Color(0x4fbaff);
+              mm.emissiveIntensity = 0.35;
+              mm.depthWrite = false;
+              return mm;
+            });
+            if (!Array.isArray(mats)) o.material = o.material[0];
+          }
+        });
+      }
       attachWeapon(ch, 'ar');
       this.bots.push(bot);
     }
+
+    if (this.training) {
+      this.player.inBus = false;
+      this.player.gliding = false;
+      this.player.character.group.visible = true;
+      const ps = spots[0] || { x: 0, y: 0, z: 34 };
+      this.player.position.set(ps.x, 0, ps.z);
+      this.player.velocity.set(0, 0, 0);
+      this.player.yaw = Math.PI;
+      this.player.pitch = 0;
+      this.player.character.group.position.copy(this.player.position);
+      // Postura inicial ya aplicada: si entra en pausa antes del primer update, no se ve en T-pose.
+      this.player.character.setLocomotion(0, true, { armed: true, twoHand: false, crouching: false, ads: false });
+      this.player.character.update(0.016);
+      this.player.updateCamera(0.016);
+    } else {
+      this.player.placeOnBus();
+    }
+
     this.world.debug?.setMarkers(() => [
       this.player?.character, ...(this.bots || []).map((b) => b.character),
     ].filter(Boolean));
@@ -372,36 +549,80 @@ export class Game {
     this.audio.applyDeaf(!!this.settings.get('deafMode'));
 
     this.hud.mount(config.map.name);
-    this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.2);
-    this.hud.toast('Pulsa ESPACIO para saltar del autobús (o se abrirá solo sobre la isla). Clic para controlar la cámara.', 'good');
+    if (this.training) {
+      this.hud.banner('MODO ENTRENAMIENTO', 'Bots holográficos pasivos · Sin tormenta', 3.2);
+      this.hud.toast('Modo entrenamiento: practica movimiento, puntería y construcción.', 'good');
+    } else {
+      this.hud.banner('PREPARA EL SALTO', `${count} rivales · ${config.map.name}`, 3.2);
+      this.hud.toast('Pulsa ESPACIO para saltar del autobús (o se abrirá solo sobre la isla). Clic para controlar la cámara.', 'good');
+    }
     this.matchTime = 0;
     this.mode = 'playing';
     this.running = true;
     this.input.autoLock = true;
+    this._lockGraceUntil = performance.now() + 1800;
     this.app.setLoading?.(100, 'Listo');
     this.clock.getDelta();
     this.input.requestLock();
+    // Pintar ya el primer frame con la postura inicial, antes de cualquier update/pausa.
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(this.scene, this.camera);
   }
 
   createBus() {
     const group = new THREE.Group();
-    const body = new THREE.MeshStandardMaterial({ color: 0xe08a2b, metalness: 0.4, roughness: 0.5 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x2a2f38, metalness: 0.7, roughness: 0.35 });
-    const glass = new THREE.MeshStandardMaterial({ color: 0x86bcd0, metalness: 0.4, roughness: 0.2 });
-    const add = (geo, mat, x, y, z, sx = 1, sy = 1, sz = 1) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y, z);
-      m.scale.set(sx, sy, sz);
-      group.add(m);
-    };
-    add(new THREE.BoxGeometry(6, 4, 20), body, 0, 0, 0);
-    add(new THREE.BoxGeometry(5.4, 1.5, 19), glass, 0, 1.1, -0.2);
-    add(new THREE.BoxGeometry(23, 0.6, 3.6), dark, 0, 0.2, 0);
-    add(new THREE.BoxGeometry(9, 0.4, 1.6), dark, 0, 0.5, 6.5);
-    for (const s of [-1, 1]) {
-      add(new THREE.CylinderGeometry(1.1, 1.1, 2.4, 10), dark, s * 3.4, -0.4, -6);
-      add(new THREE.BoxGeometry(0.25, 4, 2.6), dark, s * 3.1, 2.4, 0);
-    }
+    group.name = 'drop-bus';
+    // Placeholder simple mientras carga el modelo real.
+    const placeholder = new THREE.Mesh(
+      new THREE.BoxGeometry(6, 4, 20),
+      new THREE.MeshStandardMaterial({ color: 0x3a6b3a, metalness: 0.2, roughness: 0.7, transparent: true, opacity: 0.35 })
+    );
+    group.add(placeholder);
+
+    const loader = new FBXLoader();
+    loader.setResourcePath('/models/opennite/props/bus/');
+    loader.load('/models/opennite/props/bus/Meshy_AI_Green_City_Bus_20261121_texture.fbx', (fbx) => {
+      try {
+        group.remove(placeholder);
+        placeholder.geometry.dispose();
+        placeholder.material.dispose();
+        const box = new THREE.Box3().setFromObject(fbx);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        // Normalizar: longitud objetivo ~20 unidades en el eje Z del autobús del juego.
+        const targetLen = 20;
+        const longest = Math.max(size.x, size.y, size.z, 0.001);
+        const s = targetLen / longest;
+        fbx.scale.setScalar(s);
+        // Recalcular tras escalar
+        const box2 = new THREE.Box3().setFromObject(fbx);
+        const c2 = box2.getCenter(new THREE.Vector3());
+        fbx.position.sub(c2); // centrar
+        // Orientación: Meshy suele exportar con eje hacia adelante variable; ajustar si hace falta.
+        // El bus del juego avanza hacia -Z (ver player position.z -= busSpeed*dt) y cámara detrás en +Z.
+        fbx.rotation.y = -Math.PI / 2; // 180° desde la orientación anterior (mirando dirección contraria corregida)
+        const box3 = new THREE.Box3().setFromObject(fbx);
+        const c3 = box3.getCenter(new THREE.Vector3());
+        fbx.position.sub(c3);
+        fbx.position.y += 0; // centrado vertical en el grupo
+
+        fbx.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+            if (o.material) {
+              const mats = Array.isArray(o.material) ? o.material : [o.material];
+              for (const m of mats) { m.needsUpdate = true; }
+            }
+          }
+        });
+        group.add(fbx);
+        group.userData.busModel = fbx;
+      } catch (err) {
+        console.warn('No se pudo integrar modelo de bus:', err);
+      }
+    }, undefined, (err) => console.warn('No se pudo cargar bus FBX:', err));
+
     return group;
   }
 
@@ -457,8 +678,13 @@ export class Game {
         this.onBotHit(hitBot, dmg, hitPart, this.player, hitPoint, shot.weapon.name);
       } else if (worldHit) {
         hitPoint = worldHit.point;
-        const surf = worldHit.type === 'terrain' ? 'terrain' : 'stone';
-        this.effects.impact(worldHit.point, dir.clone().negate(), surf);
+        if (worldHit.type === 'glass' && worldHit.glassKey) {
+          this.world.breakGlass(worldHit.glassKey, worldHit.point);
+          this.effects.impact(worldHit.point, dir.clone().negate(), 'stone');
+        } else {
+          const surf = worldHit.type === 'terrain' ? 'terrain' : 'stone';
+          this.effects.impact(worldHit.point, dir.clone().negate(), surf);
+        }
       } else {
         hitPoint = origin.clone().addScaledVector(dir, shot.range);
       }
@@ -476,7 +702,19 @@ export class Game {
       } else this.audio.play('hurt');
       this.hud.damageFlash(clamp(damage / 55, 0.15, 0.7));
       if (!result.killed) this.player.character?.hit?.(damage > 35);
-      if (result.killed) this.endMatch(false, attacker?.name || 'Tormenta');
+      if (result.killed) {
+        if (this.training) {
+          this.player.alive = true;
+          this.player.character.health = this.player.character.maxHealth || 100;
+          const sp = (this.world?.spawnPoints || [{x:0,y:0,z:34}])[0];
+          this.player.position.set(sp.x, 0, sp.z);
+          this.player.velocity.set(0, 0, 0);
+          this.player.character.group.position.copy(this.player.position);
+          this.hud.toast('Reaparecido en entrenamiento', 'good');
+        } else {
+          this.endMatch(false, attacker?.name || 'Tormenta');
+        }
+      }
       return;
     }
     if (!target?.alive) return;
@@ -501,13 +739,29 @@ export class Game {
       this.audio.play('kill');
       this.hud.banner('ELIMINADO', bot.name, 1.4);
     }
-    this.hud.kill(isPlayer ? 'TÚ' : attacker?.name || '???', bot.name, isPlayer ? weaponName : weaponName || 'AR');
+    this.hud.kill(isPlayer ? 'Tú' : attacker?.name || '???', bot.name, isPlayer ? weaponName : weaponName || 'AR');
     this.effects.burst(bot.position.clone().add(new THREE.Vector3(0, 1.2, 0)), 22, [0xff4d5e, 0x9b1c2e], { speed: 4, life: 0.8 });
-    if (this.loot) {
+    if (!this.training && this.loot) {
       const drop = randomLoot(Math.random);
       const angle = Math.random() * Math.PI * 2;
       const pos = bot.position.clone().add(new THREE.Vector3(Math.cos(angle) * 1.5, 0.2, Math.sin(angle) * 1.5));
       this.loot.createEntity(pos, drop, false);
+    }
+    if (this.training) {
+      setTimeout(() => {
+        if (this.mode !== 'playing') return;
+        const spots = this.world?.spawnPoints || [{ x: 0, y: 0, z: 0 }];
+        const sp = spots[Math.floor(Math.random() * spots.length)];
+        bot.alive = true;
+        bot.deathTimer = 0;
+        bot.character.health = bot.character.maxHealth || 100;
+        bot.position.set(sp.x, 0, sp.z);
+        bot.velocity.set(0, 0, 0);
+        bot.character.group.visible = true;
+        bot.character.play('idle');
+        bot.character.group.position.copy(bot.position);
+      }, 1500);
+      return;
     }
     if (this.bots.every((b) => !b.alive)) this.endMatch(true);
   }
@@ -547,18 +801,98 @@ export class Game {
     this.loop();
   }
 
+  renderWaterRefraction() {
+    if (!this.world?.hasWater?.() || this.paused) return;
+    if (Number(this.settings.get('waterQuality') || 0) < 1) return;
+    try {
+      this.world.setWaterVisible(false);
+      this.renderer.setRenderTarget(this.refractionTarget);
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      this.world.setWaterVisible(true);
+    }
+    this.world.setRefractionTexture(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+  }
+
+  renderWaterReflections() {
+    if (!this.world?.hasWater?.() || this.paused) return;
+    const waterQuality = Number(this.settings.get('waterQuality') || 0);
+    if (waterQuality < 1) {
+      this.world.setReflectionTexture?.(null, this.reflectionMatrix, false);
+      return;
+    }
+    const planeY = this.world.getReflectionPlaneY?.(this.player?.position || this.camera.position);
+    if (!Number.isFinite(planeY) || planeY <= -20) {
+      this.world.setReflectionTexture?.(null, this.reflectionMatrix, false);
+      return;
+    }
+
+    const camera = this.camera;
+    camera.updateMatrixWorld();
+    const reflector = this._reflectPos.set(camera.position.x, planeY, camera.position.z);
+    const view = this._reflectView.copy(camera.position).sub(reflector);
+    view.reflect(this._reflectNormal).negate().add(reflector);
+
+    this._reflectRotation.extractRotation(camera.matrixWorld);
+    const lookAt = this._reflectLook.set(0, 0, -1).applyMatrix4(this._reflectRotation).add(camera.position);
+    const target = this._reflectTarget.copy(reflector).sub(lookAt);
+    target.reflect(this._reflectNormal).negate().add(reflector);
+
+    const virtual = this.reflectionCamera;
+    virtual.position.copy(view);
+    virtual.up.set(0, 1, 0).applyMatrix4(this._reflectRotation).reflect(this._reflectNormal);
+    virtual.lookAt(target);
+    virtual.near = camera.near;
+    virtual.far = camera.far;
+    virtual.fov = camera.fov;
+    virtual.aspect = camera.aspect;
+    virtual.projectionMatrix.copy(camera.projectionMatrix);
+    virtual.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    virtual.updateMatrixWorld();
+
+    this.reflectionMatrix.copy(this._biasMatrix)
+      .multiply(virtual.projectionMatrix)
+      .multiply(virtual.matrixWorldInverse);
+
+    const prevTarget = this.renderer.getRenderTarget();
+    const prevClipping = this.renderer.clippingPlanes;
+    this._reflectPlane.set(this._reflectNormal, -planeY);
+    try {
+      this.world.setWaterVisible(false);
+      this.renderer.clippingPlanes = [this._reflectPlane];
+      this.renderer.setRenderTarget(this.reflectionTarget);
+      this.renderer.render(this.scene, virtual);
+    } finally {
+      this.renderer.setRenderTarget(prevTarget);
+      this.renderer.clippingPlanes = prevClipping;
+      this.world.setWaterVisible(true);
+    }
+    this.world.setReflectionTexture(this.reflectionTarget.texture, this.reflectionMatrix, true, planeY);
+  }
+
   loop = () => {
     if (!this.running) return;
     requestAnimationFrame(this.loop);
     const dt = Math.min(0.05, this.clock.getDelta());
     const elapsed = this.clock.elapsedTime;
     if (!this.paused) {
+      this._cartoonTimer -= dt;
+      if (this._cartoonTimer <= 0) {
+        this._cartoonTimer = 0.75;
+        applyCartoonStyle(this.scene, this._cartoonCache);
+      }
       if (this.mode === 'preview') {
         this.updatePreview(dt, elapsed);
       } else if (this.mode === 'playing' && this.world && this.player) {
         this.updateMatch(dt);
       }
     }
+    this.renderWaterRefraction();
+    this.renderWaterReflections();
+    const uw = this.underwaterPass?.uniforms;
+    const uwActive = uw && (uw.uUnderwater.value > 0.002 || uw.uDropCount.value > 0);
+    this.useComposer = !!(this.bloomEnabled || uwActive);
     if (this.useComposer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
   };
@@ -575,6 +909,7 @@ export class Game {
 
     if (this.mode === 'playing' && player.alive) {
       this.syncWeaponModel();
+      this.world.playerState = { pos: player.position, vx: player.velocity.x, vy: player.velocity.y, vz: player.velocity.z, speed: Math.hypot(player.velocity.x, player.velocity.z), sprinting: player.sprinting, grounded: player.grounded, swimming: player.swimming };
       player.update(dt, this.input);
 
       if (player.inBus) {
@@ -592,18 +927,69 @@ export class Game {
         if (this.input.buttons.has(0)) this.fire();
         if (this.input.isDown('KeyR')) player.inventory.reload();
         const near = this.loot.findNear(player.position, 3.4);
+        const nearDoor = this.world.findNearestDoor ? this.world.findNearestDoor(player.position, 2.6) : null;
         this.pickupLatch = this.pickupLatch || false;
+        this.doorOpening = this.doorOpening || null;
         if (this.input.isDown('KeyB') && !this.buildToggleLatch) { this.buildToggleLatch = true; const on = this.building.toggle(); this.hud.toast(on ? 'Modo construcción ON (Q/E rotar, clic colocar)' : 'Modo construcción OFF', on ? 'good' : 'warn'); }
-    if (!this.input.isDown('KeyB')) this.buildToggleLatch = false;
-    if (this.building?.enabled) this.building.update(this.player, this.camera, this.input);
-    if (this.input.isDown('KeyE') && near && !this.pickupLatch) {
-          const res = this.loot.interact(near, player);
-          if (res) this.hud.toast(res.text, res.color === '#5bd88a' ? 'good' : '');
-          this.audio.play('click');
-          this.pickupLatch = true;
-          this.syncWeaponModel();
+        if (!this.input.isDown('KeyB')) this.buildToggleLatch = false;
+        if (this.building?.enabled) this.building.update(this.player, this.camera, this.input);
+
+        // Auto-abrir puertas al correr (solo en suelo, para no atravesarlas saltando)
+        if (nearDoor && !nearDoor.targetOpen) {
+          const sp = Math.hypot(player.velocity.x, player.velocity.z);
+          if (player.sprinting && sp > 3.5 && player.grounded && !player.jumping) { this.world.setDoorOpen(nearDoor, true); nearDoor.autoClose = 2.5; }
         }
-        if (!this.input.isDown('KeyE')) this.pickupLatch = false;
+
+        // Interacción: cofres/puertas con canalización + progreso circular
+        const holdE = this.input.isDown('KeyE');
+        if (this.chestOpening) {
+          const co = this.chestOpening;
+          const stillNear = co.entity && !co.entity.dead && co.entity.pos.distanceToSquared(player.position) < 3.6 * 3.6;
+          if (!holdE || !stillNear || !player.alive) {
+            this.chestOpening = null;
+          } else {
+            co.time += dt;
+            player.character.play('chestOpen', 0.08);
+            if (co.time >= co.duration) {
+              const res = this.loot.interact(co.entity, player);
+              if (res) this.hud.toast(res.text, res.color === '#5bd88a' ? 'good' : '');
+              this.audio.play('click');
+              this.syncWeaponModel();
+              this.chestOpening = null;
+              this.pickupLatch = true;
+            }
+          }
+        } else if (this.doorOpening) {
+          const od = this.doorOpening;
+          const stillNearDoor = od.entity && this.world.findNearestDoor(player.position, 3.0) === od.entity;
+          if (!holdE || !stillNearDoor || !player.alive) {
+            this.doorOpening = null;
+          } else {
+            od.time += dt;
+            if (od.time >= od.duration) {
+              const opened = this.world.toggleDoor(od.entity);
+              if (od.entity) od.entity.autoClose = 2.5;
+              this.hud.toast(opened ? 'Puerta abierta' : 'Puerta cerrada', 'good');
+              this.audio.play('click');
+              this.doorOpening = null;
+              this.pickupLatch = true;
+            }
+          }
+        } else if (holdE && near && !this.pickupLatch) {
+          if (near.isChest) {
+            this.chestOpening = { entity: near, time: 0, duration: 1.0 };
+            player.character.play('chestOpen', 0.08);
+          } else {
+            const res = this.loot.interact(near, player);
+            if (res) this.hud.toast(res.text, res.color === '#5bd88a' ? 'good' : '');
+            this.audio.play('click');
+            this.pickupLatch = true;
+            this.syncWeaponModel();
+          }
+        } else if (holdE && nearDoor && !this.pickupLatch) {
+          this.doorOpening = { entity: nearDoor, time: 0, duration: 0.5 };
+        }
+        if (!holdE) { this.pickupLatch = false; if (this.chestOpening) this.chestOpening = null; if (this.doorOpening) this.doorOpening = null; }
       }
     } else if (player && !player.alive) {
       player.character.update(dt);
@@ -616,11 +1002,12 @@ export class Game {
     if (player.alive) this.audio.applyDeaf(!!this.settings.get('deafMode'));
 
     // Tormenta y daño ambiental
-    if (player.inBus && this.matchTime > 8) this.storm.start();
-    if (!player.inBus && !this.storm.active) this.storm.start();
-    this.storm.update(dt, player.position);
-    this.stormDamageTimer -= dt;
-    if (this.stormDamageTimer <= 0 && this.storm.active) {
+    if (!this.training) {
+      if (player.inBus && this.matchTime > 8) this.storm.start();
+      if (!player.inBus && !this.storm.active) this.storm.start();
+      this.storm.update(dt, player.position);
+      this.stormDamageTimer -= dt;
+      if (this.stormDamageTimer <= 0 && this.storm.active) {
       this.stormDamageTimer = 0.5;
       if (player.alive) {
         const dmg = this.storm.damageAt(player.position);
@@ -634,10 +1021,12 @@ export class Game {
           if (killed) this.handleBotDeath(bot, { name: 'la tormenta' }, 'Tormenta');
         }
       }
+      }
     }
 
     this.world.update(player.position);
     this.world.tick(dt);
+    this.world.updateDetailVisibility(player.position);
     this.loot.update(dt, this.matchTime);
     this.effects.update(dt);
     this.hud.update(this, dt);

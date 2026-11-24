@@ -25,12 +25,18 @@ const SCREENS = {
 function Loading({ loading }) {
   return (
     <div id="loading-screen" className={loading.visible ? '' : 'hidden'}>
-      <div className="loader-logo">
-        <span className="loader-o">O</span><span className="loader-gun">▰</span>
+      <img className="splash-art" src="./assets/opennite-splash.png" alt="" aria-hidden="true" draggable="false" />
+      <div className="splash-vignette" />
+      <div className="splash-content">
+        <div className="splash-status">
+          <span className="splash-kicker">OPENNITE</span>
+          <span id="loader-text">{loading.text}</span>
+        </div>
+        <div className="splash-progress">
+          <div className="splash-progress-track"><div id="loader-fill" style={{ width: `${loading.percent ?? 0}%` }} /></div>
+          <span className="splash-percent">{Math.round(loading.percent ?? 0)}%</span>
+        </div>
       </div>
-      <div className="loader-title">OPENNITE</div>
-      <div className="loader-bar"><div id="loader-fill" style={{ width: `${loading.percent}%` }} /></div>
-      <div id="loader-text">{loading.text}</div>
     </div>
   );
 }

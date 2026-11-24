@@ -1,0 +1,5 @@
+﻿const ws=new WebSocket('');
+ws.addEventListener('open',()=>ws.send(JSON.stringify({id:1,method:'Runtime.evaluate',params:{expression:(()=>{try{const g=window.__opennite; const p=g?.game?.player; const c=p?.character; const k=c?.kitChar; const root=k?.root; let meshes=0,vis=0; root?.traverse(o=>{if(o.isMesh){meshes++; if(o.visible) vis++;}}); const box=root?new THREE.Box3().setFromObject(root):null; const size=box?{x:+(box.max.x-box.min.x).toFixed(2),y:+(box.max.y-box.min.y).toFixed(2),z:+(box.max.z-box.min.z).toFixed(2)}:null; return JSON.stringify({mixamo:!!k?._mixamoTest,meshes,vis,size,rootScale:root?.scale?.toArray(),holderPos:k?.holder?.position?.toArray()});}catch(e){return String(e)}})(),returnByValue:true}})));
+ws.addEventListener('message',(e)=>{const d=JSON.parse(e.data); if(d.id===1){console.log(d.result?.result?.value||JSON.stringify(d.result?.exceptionDetails||d)); ws.close(); process.exit(0);} });
+ws.addEventListener('error',()=>{console.log('err'); process.exit(1);});
+setTimeout(()=>{console.log('timeout'); process.exit(0);},6000);

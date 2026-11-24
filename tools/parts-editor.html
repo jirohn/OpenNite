@@ -13,7 +13,7 @@
 </script>
 <style>
   html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0b0d12; color:#e6e8ee; font-family:'Segoe UI',system-ui,sans-serif; }
-  #viewport { position:fixed; inset:0 300px 0 260px; }
+  #viewport { position:fixed; inset:0 300px 0 260px; min-height:360px; }
   canvas { width:100%; height:100%; display:block; }
   .panel { position:fixed; top:0; bottom:0; background:rgba(12,16,24,.96); border:1px solid #27303f; backdrop-filter:blur(4px); overflow:auto; padding:12px; box-sizing:border-box; }
   #left { left:0; width:260px; border-left:none; border-top:none; border-bottom:none; }
@@ -55,6 +55,8 @@
   <label>Categoría</label>
   <select id="partCategory">
     <option value="wall">Pared</option>
+    <option value="wall_corner">Pared con esquina</option>
+    <option value="column">Columna</option>
     <option value="wall_door">Pared con puerta</option>
     <option value="wall_window">Pared con ventana</option>
     <option value="floor">Suelo</option>
@@ -64,8 +66,10 @@
   </select>
   <label>Tamaño de celda/grid (u)</label>
   <input id="gridSize" type="number" step="0.5" value="2" />
-  <div class="row"><button class="primary" id="savePart">Guardar parte</button><button id="loadPart">Cargar JSON</button></div>
-  <div class="row"><button id="newPart">Nueva</button><button id="exportPart">Copiar JSON</button></div>
+  <div class="row"><button class="primary" id="savePart">Guardar parte</button><button id="loadPart">Cargar archivo</button></div>
+  <input id="loadPartFile" type="file" accept="application/json,.json" style="display:none" />
+  <div class="row"><button id="newPart">Nueva</button><button id="pastePart">Pegar JSON</button></div>
+  <div class="row"><button id="exportPart" style="width:100%">Actualizar/Copiar JSON</button></div>
   <textarea id="partJson" readonly style="width:100%;height:70px;margin-top:4px;background:#0f141b;color:#a9b7c9;border:1px solid #27303f;border-radius:6px;font-size:10px"></textarea>
 
   <h3>Añadir shape</h3>
@@ -74,6 +78,68 @@
     <button data-add="plane">Plano</button>
     <button data-add="cylinder">Cilindro</button>
     <button data-add="wedge">Rampa/Cuña</button>
+    <button data-add="sphere">Esfera (madre)</button>
+    <button data-add="cone">Cono (trueno)</button>
+  </div>
+
+  <h3>Plantillas rápidas</h3>
+  <div class="grid2">
+    <button id="tplWall">Pared</button>
+    <button id="tplWallCorner">Esquina de pared</button>
+    <button id="tplColumn">Columna</button>
+    <button id="tplWallWindow">Pared+ventana</button>
+    <button id="tplWallDoor">Pared+puerta</button>
+    <button id="tplFloor">Suelo</button>
+    <button id="tplRoof">Techo</button>
+    <button id="tplStairs">Escalera</button>
+    <button id="tplRoadStoneBump">Bache piedra</button>
+    <button id="tplRoadWoodSpike">Extremo de madera (esfera/corte)</button>
+  </div>
+
+  <h3>Plantillas de mapa (SIN modelos de cáracter)</h3>
+  <div class="grid2">
+    <button id="tplMapRoad">Road placeholder</button>
+    <button id="tplMapPath">Camino placeholder</button>
+    <button id="tplMapFence">Valla placeholder</button>
+    <button id="tplMapTree">Árbol placeholder</button>
+    <button id="tplMapRock">Roca placeholder</button>
+    <button id="tplMapChest">Cofre placeholder</button>
+    <button id="tplMapWeaponSpawn">Spawn arma placeholder</button>
+    <button id="tplMapLootSpawn">Spawn saqueo placeholder</button>
+    <button id="tplMapSpawnZone">Zona spawn placeholder</button>
+  </div>
+
+  <h3>Objetos del map editor (sin personajes)</h3>
+  <div class="grid2">
+    <button id="tplMeHouse">Casa</button>
+    <button id="tplMeCabin">Cabaña</button>
+    <button id="tplMeTower">Torre</button>
+    <button id="tplMeContainer">Contenedor</button>
+    <button id="tplMeWall">Muro</button>
+    <button id="tplMeWallCorner">Esquina</button>
+    <button id="tplMeColumn">Columna</button>
+    <button id="tplMeWallDoor">Pared con puerta</button>
+    <button id="tplMeWallWindow">Pared con ventana</button>
+    <button id="tplMeFloor">Suelo</button>
+    <button id="tplMeRoof">Techo</button>
+    <button id="tplMeStairs">Escaleras</button>
+    <button id="tplMeRoad">Camino del map editor</button>
+    <button id="tplMePath">Camino línea</button>
+    <button id="tplMeChest">Cofre del map editor</button>
+    <button id="tplMeWeaponSpawn">Spawn de arma</button>
+    <button id="tplMeSpawn">Spawn general</button>
+    <button id="tplMeLootSpawn">Spawn de saqueo</button>
+    <button id="tplMeTreeRound">Árbol redondo</button>
+    <button id="tplMeTreePine">Pino</button>
+    <button id="tplMeTreePalm">Palmera</button>
+    <button id="tplMeTreeTall">Árbol alto</button>
+    <button id="tplMeTreeBirch">Abedul</button>
+    <button id="tplMeTreeDead">Árbol seco</button>
+    <button id="tplMeTreeWillow">Sauce</button>
+    <button id="tplMeTreeAutumn">Árbol otoñal</button>
+    <button id="tplMeRockBig">Roca grande</button>
+    <button id="tplMeRockSmall">Piedras</button>
+    <button id="tplMeGrass">Césped</button>
   </div>
 
   <h3>Herramientas</h3>
@@ -109,10 +175,11 @@
 
   <h3>Ayuda</h3>
   <div class="hint">
-    - <b>Extrusor</b>: marca un shape como volumen que recorta (ventana/puerta). En el editor se ve rojo translúcido.<br>
-    - <b>Agrupar</b>: crea un grupo con los objetos seleccionados (Ctrl+clic en lista para multi-selección, soporte básico: agrupa selección actual).<br>
-    - <b>Snap</b>: ajusta movimiento/escala a la celda.<br>
-    - Las partes se guardan como JSON (config/parts o descarga) para usarlas en el sandbox/mapa.
+    - <b>Extrusor</b>: marca un shape como volumen que recorta (ventana/puerta). En el editor se ve rojo translúcido (marcador de recorte/CSG visual).<br>
+    - <b>Agrupar/Desagrupar</b>: organiza objetos en grupos para moverlos juntos.<br>
+    - <b>Snap</b>: ajusta movimiento/rotación/escala a la celda.<br>
+    - Usa plantillas rápidas y modifícalas con W/E/R. Guarda como JSON en <code>config/parts</code> (Electron) o descárgalo.
+  </div>
   </div>
 </div>
 

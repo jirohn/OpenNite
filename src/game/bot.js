@@ -13,7 +13,7 @@ const BOT_COLORS = [
   0x9bd3ff, 0xd6a25a, 0x8fd694, 0xd975d9,
 ];
 
-const WATER_FLOAT = 0.45;
+const WATER_FLOAT = 1.1;
 
 const DIFFICULTY = {
   easy:   { accuracy: 0.085, reaction: 0.85, aimSpeed: 2.4, rpm: 180, damage: 0.75, view: 90,  fov: 95,  burst: [2, 3], pause: [0.9, 1.8] },
@@ -67,6 +67,13 @@ export class Bot {
     this.aimErrYaw = 0;
     this.aimErrPitch = 0;
     this.aimErrTimer = 0;
+    // Caché de línea de visión (costosa): evita recalcular cada frame.
+    this.losTimer = 0;
+    this.losFront = false;
+    this.losAny = false;
+    this._losTarget = null;
+    this._eyeTmp = new THREE.Vector3();
+    this._toTmp = new THREE.Vector3();
   }
 
   get eye() {
@@ -122,8 +129,9 @@ export class Bot {
       if (Math.abs(delta) > halfFov) return false;
     }
     // Muestreo barato del terreno
-    for (let i = 1; i <= 7; i++) {
-      const t = (i / 8) * dist;
+    const steps = 5;
+    for (let i = 1; i <= steps; i++) {
+      const t = (i / (steps + 1)) * dist;
       const x = from.x + dir.x * t;
       const y = from.y + dir.y * t;
       const z = from.z + dir.z * t;
@@ -261,6 +269,18 @@ export class Bot {
       return;
     }
 
+    if (this.passive) {
+      const floor = this.world.heightAt(this.position.x, this.position.z);
+      this.position.y = floor;
+      this.velocity.set(0, 0, 0);
+      this.grounded = true;
+      this.character.play('idle');
+      this.character.group.position.copy(this.position);
+      this.character.group.rotation.y = this.yaw;
+      this.character.update(dt);
+      return;
+    }
+
     const floor = this.world.heightAt(this.position.x, this.position.z);
     const waterY = this.world.waterLevel ?? -100;
     const deepWater = waterY > -20 && floor < waterY - 0.55;
@@ -294,6 +314,7 @@ export class Bot {
       };
 
       this.thinkTimer -= dt;
+      this.losTimer -= dt;
       if (this.thinkTimer <= 0) {
         this.thinkTimer = 0.35 + Math.random() * 0.45;
         const prev = this.target;
@@ -303,6 +324,7 @@ export class Bot {
           this.acquireTimer = Math.max(this.acquireTimer, this.diff.reaction * (0.8 + Math.random() * 0.7));
           this.burstLeft = 0;
           this.burstPause = Math.max(this.burstPause, 0.15 + Math.random() * 0.25);
+          this.losTimer = 0; // recalcular LOS con nuevo objetivo
         }
       }
       this.strafeTimer -= dt;
@@ -326,9 +348,18 @@ export class Bot {
         const approach = d > 55 ? 1 : d < 12 ? -0.45 : 0.2;
         moveDir.set(nx * approach - nz * this.strafe * 0.55, 0, nz * approach + nx * this.strafe * 0.55);
 
-        const to = this.target.eye || this.target.position;
-        const visibleFront = this.canSee(this.eye, to, 170, { checkFov: true });
-        const visibleAny = this.canSee(this.eye, to, 170);
+        // LOS costosa: cachear y recalcular a intervalos (o al cambiar objetivo).
+        if (this._losTarget !== this.target || this.losTimer <= 0) {
+          const to = this.target.eye || this.target.position;
+          // Chequeo frontal primero: evita doble canSee cuando no hay FOV.
+          this.losFront = this.canSee(this.eye, to, 170, { checkFov: true });
+          this.losAny = this.losFront ? true : this.canSee(this.eye, to, 170);
+          this._losTarget = this.target;
+          this.losTimer = 0.12 + Math.random() * 0.08;
+        }
+        const visibleFront = this.losFront;
+        const visibleAny = this.losAny;
+
         // Girar para encarar: rápido si le acaban de disparar, si no humano.
         const turnRate = (this.time - this.lastHitAt < 1.5) ? Math.max(4.5, this.diff.aimSpeed) : this.diff.aimSpeed;
         turnTo(desiredYaw, turnRate);
@@ -353,6 +384,7 @@ export class Bot {
         }
         // Reducir temporizadores de combate cuando no hay objetivo.
         this.acquireTimer = Math.max(0, this.acquireTimer - dt * 0.5);
+        this._losTarget = null;
       }
 
       // Huir de la tormenta
@@ -382,7 +414,7 @@ export class Bot {
 
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.z * dt;
-    this.world.resolveCollision(this.position, 0.42, 1.8);
+    this.world.resolveCollision(this.position, 0.34, 1.8);
     const prevY = this.position.y;
     this.position.y += this.velocity.y * dt;
     const floor2 = this.world.groundAt(this.position.x, this.position.z, prevY, this.position.y);
@@ -402,8 +434,27 @@ export class Bot {
       this.character.setLocomotion(planarSpeed, this.grounded, pose);
     }
     this.character.grounded = this.grounded;
-    this.character.update(dt);
-    this.character.group.visible = distance2D(this.position, player.position) < 320;
+    const dPlayer = distance2D(this.position, player.position);
+    const nearPlayer = dPlayer < 180;
+    const midPlayer = dPlayer < 420;
+    this.character.group.visible = dPlayer < 700;
+    if (nearPlayer) {
+      this.character.update(dt);
+      this._animAcc = 0;
+    } else if (midPlayer) {
+      // Lejos de cámara: animación a menor tasa para ahorrar CPU.
+      this._animAcc = (this._animAcc || 0) + dt;
+      if (this._animAcc >= 0.15) {
+        this.character.update(this._animAcc);
+        this._animAcc = 0;
+      }
+    } else {
+      this._animAcc = (this._animAcc || 0) + dt;
+      if (this._animAcc >= 0.35) {
+        this.character.update(this._animAcc);
+        this._animAcc = 0;
+      }
+    }
   }
 
   destroy() {

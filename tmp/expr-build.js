@@ -1,0 +1,1 @@
+(() => { const g=window.openniteApp?.game; return JSON.stringify({ hasBuilding: !!g?.building, enabled: g?.building?.enabled, pieces: g?.building?.pieces?.length }); })()

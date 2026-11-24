@@ -1,0 +1,10 @@
+{
+  "Extra_ClimbWall": "/models/opennite/characters/100avatars/anims/overrides/Extra_ClimbWall.json",
+  "Extra_FallingToRoll": "/models/opennite/characters/100avatars/anims/overrides/Extra_FallingToRoll.json",
+  "Extra_Slide": "/models/opennite/characters/100avatars/anims/overrides/Extra_Slide.json",
+  "Jump_Land": "/models/opennite/characters/100avatars/anims/overrides/Jump_Land.json",
+  "Roll": "/models/opennite/characters/100avatars/anims/overrides/Roll.json",
+  "Death01": "/models/opennite/characters/100avatars/anims/overrides/Death01.json",
+  "Dance_Loop": "/models/opennite/characters/100avatars/anims/overrides/Dance_Loop.json",
+  "Fixing_Kneeling": "/models/opennite/characters/100avatars/anims/overrides/Fixing_Kneeling.json"
+}

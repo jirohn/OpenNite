@@ -50,34 +50,58 @@ html, body {
 
 #ui .interactive, #ui button, #ui input, #ui select { pointer-events: auto; }
 
-/* ---------- Pantalla de carga ---------- */
+/* ---------- Splash screen (sustituye a la pantalla de carga) ---------- */
 #loading-screen {
   position: absolute;
   inset: 0;
   z-index: 100;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  background: radial-gradient(circle at 50% 45%, #1b2130 0%, #0b0d12 62%);
-  transition: opacity 0.5s ease;
+  overflow: hidden;
+  background: #05070b;
+  transition: opacity 0.6s ease;
 }
 #loading-screen.hidden { opacity: 0; pointer-events: none; }
-.loader-logo { position: relative; font-family: var(--font-title); font-size: 96px; line-height: 1; font-weight: 800; }
-.loader-o {
-  display: inline-block;
-  background: linear-gradient(140deg, #ffb347, #ff6a1f);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-shadow: 0 0 60px rgba(255, 138, 43, 0.3);
+.splash-art {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  object-position: center;
+  user-select: none;
+  animation: splash-zoom 12s ease-out both;
 }
-.loader-gun { color: var(--accent-2); font-size: 46px; margin-left: -14px; transform: rotate(-16deg); }
-.loader-title { font-family: var(--font-title); font-size: 30px; letter-spacing: 12px; font-weight: 700; color: var(--muted); }
-.loader-bar { width: min(340px, 70vw); height: 4px; background: rgba(255,255,255,0.09); border-radius: 99px; overflow: hidden; }
+.splash-vignette {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(0deg, rgba(4,6,10,0.92) 0%, rgba(4,6,10,0.35) 22%, transparent 55%),
+    radial-gradient(ellipse at 50% 38%, transparent 35%, rgba(4,6,10,0.55) 100%);
+}
+.splash-content {
+  position: absolute;
+  left: 50%; bottom: clamp(28px, 7vh, 84px);
+  transform: translateX(-50%);
+  width: min(560px, 78vw);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  text-align: center;
+}
+.splash-status { display: flex; flex-direction: column; gap: 5px; }
+.splash-kicker {
+  font: 700 12px/1 var(--font-title);
+  letter-spacing: 8px;
+  color: #fff;
+  text-shadow: 0 2px 12px #000;
+}
+#loader-text { font-size: 12px; color: rgba(255,255,255,0.78); letter-spacing: 0.6px; text-shadow: 0 2px 8px #000; }
+.splash-progress { display: flex; align-items: center; gap: 12px; width: 100%; }
+.splash-progress-track {
+  flex: 1; height: 5px; border-radius: 99px;
+  background: rgba(255,255,255,0.16); overflow: hidden;
+  box-shadow: 0 2px 14px rgba(0,0,0,0.5);
+}
 #loader-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.25s ease; }
-#loader-text { font-size: 12px; color: var(--muted); letter-spacing: 0.5px; }
+.splash-percent { min-width: 44px; font: 700 12px/1 var(--font-title); color: #fff; text-align: right; text-shadow: 0 2px 8px #000; }
+@keyframes splash-zoom { from { transform: scale(1.06); } to { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .splash-art { animation: none; } }
 
 /* ---------- Menús ---------- */
 .screen {
@@ -97,16 +121,14 @@ html, body {
 }
 
 .menu-top { display: flex; align-items: center; gap: 16px; padding: 26px 44px; }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand-mark {
-  width: 46px; height: 46px; border-radius: 13px;
-  background: linear-gradient(145deg, #ffb24d, #ff6b1a);
-  display: grid; place-items: center;
-  font-family: var(--font-title); font-size: 30px; font-weight: 800; color: #14171f;
-  box-shadow: 0 8px 26px rgba(255, 122, 30, 0.28);
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand-logo {
+  height: 54px; width: auto; max-width: 190px;
+  object-fit: contain; display: block;
+  filter: drop-shadow(0 6px 18px rgba(0,0,0,0.45));
 }
-.brand-name { font-family: var(--font-title); font-size: 26px; font-weight: 700; letter-spacing: 5px; }
-.brand-tag { font-size: 10px; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; margin-top: -3px; }
+.brand-copy { display: flex; flex-direction: column; }
+.brand-tag { font-size: 10px; color: var(--accent); letter-spacing: 2px; text-transform: uppercase; }
 .menu-version { margin-left: auto; font-size: 11px; color: var(--muted); border: 1px solid var(--line); padding: 6px 10px; border-radius: 6px; }
 
 .menu-body { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 0 44px 60px; max-width: 720px; }

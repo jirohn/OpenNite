@@ -121,6 +121,27 @@ class AppController {
     }
   }
 
+  async startTraining() {
+    this.setLoading(5, 'Cargando entrenamiento en la isla...');
+    try {
+      const id = this.resolveMapId(settings.get('mapId'));
+      const map = await this.maps.getMapData(id);
+      this.ui.clear();
+      await this.game.startMatch({
+        map,
+        training: true,
+        bots: 0,
+        difficulty: 'easy',
+      });
+      this.hideLoading();
+    } catch (error) {
+      console.error(error);
+      this.toast(`No se pudo iniciar entrenamiento: ${error.message}`, 'warn');
+      this.hideLoading();
+      this.ui.showMenu();
+    }
+  }
+
   requestPause() {
     if (!this.game || this.game.mode !== 'playing' || this.game.ending || this.game.paused) return;
     this.game.setPaused(true);
@@ -211,6 +232,18 @@ class AppController {
   openMapEditor() {
     if (this.input?.releaseLock) this.input.releaseLock();
     setTimeout(() => { window.location.assign('/tools/map-editor.html'); }, 30);
+  }
+
+  /** Abre la app aparte del Editor de partes/piezas (servida desde /tools/parts-editor.html). */
+  openPartsEditor() {
+    if (this.input?.releaseLock) this.input.releaseLock();
+    setTimeout(() => { window.location.assign('/tools/parts-editor.html'); }, 30);
+  }
+
+  /** Abre el Editor de Skins/Personajes (servido desde /tools/character-editor.html). */
+  openCharacterEditor() {
+    if (this.input?.releaseLock) this.input.releaseLock();
+    setTimeout(() => { window.location.assign('/tools/character-editor.html'); }, 30);
   }
 }
 

@@ -1,3 +1,5 @@
+import { normalizeMapData } from './map-system.mjs';
+
 const LOCAL_KEY = 'opennite.installed-maps.v1';
 const REMOTE_KEY = 'opennite.remote-catalog.v1';
 
@@ -88,7 +90,7 @@ export class MapManager {
     const installedVersion = Number(installed?.version || 0);
     // Si hay una versión incluida más nueva, se usa aunque el jugador tuviera
     // una copia antigua descargada. Así los cambios de tamaño llegan siempre.
-    if (installed && (!bundledVersion || installedVersion >= bundledVersion)) return installed;
+    if (installed && (!bundledVersion || installedVersion >= bundledVersion)) return normalizeMapData(installed);
 
     let data = null;
     try {
@@ -96,10 +98,11 @@ export class MapManager {
       if (res.ok && /json/i.test(res.headers.get('content-type') || '')) data = await res.json();
     } catch { /* se intenta la copia instalada a continuación */ }
     if (data) {
-      if (installed) this.installed.set(id, data);
-      return data;
+      const normalized = normalizeMapData(data);
+      if (installed) this.installed.set(id, normalized);
+      return normalized;
     }
-    if (installed) return installed;
+    if (installed) return normalizeMapData(installed);
     throw new Error(`Mapa "${id}" no encontrado`);
   }
 

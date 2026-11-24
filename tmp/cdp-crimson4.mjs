@@ -1,0 +1,4 @@
+﻿const ws=new WebSocket("ws://127.0.0.1:9222/devtools/page/C27FF7F2E4995C8A8D64FD31967F9893");
+ws.addEventListener("open",()=>{ws.send(JSON.stringify({id:1,method:"Runtime.evaluate",params:{expression:`(async()=>{try{await window.__ed.loadModelFromURL('/config/01_Crimsom.glb','01_Crimsom.glb'); await new Promise(r=>setTimeout(r,1500)); const e=window.__ed; return JSON.stringify({clips:e.clips.length,names:e.clips.map(c=>c.name).slice(0,12),cur:e.currentClip?.name});}catch(err){return String(err)}})()`,awaitPromise:true,returnByValue:true}}));});
+ws.addEventListener("message",(e)=>{const d=JSON.parse(e.data); if(d.id===1){console.log(d.result?.result?.value||JSON.stringify(d.result?.exceptionDetails||d)); ws.close(); process.exit(0);} });
+setTimeout(()=>{console.log('timeout'); process.exit(0);},25000);

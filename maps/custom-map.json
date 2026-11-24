@@ -1,0 +1,404 @@
+{
+  "base": "san-borondon",
+  "waterVegetation": 1,
+  "pieces": [
+    {
+      "type": "house",
+      "x": 16,
+      "y": 12,
+      "z": -4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 36,
+      "y": 13.5,
+      "z": 28,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 16.5,
+      "z": 20,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 19.5,
+      "z": 8,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 19,
+      "z": 4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 20.5,
+      "z": 0,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 44,
+      "y": 21,
+      "z": -4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 20,
+      "z": -4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 19.5,
+      "z": -8,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 44,
+      "y": 21,
+      "z": -8,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 44,
+      "y": 21.5,
+      "z": -12,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 20.5,
+      "z": -12,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 0,
+      "y": 13,
+      "z": 36,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 24,
+      "y": 13.5,
+      "z": 32,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 28,
+      "y": 13.5,
+      "z": 28,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 32,
+      "y": 15,
+      "z": 24,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 36,
+      "y": 15,
+      "z": 24,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 36,
+      "y": 16.5,
+      "z": 20,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 40,
+      "y": 17.5,
+      "z": 16,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 44,
+      "y": 20,
+      "z": 12,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 20,
+      "y": 11.5,
+      "z": -24,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 16,
+      "y": 11.5,
+      "z": -24,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 16,
+      "y": 12,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 8,
+      "y": 11,
+      "z": -16,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 4,
+      "y": 9,
+      "z": -12,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 0,
+      "y": 9,
+      "z": -8,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 0,
+      "y": 9,
+      "z": -4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": -4,
+      "y": 8.5,
+      "z": 4,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": -4,
+      "y": 8.5,
+      "z": 8,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": -4,
+      "y": 9,
+      "z": 12,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": -4,
+      "y": 9.5,
+      "z": 16,
+      "rot": 0
+    },
+    {
+      "type": "road",
+      "x": 0,
+      "y": 10,
+      "z": 16,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 20,
+      "y": 14,
+      "z": 8,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 32,
+      "y": 19.5,
+      "z": -16,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 32,
+      "y": 18.5,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 36,
+      "y": 18,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 40,
+      "y": 19.5,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 44,
+      "y": 20,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 48,
+      "y": 18.5,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 52,
+      "y": 19.5,
+      "z": -20,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 52,
+      "y": 21,
+      "z": -16,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 56,
+      "y": 20.5,
+      "z": -16,
+      "rot": 0
+    },
+    {
+      "type": "path",
+      "x": 20,
+      "y": 14,
+      "z": 4,
+      "rot": 0
+    },
+    {
+      "type": "grass",
+      "x": 31,
+      "y": 17.5,
+      "z": -5,
+      "rot": 5.239937239951417,
+      "scale": 1.45
+    },
+    {
+      "type": "grass",
+      "x": 32,
+      "y": 17.75,
+      "z": -6,
+      "rot": 0.6538707002503694,
+      "scale": 1.09
+    },
+    {
+      "type": "grass",
+      "x": 31,
+      "y": 17.5,
+      "z": -4,
+      "rot": 2.8748342068804655,
+      "scale": 0.88
+    },
+    {
+      "type": "grass",
+      "x": 32,
+      "y": 18,
+      "z": -5,
+      "rot": 2.4322942001795775,
+      "scale": 0.94
+    },
+    {
+      "type": "grass",
+      "x": 29,
+      "y": 17.5,
+      "z": -7,
+      "rot": 2.5373720204760097,
+      "scale": 0.79
+    },
+    {
+      "id": "wind_mwuws0ep",
+      "type": "wind",
+      "x": 30,
+      "y": 17,
+      "z": 8,
+      "rot": 0,
+      "strength": 2.5,
+      "radius": 40,
+      "name": "Viento"
+    },
+    {
+      "id": "wind_mwuws6ce",
+      "type": "wind",
+      "x": 32,
+      "y": 19,
+      "z": -18,
+      "rot": 0,
+      "strength": 14.5,
+      "radius": 40,
+      "name": "Viento"
+    }
+  ],
+  "generated": true,
+  "terrain": {
+    "cell": 2,
+    "heights": []
+  },
+  "waterCells": [],
+  "id": "san-borondon",
+  "name": "Nuevo Mapa",
+  "theme": "temperate",
+  "size": 360,
+  "seed": 20261119,
+  "winds": [
+    {
+      "id": "wind_mwuws0ep",
+      "type": "wind",
+      "x": 30,
+      "y": 17,
+      "z": 8,
+      "rot": 0,
+      "strength": 2.5,
+      "radius": 40,
+      "name": "Viento"
+    },
+    {
+      "id": "wind_mwuws6ce",
+      "type": "wind",
+      "x": 32,
+      "y": 19,
+      "z": -18,
+      "rot": 0,
+      "strength": 14.5,
+      "radius": 40,
+      "name": "Viento"
+    }
+  ]
+}

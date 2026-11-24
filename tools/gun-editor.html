@@ -47,7 +47,10 @@
 <canvas id="editor-canvas"></canvas>
 <div class="panel">
   <h2>Editor de armas <span class="tag">UBC/Unreal rig</span></h2>
-  <small class="hint">Modelo base UBC + arma editable. Ejes: <b style="color:#ff4444">X rojo</b>, <b style="color:#3ccb3c">Y verde</b>, <b style="color:#445bff">Z azul</b>. Clic en un eje del gizmo para mover solo en ese eje. Undo: Ctrl+Z.</small>
+  <small class="hint">Modelo base UBC + arma editable. Ejes: <b style="color:#ff4444">X rojo</b>, <b style="color:#3ccb3c">Y verde</b>, <b style="color:#445bff">Z azul</b>. Clic en un eje del gizmo para mover el arma. Undo: Ctrl+Z.</small>
+
+  <h3>Personaje</h3>
+  <select id="skinSel"></select>
 
   <h3>Arma</h3>
   <select id="weaponType"></select>
@@ -57,10 +60,8 @@
   <small class="hint">Arrastra sobre el modelo para orbitar la cámara · rueda para zoom.</small>
 
   <h3>Jerarquía</h3>
-  <div class="row"><button class="ghost" id="selWeapon">🎯 Arma (mano der.)</button></div>
-  <div class="row"><button class="ghost" id="selSupport">🤚 IK mano izquierda</button></div>
-  <div class="row"><button class="ghost" id="selRightIk">🤚 IK mano derecha</button></div>
-  <div class="row"><button class="ghost" id="selScene">⚙ Escena / visual</button></div>
+  <div class="row"><button class="ghost activeSel" id="selWeapon">Arma (mano der.)</button></div>
+  <div class="row"><button class="ghost" id="selScene">Escena / visual</button></div>
   <small class="hint" id="activeHint">Activo: Arma (mano derecha)</small>
 
   <div class="section active" data-for="weaponPos" id="secWeapon">
@@ -71,25 +72,6 @@
     <div class="sl"><span>Rot. X°</span><span id="rvX"></span><input type="range" id="rotX" min="-180" max="180" step="0.5"></div>
     <div class="sl"><span>Rot. Y°</span><span id="rvY"></span><input type="range" id="rotY" min="-180" max="180" step="0.5"></div>
     <div class="sl"><span>Rot. Z°</span><span id="rvZ"></span><input type="range" id="rotZ" min="-180" max="180" step="0.5"></div>
-  </div>
-
-  <div class="section" data-for="support" id="secSupport">
-    <h3>IK / Mano izquierda (agarre)</h3>
-    <div class="sl"><span>IK X</span><span id="sgXv"></span><input type="range" id="sgX" min="-1.2" max="1.2" step="0.01"></div>
-    <div class="sl"><span>IK Y</span><span id="sgYv"></span><input type="range" id="sgY" min="-1.2" max="1.2" step="0.01"></div>
-    <div class="sl"><span>IK Z</span><span id="sgZv"></span><input type="range" id="sgZ" min="-2" max="0.6" step="0.01"></div>
-    <div class="sl"><span>IK Rot X°</span><span id="sgrXv"></span><input type="range" id="sgrX" min="-180" max="180" step="0.5"></div>
-    <div class="sl"><span>IK Rot Y°</span><span id="sgrYv"></span><input type="range" id="sgrY" min="-180" max="180" step="0.5"></div>
-    <div class="sl"><span>IK Rot Z°</span><span id="sgrZv"></span><input type="range" id="sgrZ" min="-180" max="180" step="0.5"></div>
-    <div class="sl"><span>Fuerza IK izq.</span><span id="ikStrv"></span><input type="range" id="ikStr" min="0" max="1" step="0.01"></div>
-  </div>
-
-  <div class="section" data-for="rightIk" id="secRightIk">
-    <h3>IK / Mano derecha (mira)</h3>
-    <div class="sl"><span>IKDer X</span><span id="rikXv"></span><input type="range" id="rikX" min="-2" max="2" step="0.01"></div>
-    <div class="sl"><span>IKDer Y</span><span id="rikYv"></span><input type="range" id="rikY" min="-2" max="2" step="0.01"></div>
-    <div class="sl"><span>IKDer Z</span><span id="rikZv"></span><input type="range" id="rikZ" min="-2" max="2" step="0.01"></div>
-    <div class="sl"><span>Fuerza IK der.</span><span id="ikStrRv"></span><input type="range" id="ikStrR" min="0" max="1" step="0.01"></div>
   </div>
 
   <div class="section" data-for="scene" id="secScene">
@@ -111,22 +93,22 @@
     </div>
     <div class="toggle"><span>Contorno (outline) del personaje y el arma</span><div class="dot" id="outlineDot"></div></div>
 
-    <h3>Movimiento manual (off)</h3>
+    <h3>Movimiento manual</h3>
     <div class="toggle">
       <span id="manualLabel">Movimiento manual (off)</span>
       <div class="dot" id="manualDot"></div>
     </div>
 
-    <h3>Solapa del arma (readout)</h3>
+    <h3>Readout</h3>
     <div class="sl"><span>Muzzle (local)</span><span id="muzzleLocal"></span></div>
     <div class="sl"><span>Grip (local)</span><span id="gripLocal"></span></div>
-    <div class="sl"><span>SupportGrip (local)</span><span id="supportLocal"></span></div>
     <div class="sl"><span>Length</span><span id="lengthVal"></span></div>
+    <div class="sl"><span>handAlign</span><span id="handAlign"></span></div>
 
     <h3>Resultado en el mundo</h3>
-    <div class="sl"><span>Dirección del arma (X,Y,Z)</span><span id="gunFwd"></span></div>
-    <div class="sl"><span>Posición (X,Y,Z)</span><span id="gunPosWorld"></span></div>
-    <div class="sl"><span>Ang. al frente (max1)</span><span id="gunFwdAng"></span></div>
+    <div class="sl"><span>Dirección del arma</span><span id="gunFwd"></span></div>
+    <div class="sl"><span>Posición</span><span id="gunPosWorld"></span></div>
+    <div class="sl"><span>Ángulo frente</span><span id="gunFwdAng"></span></div>
   </div>
 
   <div class="row"><button class="primary" id="apply">Aplicar cambios</button><button class="ghost" id="reset">Reset</button></div>

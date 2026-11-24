@@ -1,0 +1,1 @@
+(() => { const s=window.scene||null; let m=0,g=0; if(s){s.traverse(o=>{if(o.isMesh)m++;if(o.isGroup)g++;});} return JSON.stringify({meshes:m,groups:g}); })()
