@@ -17,10 +17,12 @@ import { getCartoonGradient } from './cartoon.mjs';
 import { hash2, noise2 } from './utils.js';
 import {
   MODULAR_DIRS,
-  MODULAR_STAIR_STEPS,
+  modularStairSteps,
   modularKey,
   modularLevelY,
   modularCellTopAt,
+  modularCellCorners,
+  modularCornerCut,
 } from './modular-terrain.mjs';
 
 const PALETTE = {
@@ -47,6 +49,7 @@ const PALETTE = {
 };
 
 const COLLIDE_MIN_DROP = 0.45; // = MAX_STEP_UP del jugador
+const MODULAR_CORNER_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 const LIP = 0.32; // banda de césped que remata el acantilado
 const ROCK_ROW = 1.5; // alto aproximado de cada fila de facetas
 
@@ -120,7 +123,7 @@ export function makeModularTerrainMaterial() {
     gradientMap: getCartoonGradient(),
   });
   // Normales por cara (geometría no indexada): aspecto facetado sin flatShading.
-  mat.customProgramCacheKey = () => 'opennite-modular-terrain-v1';
+  mat.customProgramCacheKey = () => 'opennite-modular-terrain-v2';
   return mat;
 }
 
@@ -187,10 +190,84 @@ export function buildModularTerrainMesh(mod, opts = {}) {
   // ------------------------------------------------------- superficie de tesela
   const SUB = 4;
   const UP = [0, 1, 0];
+  /** Contorno en planta de una tesela con esquinas redondeadas (orden perimetral). */
+  const roundedOutline = (c, corners) => {
+    const cx = c.gx * T, cz = c.gz * T;
+    const out = [];
+    const sidePoint = (d, t) => {
+      const [dx, dz] = MODULAR_DIRS[d];
+      const perp = [-dz, dx];
+      return [cx + dx * T / 2 + perp[0] * (t - 0.5) * T, cz + dz * T / 2 + perp[1] * (t - 0.5) * T];
+    };
+    for (let i = 0; i < 4; i++) {
+      const k = corners[i];
+      if (!k) {
+        out.push({ x: cx + MODULAR_CORNER_SIGNS[i][0] * T / 2, z: cz + MODULAR_CORNER_SIGNS[i][1] * T / 2, corner: i });
+        continue;
+      }
+      for (const p of arcPoints(c, k, i)) out.push({ ...p, corner: i, arc: true });
+    }
+    return out;
+  };
+
+  /** Puntos del arco de la esquina i: desde el final del lado anterior al inicio del lado i. */
+  const arcPoints = (c, k, i) => {
+    const prev = (i + 3) % 4;
+    const [pdx, pdz] = MODULAR_DIRS[prev];
+    const pperp = [-pdz, pdx];
+    const [ndx, ndz] = MODULAR_DIRS[i];
+    const nperp = [-ndz, ndx];
+    const cx = c.gx * T, cz = c.gz * T;
+    const t1 = 1 - k.R / T, t0 = k.R / T;
+    const sx = cx + pdx * T / 2 + pperp[0] * (t1 - 0.5) * T, sz = cz + pdz * T / 2 + pperp[1] * (t1 - 0.5) * T;
+    const ex = cx + ndx * T / 2 + nperp[0] * (t0 - 0.5) * T, ez = cz + ndz * T / 2 + nperp[1] * (t0 - 0.5) * T;
+    let a0 = Math.atan2(sz - k.cz, sx - k.cx);
+    let a1 = Math.atan2(ez - k.cz, ex - k.cx);
+    let da = a1 - a0;
+    while (da > Math.PI) da -= Math.PI * 2;
+    while (da < -Math.PI) da += Math.PI * 2;
+    const n = Math.max(3, Math.ceil((k.R * Math.PI / 2) / 0.45));
+    const pts = [];
+    for (let j = 0; j <= n; j++) {
+      const a = a0 + da * (j / n);
+      const nx = Math.cos(a), nz = Math.sin(a);
+      pts.push({ x: k.cx + nx * k.R, z: k.cz + nz * k.R, nx, nz });
+    }
+    return pts;
+  };
+
   const buildTop = (c) => {
     if (c.shape === 'stairs') return;
     const cx = c.gx * T, cz = c.gz * T;
     const buf = bufFor(cx, cz);
+    const corners = c.round > 0 ? modularCellCorners(mod, c) : null;
+    if (corners && corners.some(Boolean)) {
+      // Abanico desde el centro hasta el contorno redondeado.
+      const y = modularLevelY(mod, c.level);
+      const outline = roundedOutline(c, corners);
+      const center = [cx, y, cz];
+      const cc = surfaceColor(c.surface, cx, y, cz, new THREE.Color());
+      for (let i = 0; i < outline.length; i++) {
+        const p = outline[i], q = outline[(i + 1) % outline.length];
+        const cp = surfaceColor(c.surface, p.x, y, p.z, new THREE.Color());
+        const cq = surfaceColor(c.surface, q.x, y, q.z, new THREE.Color());
+        buf.tri(center, [p.x, y, p.z], [q.x, y, q.z], cc, cp, cq, UP);
+      }
+      // Suelo del hueco que deja cada arco, a la altura de las vecinas.
+      for (let i = 0; i < 4; i++) {
+        const k = corners[i];
+        if (!k || k.outside) continue;
+        const arc = arcPoints(c, k, i);
+        const corner = [k.cornerX, k.y, k.cornerZ];
+        const fc = surfaceColor(k.surface, k.cornerX, k.y, k.cornerZ, new THREE.Color());
+        for (let j = 0; j < arc.length - 1; j++) {
+          const a = arc[j], b = arc[j + 1];
+          buf.tri(corner, [a.x, k.y, a.z], [b.x, k.y, b.z], fc, surfaceColor(k.surface, a.x, k.y, a.z, new THREE.Color()), surfaceColor(k.surface, b.x, k.y, b.z, new THREE.Color()), UP);
+        }
+      }
+      if (c.surface === 'cobble') buildCobbles(c, buf);
+      return;
+    }
     const step = T / SUB;
     const vtx = [];
     const cols = [];
@@ -232,6 +309,7 @@ export function buildModularTerrainMesh(mod, opts = {}) {
         const px = cx - T / 2 + (i + 0.5) * cellStep + (h1 - 0.5) * 0.22;
         const pz = cz - T / 2 + (j + 0.5) * cellStep + (h2 - 0.5) * 0.22;
         const r = cellStep * (0.4 + h3 * 0.08);
+        if (c.round > 0 && modularCornerCut(mod, c, px, pz)) continue;
         const sides = 6;
         const rot = h1 * Math.PI;
         const ring = [];
@@ -260,25 +338,73 @@ export function buildModularTerrainMesh(mod, opts = {}) {
   };
 
   // ------------------------------------------------------------ bordes
+  const STEPS = modularStairSteps(mod);
   const stairBoundaries = () => {
     const ts = [0, 1];
-    for (let k = 1; k < MODULAR_STAIR_STEPS; k++) {
-      ts.push(k / MODULAR_STAIR_STEPS - 5e-4, k / MODULAR_STAIR_STEPS + 5e-4);
+    for (let k = 1; k < STEPS; k++) {
+      ts.push(k / STEPS - 5e-4, k / STEPS + 5e-4);
     }
     return ts.sort((a, b) => a - b);
   };
-  const UNIFORM_T = [0, 0.25, 0.5, 0.75, 1];
+  /** Muestras a lo largo de un lado (≈1 m) entre t0 y t1. */
+  const uniformT = (t0, t1) => {
+    const n = Math.max(2, Math.ceil((t1 - t0) * T));
+    const ts = [];
+    for (let i = 0; i <= n; i++) ts.push(t0 + (t1 - t0) * (i / n));
+    return ts;
+  };
+
+  /** Colisionador fino a lo largo de un tramo recto (dentro de la tesela alta). */
+  const pushEdgeCollider = (pts) => {
+    let minTop = Infinity, maxBot = -Infinity, minBot = Infinity;
+    for (const p of pts) { minTop = Math.min(minTop, p.top); maxBot = Math.max(maxBot, p.bot); minBot = Math.min(minBot, p.bot); }
+    if (minTop - maxBot <= COLLIDE_MIN_DROP) return;
+    const th = 0.3;
+    const xs = [], zs = [];
+    for (const p of [pts[0], pts[pts.length - 1]]) {
+      xs.push(p.x, p.x - p.nx * th);
+      zs.push(p.z, p.z - p.nz * th);
+    }
+    colliders.push({
+      minX: Math.min(...xs), maxX: Math.max(...xs),
+      minY: minBot - 0.5, maxY: minTop,
+      minZ: Math.min(...zs), maxZ: Math.max(...zs),
+      role: 'terrainEdge',
+    });
+  };
 
   const buildEdges = (c) => {
     const cx = c.gx * T, cz = c.gz * T;
     const lowY = modularLevelY(mod, c.level);
+    const corners = c.round > 0 ? modularCellCorners(mod, c) : [null, null, null, null];
+    // Arcos de las esquinas redondeadas.
+    for (let i = 0; i < 4; i++) {
+      const k = corners[i];
+      if (!k) continue;
+      const arc = arcPoints(c, k, i).map((p) => ({ ...p, top: lowY, bot: Math.min(lowY, k.outside ? outsideY(p.x, p.z) : k.y) }));
+      if (arc.every((p) => p.top - p.bot <= 0.02)) continue;
+      const buf = bufFor(cx, cz);
+      if (c.edge === 'wall') {
+        for (let j = 0; j < arc.length - 1; j++) {
+          const a = arc[j], b = arc[j + 1];
+          const out = [(a.nx + b.nx) / 2, 0, (a.nz + b.nz) / 2];
+          buildWallFace(c, [{ ...a, t: 0 }, { ...b, t: 1 }], out, buf, j);
+        }
+      } else {
+        buildCliffFace(c, arc, null, buf);
+      }
+      for (let j = 0; j < arc.length - 1; j++) pushEdgeCollider([arc[j], arc[j + 1]]);
+    }
     for (let d = 0; d < 4; d++) {
       const [dx, dz] = MODULAR_DIRS[d];
       const n = cellAt(c.gx + dx, c.gz + dz);
       const perp = [-dz, dx];
       const isLowSideOfStairs = c.shape === 'stairs' && d === (c.dir + 2) % 4;
       const stairsInvolved = (c.shape === 'stairs' && d % 2 !== c.dir % 2) || (n && n.shape === 'stairs' && d % 2 !== n.dir % 2);
-      const ts = stairsInvolved ? stairBoundaries() : UNIFORM_T;
+      const t0 = corners[d] ? corners[d].R / T : 0;
+      const t1 = corners[(d + 1) % 4] ? 1 - corners[(d + 1) % 4].R / T : 1;
+      if (t1 - t0 < 1e-3) continue;
+      const ts = stairsInvolved ? stairBoundaries() : uniformT(t0, t1);
       const ex = cx + dx * T / 2, ez = cz + dz * T / 2;
       const pts = [];
       let anyDrop = false;
@@ -287,16 +413,16 @@ export function buildModularTerrainMesh(mod, opts = {}) {
         const z = ez + perp[1] * (t - 0.5) * T;
         const ix = x - dx * 1e-3, iz = z - dz * 1e-3;
         const ox = x + dx * 1e-3, oz = z + dz * 1e-3;
-        // Muestras en t = 0/1 se desplazan un poco hacia dentro del borde.
-        const tx = ix + perp[0] * (t === 0 ? 1e-3 : t === 1 ? -1e-3 : 0);
-        const tz = iz + perp[1] * (t === 0 ? 1e-3 : t === 1 ? -1e-3 : 0);
+        // Muestras en los extremos se desplazan un poco hacia dentro del borde.
+        const tx = ix + perp[0] * (t <= t0 ? 1e-3 : t >= t1 ? -1e-3 : 0);
+        const tz = iz + perp[1] * (t <= t0 ? 1e-3 : t >= t1 ? -1e-3 : 0);
         const top = isLowSideOfStairs ? lowY : modularCellTopAt(mod, c, tx, tz);
-        const bx = ox + perp[0] * (t === 0 ? 1e-3 : t === 1 ? -1e-3 : 0);
-        const bz = oz + perp[1] * (t === 0 ? 1e-3 : t === 1 ? -1e-3 : 0);
+        const bx = ox + perp[0] * (t <= t0 ? 1e-3 : t >= t1 ? -1e-3 : 0);
+        const bz = oz + perp[1] * (t <= t0 ? 1e-3 : t >= t1 ? -1e-3 : 0);
         let bot = n ? modularCellTopAt(mod, n, bx, bz) : outsideY(x, z);
         if (bot > top) bot = top;
         if (top - bot > 0.02) anyDrop = true;
-        pts.push({ x, z, top, bot, t });
+        pts.push({ x, z, top, bot, t, nx: dx, nz: dz });
       }
       if (!anyDrop) continue;
       const buf = bufFor(cx, cz);
@@ -304,30 +430,16 @@ export function buildModularTerrainMesh(mod, opts = {}) {
       const style = c.shape === 'stairs' ? 'stone' : c.edge;
       if (style === 'wall') buildWallFace(c, pts, out, buf, d);
       else if (style === 'stone') buildStoneFace(pts, out, buf);
-      else buildCliffFace(c, pts, out, buf, perp);
+      else buildCliffFace(c, pts, out, buf);
 
       // Colisionador fino dentro de la tesela alta: bots y balas lo respetan.
-      let minTop = Infinity, maxBot = -Infinity, minBot = Infinity;
-      for (const p of pts) { minTop = Math.min(minTop, p.top); maxBot = Math.max(maxBot, p.bot); minBot = Math.min(minBot, p.bot); }
-      if (minTop - maxBot > COLLIDE_MIN_DROP) {
-        const th = 0.3;
-        const ax = pts[0].x, az = pts[0].z, bx = pts[pts.length - 1].x, bz = pts[pts.length - 1].z;
-        const ix = -dx * th, iz = -dz * th;
-        colliders.push({
-          minX: Math.min(ax, bx, ax + ix, bx + ix),
-          maxX: Math.max(ax, bx, ax + ix, bx + ix),
-          minY: minBot - 0.5,
-          maxY: minTop,
-          minZ: Math.min(az, bz, az + iz, bz + iz),
-          maxZ: Math.max(az, bz, az + iz, bz + iz),
-          role: 'terrainEdge',
-        });
-      }
+      pushEdgeCollider(pts);
     }
   };
 
   /** Acantilado: banda de césped + roca facetada que se hunde hacia dentro. */
-  const buildCliffFace = (c, pts, out, buf, perp) => {
+  const buildCliffFace = (c, pts, _out, buf) => {
+    const qOut = (a, b) => [(a.nx + b.nx) / 2, 0, (a.nz + b.nz) / 2];
     const lipHex = c.surface === 'grass' ? PALETTE.lipGrass : c.surface === 'path' ? PALETTE.pathDark : c.surface === 'sand' ? 0xd9c58a : PALETTE.wallStone2;
     const lipCol = new THREE.Color(lipHex);
     const lipCol2 = shade(lipHex, 0.82);
@@ -337,7 +449,7 @@ export function buildModularTerrainMesh(mod, opts = {}) {
     for (let i = 0; i < K - 1; i++) {
       const p = pts[i], q = pts[i + 1];
       if (p.top - p.bot < 0.02 && q.top - q.bot < 0.02) continue;
-      buf.quad([p.x, p.top, p.z], [q.x, q.top, q.z], [q.x, lipY[i + 1], q.z], [p.x, lipY[i], p.z], lipCol, out, lipCol, lipCol2, lipCol2);
+      buf.quad([p.x, p.top, p.z], [q.x, q.top, q.z], [q.x, lipY[i + 1], q.z], [p.x, lipY[i], p.z], lipCol, qOut(p, q), lipCol, lipCol2, lipCol2);
     }
     // Roca facetada
     let maxRock = 0;
@@ -345,7 +457,10 @@ export function buildModularTerrainMesh(mod, opts = {}) {
     if (maxRock < 0.05) return;
     const R = Math.max(1, Math.ceil(maxRock / ROCK_ROW));
     const grid = [];
-    const stairsLike = K > 5;
+    const stairsLike = pts.some((p, i) => i > 0 && Math.hypot(p.x - pts[i - 1].x, p.z - pts[i - 1].z) < 0.01);
+    let segLen = Infinity;
+    for (let i = 1; i < K; i++) segLen = Math.min(segLen, Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z) || Infinity);
+    if (!Number.isFinite(segLen)) segLen = 1;
     for (let i = 0; i < K; i++) {
       const p = pts[i];
       const colV = [];
@@ -359,13 +474,13 @@ export function buildModularTerrainMesh(mod, opts = {}) {
           // Cada columna tiene su propio "bloque" de roca: facetas grandes y verticales.
           const colBase = hpos(p.x, 0, p.z, seed + 79);
           const inset = j === R ? 0.08 + h * 0.15 : 0.12 + colBase * 0.45 + h * 0.25;
-          x -= out[0] * inset;
-          z -= out[2] * inset;
+          x -= p.nx * inset;
+          z -= p.nz * inset;
           if (j < R) y += (h2 - 0.5) * (lipY[i] - p.bot) / R * 0.45;
           if (!stairsLike) {
-            const along = (h2 - 0.5) * 0.35;
-            x += perp[0] * along;
-            z += perp[1] * along;
+            const along = (h2 - 0.5) * Math.min(0.35, segLen * 0.3);
+            x += -p.nz * along;
+            z += p.nx * along;
           }
         }
         colV.push([x, y, z]);
@@ -380,6 +495,7 @@ export function buildModularTerrainMesh(mod, opts = {}) {
         const h = hpos(a[0] + b[0], a[1], a[2] + b[2], seed + 91);
         rockColor((a[1] + cc[1]) / 2, h, col);
         const col2 = rockColor((a[1] + cc[1]) / 2, hpos(cc[0], cc[1], cc[2], seed + 92), new THREE.Color());
+        const out = qOut(pts[i], pts[i + 1]);
         if (h > 0.5) {
           buf.tri(a, b, cc, col, col, col, out);
           buf.tri(a, cc, d, col2, col2, col2, out);
@@ -501,7 +617,7 @@ export function buildModularTerrainMesh(mod, opts = {}) {
     const [dx, dz] = MODULAR_DIRS[c.dir];
     const perp = [-dz, dx];
     const low = modularLevelY(mod, c.level);
-    const steps = MODULAR_STAIR_STEPS;
+    const steps = STEPS;
     const sh = L / steps;
     const P = (u, w, y) => [cx - dx * T / 2 + dx * u * T + perp[0] * (w - 0.5) * T, y, cz - dz * T / 2 + dz * u * T + perp[1] * (w - 0.5) * T];
     const back = [-dx, 0, -dz];

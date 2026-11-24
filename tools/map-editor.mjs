@@ -30,6 +30,9 @@ import {
   modularIndex,
   normalizeModularTerrain,
   serializeModularTerrain,
+  resampleModularTerrain,
+  modularHeightAt,
+  modularLevelY,
 } from '../src/core/modular-terrain.mjs';
 
 const gltfLoader = new GLTFLoader();
@@ -410,7 +413,8 @@ for (let gx = -Math.floor(world.half); gx <= Math.floor(world.half); gx += 2) {
 worldGridDots.count = worldGridDotsCount;
 worldGridDots.instanceMatrix.needsUpdate = true;
 globalGrid.add(worldGridDots);
-globalGrid.visible = true;
+// La rejilla antigua de 2u queda oculta: la sustituye la rejilla 3D de teselas.
+globalGrid.visible = false;
 scene.add(globalGrid);
 window.globalGrid = globalGrid;
 _globalGridRef.current = globalGrid;
@@ -430,8 +434,7 @@ function updateGridSizeUI() {
 updateGridSizeUI();
 
 const gridVisibilityEl = document.querySelector('#gridVisibility');
-if (gridVisibilityEl) gridVisibilityEl.checked = globalGrid.visible;
-gridVisibilityEl?.addEventListener('change', () => { globalGrid.visible = gridVisibilityEl.checked; brushGhostGrid.visible = gridVisibilityEl.checked && mode !== 'select'; });
+gridVisibilityEl?.addEventListener('change', () => { tileGrid.visible = gridVisibilityEl.checked; brushGhostGrid.visible = gridVisibilityEl.checked && mode !== 'select'; });
 
 // Ghost del cursor: una celda de grid resaltada donde caerá la pieza, del tamaño exacto de activeGridSize
 const brushGhostGrid = (() => {
@@ -662,6 +665,8 @@ function pickTileAt(wx, wz) {
   set('#tileSurface', c.surface);
   set('#tileShape', c.shape);
   set('#tileEdge', c.edge);
+  set('#tileRound', Math.round((c.round || 0) * 100));
+  syncTileLabels();
   document.querySelector('#status').textContent = `Tesela ${c.gx},${c.gz}: nivel ${c.level}, ${c.surface}, ${c.shape}, borde ${c.edge}`;
 }
 
@@ -683,7 +688,7 @@ function applyTiles(wx, wz) {
       tileStroke.add(k);
       if (tool === 'erase') { if (tileCells.delete(k)) changed++; continue; }
       if (tool === 'paint') {
-        const c = { gx, gz, level, surface, shape: r === 0 ? shape : 'flat', dir: cur?.dir || 0, edge };
+        const c = { gx, gz, level, surface, shape: r === 0 ? shape : 'flat', dir: cur?.dir || 0, edge, round: Math.max(0, Math.min(1, (+tileVal('#tileRound', 0) || 0) / 100)) };
         if (c.shape !== 'flat') c.dir = autoTileDir(c);
         tileCells.set(k, c);
         changed++;
@@ -696,7 +701,8 @@ function applyTiles(wx, wz) {
         continue;
       }
       if (!cur) continue;
-      if (tool === 'surface') cur.surface = surface;
+      if (tool === 'round') cur.round = Math.max(0, Math.min(1, (+tileVal('#tileRound', 0) || 0) / 100));
+      else if (tool === 'surface') cur.surface = surface;
       else if (tool === 'edge') cur.edge = edge;
       else if (tool === 'shape') { cur.shape = shape; if (shape !== 'flat') cur.dir = autoTileDir(cur); }
       changed++;
@@ -749,6 +755,235 @@ document.querySelector('#clearTilesBtn')?.addEventListener('click', () => {
   });
 })();
 
+// ---------------------------------------------------------------------------
+// Rejilla 3D de teselas: plano de rejilla al nivel activo que cubre todo el
+// mundo, contorno de cada tesela sobre su cara superior y columna de guía en
+// la tesela bajo el cursor.
+// ---------------------------------------------------------------------------
+const tileGrid = new THREE.Group();
+tileGrid.name = 'tile-grid-3d';
+scene.add(tileGrid);
+let tileGridPlane = null;
+let tileGridOutlines = null;
+const tileGridColumn = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+  new THREE.LineBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.85, depthTest: false })
+);
+tileGridColumn.renderOrder = 10;
+tileGrid.add(tileGridColumn);
+
+function rebuildTileGridPlane() {
+  if (tileGridPlane) { tileGridPlane.geometry.dispose(); tileGridPlane.material.dispose(); tileGrid.remove(tileGridPlane); }
+  const t = modularState.tile;
+  const size = Math.ceil((world.half * 2) / t) * t;
+  tileGridPlane = new THREE.GridHelper(size, Math.round(size / t), 0x4fd2ff, 0x2a6f9a);
+  tileGridPlane.material.transparent = true;
+  tileGridPlane.material.opacity = 0.35;
+  tileGridPlane.material.depthWrite = false;
+  // Las líneas caen en los bordes de las teselas (centros en múltiplos de t).
+  const off = (Math.round(size / t) % 2 === 0) ? t / 2 : 0;
+  tileGridPlane.position.set(off, modularState.baseY, off);
+  tileGrid.add(tileGridPlane);
+}
+
+function rebuildTileOutlines() {
+  if (tileGridOutlines) { tileGridOutlines.geometry.dispose(); tileGridOutlines.material.dispose(); tileGrid.remove(tileGridOutlines); tileGridOutlines = null; }
+  if (!tileCells.size) return;
+  const t = modularState.tile, h = t / 2;
+  const pos = new Float32Array(tileCells.size * 24);
+  let i = 0;
+  for (const c of tileCells.values()) {
+    const y = modularState.baseY + c.level * modularState.level + 0.04 + (c.shape !== 'flat' ? modularState.level : 0);
+    const x0 = c.gx * t - h, x1 = c.gx * t + h, z0 = c.gz * t - h, z1 = c.gz * t + h;
+    const yl = c.shape !== 'flat' ? y - modularState.level : y;
+    const seg = [[x0, z0, x1, z0], [x1, z0, x1, z1], [x1, z1, x0, z1], [x0, z1, x0, z0]];
+    for (const [ax, az, bx, bz] of seg) {
+      pos[i++] = ax; pos[i++] = yl; pos[i++] = az;
+      pos[i++] = bx; pos[i++] = yl; pos[i++] = bz;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  tileGridOutlines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x0b2233, transparent: true, opacity: 0.35, depthWrite: false }));
+  tileGrid.add(tileGridOutlines);
+}
+
+/** Coloca el plano de rejilla y la columna guía en la tesela bajo el cursor. */
+function updateTileGridCursor(wx, wz) {
+  const t = modularState.tile;
+  const gx = modularIndex(wx, t), gz = modularIndex(wz, t);
+  const c = tileCells.get(modularKey(gx, gz));
+  const tool = tileVal('#tileTool', 'paint');
+  const level = mode === 'tiles' && tool === 'paint' ? Math.round(+tileVal('#tileLevel', 1) || 0) : (c ? c.level : 0);
+  const topY = modularState.baseY + level * modularState.level;
+  if (tileGridPlane) tileGridPlane.position.y = topY + 0.03;
+  const bottom = Math.min(modularState.baseY - modularState.level, topY);
+  const hgt = Math.max(0.05, topY - bottom);
+  tileGridColumn.visible = mode === 'tiles';
+  tileGridColumn.scale.set(t * (2 * tileRadius() + 1), hgt, t * (2 * tileRadius() + 1));
+  tileGridColumn.position.set(gx * t, bottom + hgt / 2, gz * t);
+}
+
+// ---------------------------------------------------------------------------
+// Render final: sin él, el agua es un plano plano sin efectos (más rápido y
+// legible para editar). Con él, se ve exactamente como en el juego.
+// ---------------------------------------------------------------------------
+const finalRenderEl = document.querySelector('#finalRender');
+const flatWaterMat = new THREE.MeshBasicMaterial({ color: 0x3aa9d6, transparent: true, opacity: 0.45, depthWrite: false });
+let flatWater = null;
+function applyRenderMode() {
+  const final = !!finalRenderEl?.checked;
+  world.setWaterVisible?.(final);
+  for (const m of [world.waterfallMesh, world.waterfallFoamMesh, world.waterfallParticles, world.seaweedMesh]) if (m) m.visible = final;
+  renderer.shadowMap.enabled = final;
+  if (world.sun) world.sun.castShadow = final;
+  if (flatWater) { flatWater.geometry.dispose(); scene.remove(flatWater); flatWater = null; }
+  if (final) return;
+  // Mar + lagos (celdas de agua) como superficies planas.
+  const geos = [];
+  if (Number.isFinite(world.waterLevel) && world.waterLevel > -20) {
+    const g = new THREE.PlaneGeometry(world.half * 2 + 400, world.half * 2 + 400);
+    g.rotateX(-Math.PI / 2);
+    g.translate(0, world.waterLevel, 0);
+    geos.push(g);
+  }
+  for (const [k, wy] of waterCells.entries()) {
+    const [gx, gz] = k.split(',').map(Number);
+    const g = new THREE.PlaneGeometry(TERRAIN_CELL, TERRAIN_CELL);
+    g.rotateX(-Math.PI / 2);
+    g.translate(gx * TERRAIN_CELL, wy, gz * TERRAIN_CELL);
+    geos.push(g);
+  }
+  if (!geos.length) return;
+  const merged = new THREE.BufferGeometry();
+  const arrays = geos.map((g) => g.toNonIndexed().attributes.position.array);
+  const total = arrays.reduce((a, b) => a + b.length, 0);
+  const pos = new Float32Array(total);
+  let o = 0;
+  for (const a of arrays) { pos.set(a, o); o += a.length; }
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  for (const g of geos) g.dispose();
+  flatWater = new THREE.Mesh(merged, flatWaterMat);
+  flatWater.renderOrder = 2;
+  scene.add(flatWater);
+}
+finalRenderEl?.addEventListener('change', applyRenderMode);
+
+// ---------------------------------------------------------------------------
+// Resolución del mundo y pincel de redondeo
+// ---------------------------------------------------------------------------
+function syncTileLabels() {
+  const r = document.querySelector('#tileRoundLabel');
+  if (r) r.textContent = `${Math.round(+tileVal('#tileRound', 0))}%`;
+  const rr = document.querySelector('#tileRadiusLabel');
+  if (rr) rr.textContent = String(tileRadius());
+  const info = document.querySelector('#tileInfo');
+  if (info) info.textContent = `Teselas de ${modularState.tile} m, nivel de ${modularState.level} m. Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo.`;
+  const wt = document.querySelector('#worldTile'); if (wt) wt.value = String(modularState.tile);
+  const wl = document.querySelector('#worldLevel'); if (wl) wl.value = String(modularState.level);
+}
+document.querySelector('#tileRound')?.addEventListener('input', syncTileLabels);
+document.querySelector('#tileRadius')?.addEventListener('input', syncTileLabels);
+document.querySelector('#applyResolutionBtn')?.addEventListener('click', () => {
+  const tile = +tileVal('#worldTile', modularState.tile);
+  const level = +tileVal('#worldLevel', modularState.level);
+  if (tileCells.size) {
+    const res = resampleModularTerrain({ ...modularState, cells: tileCells }, tile, level);
+    tileCells.clear();
+    if (res) for (const [k, c] of res.cells) tileCells.set(k, { ...c });
+  }
+  modularState.tile = tile;
+  modularState.level = level;
+  syncWorldModular();
+  rebuildTileGridPlane();
+  repositionPlacedToTerrain();
+  scheduleRebuild();
+  syncTileLabels();
+  document.querySelector('#status').textContent = `Resolución: teselas de ${tile} m, nivel ${level} m (${tileCells.size} teselas)`;
+});
+
+// ---------------------------------------------------------------------------
+// Importar mapas antiguos (heightfield/procedural) a teselas
+// ---------------------------------------------------------------------------
+function convertLegacyToTiles(norm) {
+  const tile = norm.terrain.heights.size ? 2 : 4;
+  const level = modularState.level;
+  const waterY = Number.isFinite(norm.waterLevel) ? norm.waterLevel : 0;
+  const baseY = waterY + 0.5;
+  Object.assign(modularState, { tile, level, baseY, outside: 'sea' });
+  world.modular = null;
+  world._hCache = new Map();
+  const half = Math.min(world.half, (norm.size || 360) / 2);
+  const roadTiles = new Map();
+  for (const p of norm.pieces) {
+    if (p.type === 'road' || p.type === 'path') roadTiles.set(modularKey(modularIndex(p.x, tile), modularIndex(p.z, tile)), p.type === 'road' ? 'stone' : 'path');
+  }
+  tileCells.clear();
+  // 1) Muestreo: media de 5 puntos por tesela (evita teselas sueltas por ruido).
+  const g0 = modularIndex(-half, tile), g1 = modularIndex(half, tile);
+  const q = tile * 0.3;
+  const raw = new Map();
+  for (let gz = g0; gz <= g1; gz++) {
+    for (let gx = g0; gx <= g1; gx++) {
+      const x = gx * tile, z = gz * tile;
+      const hs = [world.heightAt(x, z), world.heightAt(x - q, z - q), world.heightAt(x + q, z - q), world.heightAt(x + q, z + q), world.heightAt(x - q, z + q)].filter(Number.isFinite);
+      if (!hs.length) continue;
+      const h = hs.reduce((a, b) => a + b, 0) / hs.length;
+      if (h < waterY - 0.6) continue;
+      raw.set(modularKey(gx, gz), { gx, gz, h, lvl: Math.max(0, Math.round((h - baseY) / level)) });
+    }
+  }
+  // 2) Filtro de mediana 3x3 (dos pasadas): limpia picos y hoyos de una tesela.
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Map();
+    for (const [k, c] of raw) {
+      const vals = [];
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const n = raw.get(modularKey(c.gx + dx, c.gz + dz));
+        vals.push(n ? n.lvl : 0);
+      }
+      vals.sort((a, b) => a - b);
+      next.set(k, vals[4]);
+    }
+    for (const [k, v] of next) raw.get(k).lvl = v;
+  }
+  for (const [k, c] of raw) {
+    const surface = roadTiles.get(k) || (c.h < waterY + 1.6 ? 'sand' : 'grass');
+    tileCells.set(k, { gx: c.gx, gz: c.gz, level: c.lvl, surface, shape: 'flat', dir: 0, edge: 'cliff', round: 0 });
+  }
+  // 3) Laderas suaves: un escalón de 1 nivel con pendiente original baja pasa a rampa;
+  //    las pendientes fuertes se quedan como acantilado (estilo terrazas).
+  for (const c of tileCells.values()) {
+    const src = raw.get(modularKey(c.gx, c.gz));
+    let best = -1, bestSlope = Infinity;
+    for (let d = 0; d < 4; d++) {
+      const [dx, dz] = MODULAR_DIRS[d];
+      const up = tileCells.get(modularKey(c.gx + dx, c.gz + dz));
+      const down = tileCells.get(modularKey(c.gx - dx, c.gz - dz));
+      if (!up || up.level !== c.level + 1 || up.shape !== 'flat') continue;
+      if (down && down.level > c.level) continue;
+      const upSrc = raw.get(modularKey(up.gx, up.gz));
+      const slope = Math.abs(upSrc.h - src.h) / tile;
+      if (slope < bestSlope) { bestSlope = slope; best = d; }
+    }
+    if (best >= 0 && bestSlope < 0.32) { c.shape = 'ramp'; c.dir = best; }
+  }
+  // Las carreteras/caminos pasan a ser superficie de tesela.
+  for (let i = placed.length - 1; i >= 0; i--) if (placed[i].type === 'road' || placed[i].type === 'path') placed.splice(i, 1);
+  heightOverrides.clear();
+  cellSmooth.clear();
+}
+
+/** Mundo vacío inicial: isla de teselas de hierba con playa. */
+function makeStarterTiles() {
+  Object.assign(modularState, { tile: 4, level: 1.25, baseY: (world.waterLevel ?? 0) + 0.5, outside: 'sea' });
+  tileCells.clear();
+  for (let gz = -8; gz <= 8; gz++) for (let gx = -8; gx <= 8; gx++) {
+    const d = Math.max(Math.abs(gx), Math.abs(gz));
+    tileCells.set(modularKey(gx, gz), { gx, gz, level: d >= 8 ? 0 : 1, surface: d >= 8 ? 'sand' : 'grass', shape: 'flat', dir: 0, edge: 'cliff', round: 0 });
+  }
+}
+
 let rebuildTimer = null;
 let rebuildChain = Promise.resolve();
 async function rebuildNow() {
@@ -759,6 +994,8 @@ async function rebuildNow() {
   applyCartoonStyle(loot.root, cartoonCache);
   updateSelectionHelpers();
   refreshWindGizmos();
+  rebuildTileOutlines();
+  applyRenderMode();
 }
 function scheduleRebuild() {
   clearTimeout(rebuildTimer);
@@ -852,27 +1089,24 @@ function clearWaterPatches() {
 }
 
 function addWaterPatch(x, z) {
-  const radius = Math.max(3, (+document.querySelector('#brushSize').value || 6) * 1.2);
+  // Lagos sobre teselas: se pinta la superficie del agua donde las teselas
+  // quedan por debajo de la altura elegida. El vaso se hace bajando teselas.
+  const radius = Math.max(2, (+document.querySelector('#brushSize').value || 6));
   const y = snapH(Number.isFinite(+document.querySelector('#targetHeight').value) ? +document.querySelector('#targetHeight').value : (world.waterLevel ?? 0));
-  const depth = Math.max(GRID_H, snapH(+document.querySelector('#waterDepth')?.value || 2));
   const veg = clamp((+document.querySelector('#waterVegetation')?.value || 0) / 100, 0, 1);
-  const cellR = Math.ceil((radius+3)/TERRAIN_CELL)+1;
-  const cgx=Math.round(x/TERRAIN_CELL), cgz=Math.round(z/TERRAIN_CELL);
-  for (let dz=-cellR; dz<=cellR; dz++) for (let dx=-cellR; dx<=cellR; dx++) {
-    const gx=cgx+dx, gz=cgz+dz;
-    const wx=gx*TERRAIN_CELL, wz=gz*TERRAIN_CELL;
-    const d=Math.hypot(wx-x,wz-z);
-    const k=gx+','+gz;
-    const cur=editorHeightAt(wx,wz);
-    if (d <= radius) {
-      waterCells.set(k, y);
-      waterVegCells.set(k, veg);
-      const ny = Math.min(cur, snapH(y-depth));
-      if (ny !== cur) setOverride(gx,gz,ny);
-    }
-    // No elevamos bancos artificialmente: la superficie de agua se adapta al
-    // terreno y se recorta en la orilla (evita paredes/cajas cuadradas).
+  const cellR = Math.ceil(radius / TERRAIN_CELL) + 1;
+  const cgx = Math.round(x / TERRAIN_CELL), cgz = Math.round(z / TERRAIN_CELL);
+  let added = 0;
+  for (let dz = -cellR; dz <= cellR; dz++) for (let dx = -cellR; dx <= cellR; dx++) {
+    const gx = cgx + dx, gz = cgz + dz;
+    const wx = gx * TERRAIN_CELL, wz = gz * TERRAIN_CELL;
+    if (Math.hypot(wx - x, wz - z) > radius) continue;
+    if (editorHeightAt(wx, wz) >= y - 0.05) continue;
+    waterCells.set(key(gx, gz), y);
+    waterVegCells.set(key(gx, gz), veg);
+    added++;
   }
+  document.querySelector('#status').textContent = added ? `Agua: ${added} celdas a ${y} m` : 'Ahí las teselas están por encima del agua: bájalas primero';
   // remove/sink decorations inside water
   for (let i = placed.length - 1; i >= 0; i--) {
     const p = placed[i];
@@ -897,7 +1131,7 @@ function addWaterPatch(x, z) {
 // --------------- Pieces ---------------
 let selectedPiece = 'house';
 let rotY = 0;
-let mode = 'place';
+let mode = 'tiles';
 let painting = false;
 let lastPaintAt = 0;
 
@@ -1578,6 +1812,7 @@ canvas.addEventListener('pointermove', (e) => {
     }
     // Ghost grid (snap cel para piezas/viento)
     updateBrushGhost(hit.x, hit.z, hy);
+    updateTileGridCursor(hit.x, hit.z);
   } else {
     brushRing.visible = false;
     brushGhostGrid.visible = false;
@@ -1686,8 +1921,7 @@ function applyAt(hit, shift) {
   else if (mode === 'path' || mode === 'road') { selectedPiece = mode; placePieceAt(hit.x, hit.z); }
   else if (mode === 'erase') { erasePieceAtRay(); painting = false; }
   else if (mode === 'water') {
-    if (!shift) { addWaterPatch(snap(hit.x, 2), snap(hit.z, 2)); painting = false; }
-    else applyBrush(hit.x, hit.z, 'water');
+    addWaterPatch(snap(hit.x, 2), snap(hit.z, 2));
   }
   else if (mode === 'erase-water') {
     eraseWaterAt(snapToGrid(hit.x, TERRAIN_CELL), snapToGrid(hit.z, TERRAIN_CELL));
@@ -1696,15 +1930,8 @@ function applyAt(hit, shift) {
     placeWindAt(snapToGrid(hit.x, GRID_SIZE), snapToGrid(hit.z, GRID_SIZE));
     painting = false;
   }
-  else if (mode === 'pick-height') {
-    const h = snapH(editorHeightAt(hit.x, hit.z));
-    const el = document.querySelector('#targetHeight');
-    if (el) el.value = h.toFixed(2).replace(/\.00$/, '');
-    document.querySelector('#status').textContent = `Altura seleccionada: ${h}`;
-    painting = false;
-  }
   else if (mode === 'grass') { placeGrassAt(hit.x, hit.z); }
-  else { applyBrush(hit.x, hit.z, mode); }
+  // El terreno antiguo (subir/bajar/aplanar por celdas) ya no existe: solo teselas.
 }
 
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1720,8 +1947,12 @@ async function loadCustomMap(dataOverride = null) {
     baseCustomData = {};
     placed.length = 0;
     selected.clear();
+    makeStarterTiles();
+    rebuildTileGridPlane();
+    syncTileLabels();
+    syncWorldModular();
     await rebuildNow();
-    document.querySelector('#status').textContent = 'Mapa base: sin datos guardados';
+    document.querySelector('#status').textContent = 'Mundo nuevo: isla de teselas inicial';
     return;
   }
   const norm = normalizeMapData(data);
@@ -1757,10 +1988,20 @@ async function loadCustomMap(dataOverride = null) {
 
   // Terreno modular (teselas) y nivel del agua: los mismos valores que usa el juego.
   tileCells.clear();
+  let converted = false;
   if (norm.modular) {
     Object.assign(modularState, { tile: norm.modular.tile, level: norm.modular.level, baseY: norm.modular.baseY, outside: norm.modular.outside });
     for (const [k, c] of norm.modular.cells) tileCells.set(k, { ...c });
+  } else if (data && (norm.terrain.heights.size || norm.pieces.length || norm.raw?.biome)) {
+    // Mapa antiguo: su relieve se importa a teselas (el editor solo edita teselas).
+    if (Number.isFinite(norm.waterLevel)) world.setWaterLevelNow?.(norm.waterLevel);
+    convertLegacyToTiles(norm);
+    converted = true;
+  } else {
+    makeStarterTiles();
   }
+  rebuildTileGridPlane();
+  syncTileLabels();
   const outsideEl = document.querySelector('#tileOutside');
   if (outsideEl) outsideEl.value = modularState.outside;
   syncWorldModular();
@@ -1781,9 +2022,13 @@ async function loadCustomMap(dataOverride = null) {
 
   await rebuildNow();
   refreshWindGizmos();
-  document.querySelector('#status').textContent = `Cargadas ${placed.length} piezas, ${heightOverrides.size} celdas de terreno, ${tileCells.size} teselas, ${winds.length} vientos`;
+  document.querySelector('#status').textContent = converted
+    ? `Mapa antiguo importado a ${tileCells.size} teselas (guárdalo para conservar la conversión)`
+    : `Cargadas ${placed.length} piezas, ${tileCells.size} teselas, ${winds.length} vientos`;
 }
 document.querySelector('#waterVegetation')?.addEventListener('change', scheduleRebuild);
+// Arranca en modo Teselas con su panel visible.
+document.querySelector('#modePalette button[data-mode="tiles"]')?.click();
 loadCustomMap();
 loadDecorModelConfig();
 
@@ -1814,7 +2059,8 @@ function buildSavePayload() {
     size: baseCustomData.size || 360,
     seed: baseCustomData.seed || 20261119,
     pieces: placed.map(p => ({ ...p })),
-    terrain: { cell: TERRAIN_CELL, heights, ...(smooths.length ? { smooths } : {}) },
+    // El terreno antiguo por celdas ya no se edita ni se guarda: solo teselas.
+    terrain: { cell: TERRAIN_CELL, heights: [] },
     waterVegetation: +globalVeg.toFixed(2),
     waterCells: waterCellsArr,
     winds: winds.map(w => ({ ...w })),
@@ -1863,9 +2109,13 @@ document.querySelector('#clearMap').onclick = () => {
   document.querySelector('#status').textContent = 'Piezas limpiadas';
 };
 document.querySelector('#clearTerrain').onclick = () => {
-  clearOverrides();
+  tileCells.clear();
+  syncWorldModular();
+  heightOverrides.clear();
   clearWaterPatches();
-  document.querySelector('#status').textContent = 'Terreno limpiado';
+  repositionPlacedToTerrain();
+  scheduleRebuild();
+  document.querySelector('#status').textContent = 'Teselas y agua borradas';
 };
 
 document.querySelector('#selDeleteBtn')?.addEventListener('click', deleteSelected);

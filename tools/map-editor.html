@@ -33,24 +33,26 @@
   .back a { color: #9db3d5; text-decoration: none; }
   #error-overlay { display:none; position:fixed; left:320px; top:12px; z-index:9; background:#3a1414; border:1px solid #7a3030; color:#ffdada; padding:12px 14px; border-radius:8px; font:12px Consolas,monospace; max-width:60vw; white-space:pre-wrap; }
   label.small { font-size:11px; color:#9db0c7; display:block; margin-top:4px; }
+  label.toggle { display:flex; gap:6px; align-items:center; margin:0; cursor:pointer; }
+  label.toggle input { margin:0; }
   #marquee { position:fixed; border:1px solid #7fd0ff; background:rgba(127,208,255,0.15); pointer-events:none; display:none; z-index:5; }
 </style>
 </head>
 <body>
 <canvas id="map-canvas"></canvas>
 <div class="panel">
-  <h2>Editor de mapa <span class="tag">Terreno</span></h2>
-  <small class="hint">Clic izq: aplicar herramienta. Clic der: borrar/picar. Arrastra der/medio: orbitar. Rueda: zoom. Shift+arrastrar: pintar continuo.</small>
+  <h2>Editor de mapa <span class="tag">Teselas</span></h2>
+  <small class="hint">Clic izq: aplicar herramienta. Clic der: borrar. Arrastra der/medio: orbitar. Rueda: zoom.</small>
+  <div class="row" style="margin-top:8px">
+    <label class="small toggle"><input type="checkbox" id="finalRender"> Render final</label>
+    <label class="small toggle"><input type="checkbox" id="gridVisibility" checked> Rejilla 3D</label>
+  </div>
 
   <h3>Modo</h3>
   <div class="palette" id="modePalette">
-    <button data-mode="select">Select</button>
-    <button data-mode="tiles">🧱 Teselas</button>
-    <button data-mode="place" class="active">Colocar pieza</button>
-    <button data-mode="terrain-up">Subir terreno</button>
-    <button data-mode="terrain-down">Bajar terreno</button>
-    <button data-mode="terrain-flat">Aplanar</button>
-    <button data-mode="pick-height">Coger altura</button>
+    <button data-mode="tiles" class="active">🧱 Teselas</button>
+    <button data-mode="select">Seleccionar</button>
+    <button data-mode="place">Colocar pieza</button>
     <button data-mode="water">🌊 Agua/Lago</button>
     <button data-mode="erase-water">🗑️ Borrar agua</button>
     <button data-mode="grass">🌿 Césped</button>
@@ -61,8 +63,8 @@
   </div>
 
   <div id="tileControls" style="display:none">
-    <h3>🧱 Terreno modular (teselas 4×4 m)</h3>
-    <small class="hint">Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo de una tesela. Cada nivel = 1.25 m (2 niveles = 1 planta).</small>
+    <h3>🧱 Teselas</h3>
+    <small class="hint" id="tileInfo">Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo de una tesela.</small>
     <label class="small">Herramienta</label>
     <select id="tileTool">
       <option value="paint">Pintar tesela (nivel + estilo)</option>
@@ -71,6 +73,7 @@
       <option value="surface">Solo superficie</option>
       <option value="shape">Solo forma (rampa/escalera)</option>
       <option value="edge">Solo borde</option>
+      <option value="round">Redondear bordes (pincel)</option>
       <option value="erase">Borrar tesela</option>
     </select>
     <label class="small">Nivel</label>
@@ -102,7 +105,9 @@
       <option value="cliff">Acantilado de roca</option>
       <option value="wall">Muro de terraza</option>
     </select>
-    <label class="small">Radio (teselas)</label>
+    <label class="small">Redondeo de esquinas: <strong id="tileRoundLabel">0%</strong></label>
+    <input id="tileRound" type="range" min="0" max="100" step="5" value="0">
+    <label class="small">Radio del pincel: <strong id="tileRadiusLabel">0</strong> teselas</label>
     <input id="tileRadius" type="range" min="0" max="6" step="1" value="0">
     <label class="small">Fuera de las teselas</label>
     <select id="tileOutside">
@@ -110,33 +115,28 @@
       <option value="terrain">Terreno normal</option>
     </select>
     <button class="ghost" id="clearTilesBtn">🗑️ Borrar todas las teselas</button>
+
+    <h3>Resolución del mundo</h3>
+    <div class="row">
+      <div><label class="small">Tesela (m)</label>
+        <select id="worldTile"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select></div>
+      <div><label class="small">Nivel (m)</label>
+        <select id="worldLevel"><option value="0.5">0.5</option><option value="1">1</option><option value="1.25" selected>1.25</option><option value="2.5">2.5</option></select></div>
+    </div>
+    <button class="ghost" id="applyResolutionBtn">Aplicar resolución (remuestrea las teselas)</button>
   </div>
 
   <h3>Abrir mapa del juego</h3>
   <select id="gameMapSelect" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;"></select>
   <button class="ghost" id="openGameMapBtn">Abrir</button>
 
-  <h3>Terreno tipo bloque</h3>
-  <label class="small">Radio del bloque (celdas)</label>
-  <input id="blockRadius" type="number" min="1" max="8" step="1" value="1">
-  <label class="small">Redondeo de bordes expuestos (%)</label>
-  <input id="roundPercent" type="number" min="0" max="100" step="5" value="50">
-  <label class="small" style="display:flex;gap:6px;align-items:center;margin:4px 0;">
-    <input type="checkbox" id="gridVisibility" checked> Grid 3D visible
-  </label>
-  <label class="small" id="gridSizeLabel">Tamaño celda grid: <strong>2u (módulo base)</strong></label>
+  <h3>Agua y snap de piezas</h3>
+  <label class="small" id="gridSizeLabel">Snap de piezas: <strong>2u (módulo base)</strong></label>
   <div class="row">
     <button class="ghost" id="gridSm" title="Grid 2u - módulo base (muro, suelo)">2u</button>
     <button class="ghost" id="gridMd" title="Grid 4u - módulo carretera">4u</button>
     <button class="ghost" id="gridLg" title="Grid 8u - módulo edificio">8u</button>
   </div>
-  <label class="small">Estilo terreno</label>
-  <select id="terrainStyle" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;">
-    <option value="blocky">Blocky</option>
-    <option value="smooth">Smooth</option>
-    <option value="ramp">Rampa</option>
-    <option value="stairs">Escaleras</option>
-  </select>
   <label class="small">Nivel de agua (0 = sin agua)</label>
   <input id="waterLevelInput" type="number" step="0.5" value="5" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;">
   <div class="row" style="margin:3px 0;">
@@ -235,18 +235,8 @@
     <label class="small" id="brushDensityLabel" style="display:none">Densidad</label>
     <input id="brushDensity" type="range" min="1" max="10" step="1" value="5" style="display:none">
     <div id="terrainOnlyControls">
-      <label class="small">Fuerza (studs por paso)</label>
-      <input id="brushStrength" type="range" min="1" max="8" step="1" value="1">
-      <label class="small">Caída / forma</label>
-      <select id="falloffMode">
-        <option value="smooth">Suave (montaña)</option>
-        <option value="cliff">Picado (acantilado)</option>
-        <option value="flat">Plana (meseta)</option>
-      </select>
-      <label class="small">Altura objetivo (aplanar/agua, studs)</label>
+      <label class="small">Altura de la superficie del lago (m). Baja antes las teselas para hacer el vaso.</label>
       <input id="targetHeight" type="number" value="1" step="0.5">
-      <label class="small">Profundidad lago (studs)</label>
-      <input id="waterDepth" type="number" value="2" min="0.5" max="20" step="0.5">
       <label class="small" id="waterVegLabel">Vegetación submarina (%)</label>
       <input id="waterVegetation" type="range" min="0" max="100" step="5" value="55">
     </div>
@@ -271,7 +261,7 @@
   </div>
   <div class="row">
     <button class="ghost" id="clearMap">Limpiar piezas</button>
-    <button class="ghost" id="clearTerrain">Limpiar terreno</button>
+    <button class="ghost" id="clearTerrain">Limpiar teselas y agua</button>
   </div>
   <textarea id="mapText" readonly style="height:74px; width:100%; margin-top:6px; background:#0f141b; border:1px solid #27303f; color:#e6e8ee; border-radius:6px; font-size:10px;"></textarea>
   <small class="hint" id="status">Listo.</small>

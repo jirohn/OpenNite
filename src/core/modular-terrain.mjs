@@ -13,7 +13,7 @@
  * Formato JSON dentro del mapa:
  *   "modular": {
  *     "tile": 4, "level": 1.25, "baseY": 0.5, "outside": "sea",
- *     "cells": [[gx, gz, nivel, superficie?, forma?, dir?, borde?], ...]
+ *     "cells": [[gx, gz, nivel, superficie?, forma?, dir?, borde?, redondeo?], ...]
  *   }
  *   - gx, gz: índice de tesela. El centro de la tesela está en (gx * tile, gz * tile).
  *   - superficie: grass | path | cobble | sand | stone   (por defecto grass)
@@ -21,13 +21,25 @@
  *   - dir: hacia dónde SUBE la rampa/escalera: 0 = -Z (norte), 1 = +X (este),
  *          2 = +Z (sur), 3 = -X (oeste). Sube exactamente 1 nivel.
  *   - borde: cliff | wall                                 (por defecto cliff)
+ *   - redondeo: 0..1. Redondea en planta las esquinas convexas de la tesela
+ *     (radio = redondeo * tile / 2) cuando las tres vecinas de esa esquina están
+ *     a la misma altura (o no existen). Lo pinta el pincel de redondeo del editor.
+ *   - tile y level son configurables por mundo (resolución de teselas).
  *   - outside: qué hay fuera de las teselas: "sea" (fondo marino) o "terrain"
  *     (el terreno procedural/editado de siempre).
  */
 
 export const MODULAR_TILE = 4;
 export const MODULAR_LEVEL = 1.25;
-export const MODULAR_STAIR_STEPS = 5; // 1.25 / 5 = 0.25 m por escalón (< MAX_STEP_UP del jugador)
+export const MODULAR_STAIR_STEPS = 5; // con level 1.25: 0.25 m por escalón (< MAX_STEP_UP del jugador)
+export const MODULAR_MAX_STEP = 0.25; // altura máxima de cada peldaño
+export const MODULAR_TILE_OPTIONS = [1, 2, 4, 8];
+export const MODULAR_LEVEL_OPTIONS = [0.5, 1, 1.25, 2.5];
+
+/** Número de peldaños de una escalera (siempre subibles a pie, sea cual sea `level`). */
+export function modularStairSteps(mod) {
+  return Math.max(2, Math.ceil(mod.level / MODULAR_MAX_STEP - 1e-6));
+}
 export const MODULAR_SEA_DEPTH = 8; // profundidad del fondo marino bajo baseY
 
 export const MODULAR_SURFACES = ['grass', 'path', 'cobble', 'sand', 'stone'];
@@ -48,8 +60,10 @@ export function modularIndex(v, tile = MODULAR_TILE) {
   return Math.floor(v / tile + 0.5);
 }
 
-function normalizeCell(gx, gz, level, surface, shape, dir, edge) {
+function normalizeCell(gx, gz, level, surface, shape, dir, edge, round) {
+  const r = num(round, 0);
   return {
+    round: r > 0 ? Math.min(1, Math.round(r * 20) / 20) : 0,
     gx,
     gz,
     level: Math.round(num(level, 0)),
@@ -75,20 +89,20 @@ export function normalizeModularTerrain(raw) {
     for (const c of raw.cells.values()) {
       const gx = Math.round(num(c.gx, 0));
       const gz = Math.round(num(c.gz, 0));
-      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge));
+      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round));
     }
   } else if (Array.isArray(raw.cells)) {
     for (const item of raw.cells) {
       let c = item;
       if (Array.isArray(item)) {
         if (item.length < 3) continue;
-        c = { gx: item[0], gz: item[1], level: item[2], surface: item[3], shape: item[4], dir: item[5], edge: item[6] };
+        c = { gx: item[0], gz: item[1], level: item[2], surface: item[3], shape: item[4], dir: item[5], edge: item[6], round: item[7] };
       }
       if (!c || typeof c !== 'object') continue;
       const gx = Math.round(Number(c.gx));
       const gz = Math.round(Number(c.gz));
       if (!Number.isFinite(gx) || !Number.isFinite(gz)) continue;
-      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge));
+      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round));
     }
   }
   if (!cells.size) return null;
@@ -101,8 +115,8 @@ export function serializeModularTerrain(mod) {
   if (!norm) return undefined;
   const cells = [];
   for (const c of norm.cells.values()) {
-    const row = [c.gx, c.gz, c.level, c.surface, c.shape, c.dir, c.edge];
-    const defaults = [null, null, null, 'grass', 'flat', 0, 'cliff'];
+    const row = [c.gx, c.gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round || 0];
+    const defaults = [null, null, null, 'grass', 'flat', 0, 'cliff', 0];
     while (row.length > 3 && row[row.length - 1] === defaults[row.length - 1]) row.pop();
     cells.push(row);
   }
@@ -140,7 +154,7 @@ export function modularCellTopAt(mod, cell, x, z) {
   if (cell.shape === 'flat') return low;
   const u = modularUAlong(mod, cell, x, z);
   if (cell.shape === 'ramp') return low + u * mod.level;
-  const steps = MODULAR_STAIR_STEPS;
+  const steps = modularStairSteps(mod);
   const k = Math.min(steps - 1, Math.floor(u * steps));
   return low + (k + 1) * (mod.level / steps);
 }
@@ -152,8 +166,95 @@ export function modularCellTopAt(mod, cell, x, z) {
 export function modularHeightAt(mod, x, z) {
   if (!mod) return null;
   const cell = modularCellAt(mod, x, z);
-  if (cell) return modularCellTopAt(mod, cell, x, z);
+  if (cell) {
+    if (cell.round > 0) {
+      const cut = modularCornerCut(mod, cell, x, z);
+      if (cut) return cut.outside ? (mod.outside === 'sea' ? mod.seaFloor : null) : cut.y;
+    }
+    return modularCellTopAt(mod, cell, x, z);
+  }
   return mod.outside === 'sea' ? mod.seaFloor : null;
+}
+
+/** Esquinas: 0 = (-X,-Z), 1 = (+X,-Z), 2 = (+X,+Z), 3 = (-X,+Z). */
+export const MODULAR_CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
+
+const _cornerCache = new WeakMap();
+
+/**
+ * Información de redondeo de las 4 esquinas de una tesela. Una esquina se
+ * redondea si la tesela es plana, tiene `round` > 0 y sus tres vecinas de esa
+ * esquina (las dos laterales y la diagonal) no existen o son planas, del mismo
+ * nivel entre sí y más bajas que ella. Así el hueco que deja el arco tiene un
+ * suelo bien definido (la altura de esas vecinas) y no aparecen agujeros.
+ */
+export function modularCellCorners(mod, cell) {
+  let info = _cornerCache.get(cell);
+  if (info && info.mod === mod) return info.corners;
+  const corners = [null, null, null, null];
+  if (cell.round > 0 && cell.shape === 'flat') {
+    const T = mod.tile;
+    const R = cell.round * T / 2;
+    for (let i = 0; i < 4; i++) {
+      const [sx, sz] = MODULAR_CORNERS[i];
+      const a = mod.cells.get(modularKey(cell.gx + sx, cell.gz));
+      const b = mod.cells.get(modularKey(cell.gx, cell.gz + sz));
+      const d = mod.cells.get(modularKey(cell.gx + sx, cell.gz + sz));
+      const n = [a, b, d];
+      const present = n.filter(Boolean);
+      let ok = false, outside = false, y = 0, surface = 'grass';
+      if (present.length === 0) {
+        ok = true; outside = true;
+      } else if (present.length === 3 && present.every((c) => c.shape === 'flat' && c.level === a.level) && a.level < cell.level) {
+        ok = true; y = modularLevelY(mod, a.level); surface = a.surface;
+      }
+      if (!ok) continue;
+      const cornerX = cell.gx * T + sx * T / 2;
+      const cornerZ = cell.gz * T + sz * T / 2;
+      corners[i] = { sx, sz, R, cornerX, cornerZ, cx: cornerX - sx * R, cz: cornerZ - sz * R, outside, y, surface };
+    }
+  }
+  _cornerCache.set(cell, { mod, corners });
+  return corners;
+}
+
+/** Si (x, z) cae en el trozo recortado por una esquina redondeada, devuelve esa esquina. */
+export function modularCornerCut(mod, cell, x, z) {
+  const corners = modularCellCorners(mod, cell);
+  for (const c of corners) {
+    if (!c) continue;
+    const dx = (x - c.cx) * c.sx, dz = (z - c.cz) * c.sz;
+    if (dx > 0 && dz > 0 && dx * dx + dz * dz > c.R * c.R) return c;
+  }
+  return null;
+}
+
+/**
+ * Cambia la resolución de un mundo modular (tamaño de tesela y/o altura de nivel)
+ * remuestreando las teselas: cada tesela nueva copia la tesela vieja que contiene
+ * su centro y su nivel se reescala para conservar la altura real.
+ */
+export function resampleModularTerrain(mod, tile, level) {
+  const src = normalizeModularTerrain(mod);
+  if (!src) return null;
+  const T = Math.max(0.5, Number(tile) || src.tile);
+  const L = Math.max(0.25, Number(level) || src.level);
+  const cells = new Map();
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const c of src.cells.values()) {
+    minX = Math.min(minX, (c.gx - 0.5) * src.tile); maxX = Math.max(maxX, (c.gx + 0.5) * src.tile);
+    minZ = Math.min(minZ, (c.gz - 0.5) * src.tile); maxZ = Math.max(maxZ, (c.gz + 0.5) * src.tile);
+  }
+  for (let gz = modularIndex(minZ, T); gz <= modularIndex(maxZ, T); gz++) {
+    for (let gx = modularIndex(minX, T); gx <= modularIndex(maxX, T); gx++) {
+      const old = modularCellAt(src, gx * T, gz * T);
+      if (!old) continue;
+      const y = modularLevelY(src, old.level);
+      const lvl = Math.round((y - src.baseY) / L);
+      cells.set(modularKey(gx, gz), { ...old, gx, gz, level: lvl, shape: T === src.tile ? old.shape : 'flat' });
+    }
+  }
+  return normalizeModularTerrain({ tile: T, level: L, baseY: src.baseY, outside: src.outside, cells });
 }
 
 /** Altura mínima de las teselas en un radio (para hundir la malla de heightfield bajo ellas). */
