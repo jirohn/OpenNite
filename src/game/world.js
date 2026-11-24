@@ -19,6 +19,8 @@ import {
   buildRoadNetwork,
   evaluateTerrainHeight,
 } from '../core/map-system.mjs';
+import { modularHeightAt, modularMinNear, normalizeModularTerrain } from '../core/modular-terrain.mjs';
+import { buildModularTerrainMesh } from '../core/modular-terrain-mesh.mjs';
 
 
 const CHUNK_SIZE = 256;
@@ -477,6 +479,9 @@ export class World {
     this.pieceRounding = 0.5; // redondeo de bordes expuestos de bloques painterosos (0-1), default 50%
     this.heightSmooths = norm.terrain?.smooths || new Map();
     this.heightOverrideCell = norm.terrain?.cell || GRID_SIZE;
+    // Terreno modular por teselas (null si el mapa no lo usa). Ver core/modular-terrain.mjs.
+    this.modular = norm.modular || null;
+    this.modularMesh = null;
     this.islandFlat = !!norm.islandFlat || norm.base === 'test'; // editor: isla plana a 0, solo agua.
     this.terrainStyle = norm.terrainStyle || 'blocky'; // blocky | smooth | ramp | stairs
     this.terrainGridStep = norm.terrainGridStep || 2;
@@ -659,8 +664,8 @@ export class World {
     this.customPieces = customPieces && customPieces.length ? customPieces : null;
     this._applyCustomTerrainData(customData);
     this.roadNetwork = buildRoadNetwork(this.customPieces || [], (x, z) => this.rawHeightAt(x, z));
-    console.info('[World] map loaded:', { id: this.map.id, pieces: this.customPieces?.length || 0, heightOverrides: this.heightOverrides.size, roads: this.roadNetwork.size });
-    if (this.customPieces && this.customPieces.length) {
+    console.info('[World] map loaded:', { id: this.map.id, pieces: this.customPieces?.length || 0, heightOverrides: this.heightOverrides.size, roads: this.roadNetwork.size, modularCells: this.modular?.cells.size || 0 });
+    if ((this.customPieces && this.customPieces.length) || this.modular) {
       // Alta resoluciÃ³n para celdas de 2u y suavizado por tile
       this.chunkSegments = 128;
       // Mapa limpio del editor: terreno + agua + piezas personalizadas + naturaleza zonificada.
@@ -670,20 +675,21 @@ export class World {
       for (let cx = -range; cx <= range; cx++) {
         for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
       }
+      this._buildModularTerrain();
       // Mapa pequeÃ±o ya precargado: evitar streaming/churn de chunks en runtime.
       this.staticChunks = true;
       if (this.useKitAssets) {
         await Promise.all([this.loadKitModels(), this.loadBuildKit()]);
         // Solo se colocan las piezas guardadas en el mapa: no se genera
         // vegetación, cofres ni loot aleatorio. El agua sí lleva su algas.
-        await this.placeCustomPieces(this.customPieces);
+        await this.placeCustomPieces(this.customPieces || []);
         this.placeUnderwaterVegetation();
         this.placePropObjects();
       } else {
         await this.loadBuildKit();
-        await this.placeCustomPieces(this.customPieces);
+        await this.placeCustomPieces(this.customPieces || []);
       }
-      this.generateLootForCustomMap(this.customPieces);
+      this.generateLootForCustomMap(this.customPieces || []);
     } else {
       this.generateRoads();
       this.generateSanBorondonLandmarks();
@@ -1177,6 +1183,7 @@ transformed.y *= rise;`);
     this.waterVegCells.clear();
     this.waterVegetation = clamp(Number(data?.waterVegetation ?? 0.55), 0, 1);
     this._waterLevels = null;
+    this.modular = (data && typeof data === 'object' && !Array.isArray(data)) ? normalizeModularTerrain(data.modular) : null;
     if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     const t = data.terrain;
     if (t && typeof t === 'object') {
@@ -3608,6 +3615,8 @@ transformed.y *= rise;`);
         const lx = Math.abs(dx * f.cos + dz * f.sin);
         const lz = Math.abs(-dx * f.sin + dz * f.cos);
         if (lx > hx || lz > hz) continue;
+        // Bajo el terreno modular el heightfield sigue hundido (lo cubre la malla modular).
+        if (this.modular && modularMinNear(this.modular, wx, wz, 3.2) !== null) continue;
         // Recompute full height (raw + POI + all flats) for correct overlap/priority handling.
         const h = this.heightAt(wx, wz);
         if (Math.abs(h - pos[vi + 1]) > 0.001) { pos[vi + 1] = h; changed = true; }
@@ -3667,6 +3676,11 @@ transformed.y *= rise;`);
 
   heightAt(x, z) {
     if (this.training) return 0;
+    // Terreno modular: altura exacta (sin caché cuantizada, los bordes son verticales).
+    if (this.modular) {
+      const mh = modularHeightAt(this.modular, x, z);
+      if (mh !== null) return mh;
+    }
     // Cache por frame (cuantizado) para acelerar consultas repetidas/LOS.
     const qx = (x * 2) | 0, qz = (z * 2) | 0;
     const cache = this._hCache;
@@ -3685,6 +3699,7 @@ transformed.y *= rise;`);
       terrainFlats: this.terrainFlats,
       pois: this.pois,
       waterLevel: this.waterLevel,
+      modular: this.modular,
     });
     if (cache) cache.set(key, h);
     return h;
@@ -3693,6 +3708,10 @@ transformed.y *= rise;`);
   /** Altura de la superficie visual del terreno (interpolada desde la malla del chunk). */
   surfaceHeightAt(x, z) {
     if (!this.procedural) return this.rawHeightAt(x, z);
+    if (this.modular) {
+      const mh = modularHeightAt(this.modular, x, z);
+      if (mh !== null) return mh;
+    }
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
     const chunk = this.chunks.get(`${cx},${cz}`);
@@ -3753,7 +3772,10 @@ transformed.y *= rise;`);
       for (let ix = 0; ix <= seg; ix++) {
         const wx = centerX + (ix / seg - 0.5) * CHUNK_SIZE;
         const wz = centerZ + (iz / seg - 0.5) * CHUNK_SIZE;
-        const y = this.heightAt(wx, wz);
+        // Bajo las teselas modulares el heightfield se hunde para no asomar
+        // entre acantilados (la malla modular cubre esa zona).
+        const sunk = this.modular ? modularMinNear(this.modular, wx, wz, 3.2) : null;
+        const y = sunk !== null ? sunk - 0.6 : this.heightAt(wx, wz);
         positions[i * 3] = wx;
         positions[i * 3 + 1] = y;
         positions[i * 3 + 2] = wz;
@@ -5483,6 +5505,7 @@ transformed.y *= rise;`);
   }
 
   _clearTerrainChunks() {
+    this._clearModularTerrain();
     for (const key of [...this.chunks.keys()]) this.removeChunk(key);
     this.chunkQueue.clear();
     this._hCache = new Map();
@@ -5516,6 +5539,45 @@ transformed.y *= rise;`);
     if (this._glassInst) this._glassInst.count = 0;
   }
 
+  /** Construye la malla y los colisionadores del terreno modular (juego y editor). */
+  _buildModularTerrain() {
+    this._clearModularTerrain();
+    if (!this.modular) return null;
+    const built = buildModularTerrainMesh(this.modular, {
+      seed: this.seed,
+      shadows: !!this.settings.get('shadows'),
+      outsideHeight: (x, z) => evaluateTerrainHeight({
+        x, z,
+        rawHeightFn: (wx, wz) => this.rawHeightAt(wx, wz),
+        heightOverrides: this.heightOverrides,
+        cell: this.heightOverrideCell || GRID_SIZE,
+        waterLevel: this.waterLevel,
+      }),
+    });
+    built.worldColliders = [];
+    for (const c of built.colliders) {
+      this.addCollider(c.minX, c.maxX, c.minY, c.maxY, c.minZ, c.maxZ, { role: c.role });
+      built.worldColliders.push(this.colliders[this.colliders.length - 1]);
+    }
+    this.root.add(built.group);
+    this.modularMesh = built;
+    console.info('[World] modular terrain:', built.stats);
+    return built;
+  }
+
+  _clearModularTerrain() {
+    if (!this.modularMesh) return;
+    this.modularMesh.dispose();
+    const owned = new Set(this.modularMesh.worldColliders || []);
+    if (owned.size) {
+      const keep = this.colliders.filter((c) => !owned.has(c));
+      this.colliders.length = 0;
+      this.colliders.push(...keep);
+      for (const [k, list] of this.colliderGrid) this.colliderGrid.set(k, list.filter((c) => !owned.has(c)));
+    }
+    this.modularMesh = null;
+  }
+
   /**
    * Reconstruye el mapa completo con el pipeline del juego: terreno, agua,
    * modelos reales y puntos de loot. Lo usa el editor para verse idéntico.
@@ -5536,6 +5598,7 @@ transformed.y *= rise;`);
     for (let cx = -range; cx <= range; cx++) {
       for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
     }
+    this._buildModularTerrain();
     this.staticChunks = true;
     if (this.useKitAssets) {
       await Promise.all([this.loadKitModels(), this.loadBuildKit()]);

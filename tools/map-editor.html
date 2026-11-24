@@ -45,6 +45,7 @@
   <h3>Modo</h3>
   <div class="palette" id="modePalette">
     <button data-mode="select">Select</button>
+    <button data-mode="tiles">🧱 Teselas</button>
     <button data-mode="place" class="active">Colocar pieza</button>
     <button data-mode="terrain-up">Subir terreno</button>
     <button data-mode="terrain-down">Bajar terreno</button>
@@ -58,6 +59,62 @@
     <button data-mode="wind">🌬️ Viento</button>
     <button data-mode="erase">❌ Borrar pieza</button>
   </div>
+
+  <div id="tileControls" style="display:none">
+    <h3>🧱 Terreno modular (teselas 4×4 m)</h3>
+    <small class="hint">Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo de una tesela. Cada nivel = 1.25 m (2 niveles = 1 planta).</small>
+    <label class="small">Herramienta</label>
+    <select id="tileTool">
+      <option value="paint">Pintar tesela (nivel + estilo)</option>
+      <option value="raise">Subir 1 nivel</option>
+      <option value="lower">Bajar 1 nivel</option>
+      <option value="surface">Solo superficie</option>
+      <option value="shape">Solo forma (rampa/escalera)</option>
+      <option value="edge">Solo borde</option>
+      <option value="erase">Borrar tesela</option>
+    </select>
+    <label class="small">Nivel</label>
+    <input id="tileLevel" type="number" min="-4" max="40" step="1" value="1">
+    <label class="small">Superficie</label>
+    <select id="tileSurface">
+      <option value="grass">Hierba</option>
+      <option value="path">Camino de tierra</option>
+      <option value="cobble">Empedrado</option>
+      <option value="sand">Arena</option>
+      <option value="stone">Losas</option>
+    </select>
+    <label class="small">Forma</label>
+    <select id="tileShape">
+      <option value="flat">Plana</option>
+      <option value="ramp">Rampa (sube 1 nivel)</option>
+      <option value="stairs">Escalera (sube 1 nivel)</option>
+    </select>
+    <label class="small">Sube hacia</label>
+    <select id="tileDir">
+      <option value="auto">Automático (vecina más alta)</option>
+      <option value="0">Norte (-Z)</option>
+      <option value="1">Este (+X)</option>
+      <option value="2">Sur (+Z)</option>
+      <option value="3">Oeste (-X)</option>
+    </select>
+    <label class="small">Borde cuando queda por encima</label>
+    <select id="tileEdge">
+      <option value="cliff">Acantilado de roca</option>
+      <option value="wall">Muro de terraza</option>
+    </select>
+    <label class="small">Radio (teselas)</label>
+    <input id="tileRadius" type="range" min="0" max="6" step="1" value="0">
+    <label class="small">Fuera de las teselas</label>
+    <select id="tileOutside">
+      <option value="sea">Mar</option>
+      <option value="terrain">Terreno normal</option>
+    </select>
+    <button class="ghost" id="clearTilesBtn">🗑️ Borrar todas las teselas</button>
+  </div>
+
+  <h3>Abrir mapa del juego</h3>
+  <select id="gameMapSelect" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;"></select>
+  <button class="ghost" id="openGameMapBtn">Abrir</button>
 
   <h3>Terreno tipo bloque</h3>
   <label class="small">Radio del bloque (celdas)</label>

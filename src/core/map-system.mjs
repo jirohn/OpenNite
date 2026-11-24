@@ -10,6 +10,7 @@
  */
 
 import { clamp, lerp, smoothstep, noise2 } from './utils.js';
+import { normalizeModularTerrain, serializeModularTerrain, modularHeightAt } from './modular-terrain.mjs';
 
 // ============================================================================
 // 1. CONSTANTES DEL GRID MODULAR (ESTILO FORTNITE + CEL-SHADING TOTK)
@@ -259,6 +260,8 @@ export function normalizeMapData(raw = {}) {
     pieces,
     pois,
     roads: Array.isArray(src.roads) ? src.roads : [],
+    // Terreno modular (teselas de 4 m por niveles). null si el mapa no lo usa.
+    modular: normalizeModularTerrain(src.modular),
     raw: src,
   };
 }
@@ -306,6 +309,7 @@ export function serializeMapData(mapDef) {
     winds: norm.winds.map((w) => ({ ...w })),
     pieces: norm.pieces.map((p) => ({ ...p })),
     pois: norm.pois.map((poi) => ({ ...poi })),
+    ...(norm.modular ? { modular: serializeModularTerrain(norm.modular) } : {}),
   };
 }
 
@@ -442,7 +446,15 @@ export function evaluateTerrainHeight({
   terrainFlats = [],
   pois = [],
   waterLevel = 0,
+  modular = null,
 }) {
+  // 0. Terreno modular: si hay tesela (o el exterior es mar), su altura es exacta
+  //    y manda sobre todo lo demás. Mismo resultado en juego y editor.
+  if (modular) {
+    const mh = modularHeightAt(modular, x, z);
+    if (mh !== null) return mh;
+  }
+
   // 1. Altura base procedural
   let h = typeof rawHeightFn === 'function' ? rawHeightFn(x, z) : 0;
 

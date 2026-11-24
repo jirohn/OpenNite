@@ -22,6 +22,15 @@ import {
   serializeMapData,
   buildRoadNetwork,
 } from '../src/core/map-system.mjs';
+import {
+  MODULAR_TILE,
+  MODULAR_LEVEL,
+  MODULAR_DIRS,
+  modularKey,
+  modularIndex,
+  normalizeModularTerrain,
+  serializeModularTerrain,
+} from '../src/core/modular-terrain.mjs';
 
 const gltfLoader = new GLTFLoader();
 const fbxLoader = new FBXLoader();
@@ -448,6 +457,14 @@ const brushGhostGrid = (() => {
 
 /** Actualiza el ghost del cursor al tamaño de grid activo. */
 function updateBrushGhost(wx, wz, heightY) {
+  if (mode === 'tiles') {
+    const r = tileRadius();
+    const t = modularState.tile;
+    brushGhostGrid.position.set(modularIndex(wx, t) * t, heightY + 0.08, modularIndex(wz, t) * t);
+    brushGhostGrid.scale.set(t * (2 * r + 1), 1, t * (2 * r + 1));
+    brushGhostGrid.visible = true;
+    return;
+  }
   const gs = (['place','select'].includes(mode) && (selectedPiece === 'road' || selectedPiece === 'path')) ? ROAD_CELL_SIZE :
              mode === 'road' || mode === 'path' ? ROAD_CELL_SIZE :
              mode === 'wind' ? GRID_SIZE : activeGridSize;
@@ -603,6 +620,134 @@ function eraseWaterAt(wx, wz) {
   if (erased > 0) scheduleRebuild();
   document.querySelector('#status').textContent = `Agua borrada: ${erased} celdas`;
 }
+
+// ===========================================================================
+// TERRENO MODULAR (teselas de 4 m por niveles) — mismo formato que el juego
+// ===========================================================================
+const modularState = { tile: MODULAR_TILE, level: MODULAR_LEVEL, baseY: 0.5, outside: 'sea' };
+const tileCells = new Map(); // "gx,gz" -> { gx, gz, level, surface, shape, dir, edge }
+const tileStroke = new Set(); // teselas ya tocadas en el trazo actual (subir/bajar una vez)
+let tileStrokeActive = false;
+const tileVal = (id, d) => document.querySelector(id)?.value ?? d;
+function tileRadius() { return Math.max(0, Math.min(6, Math.round(+tileVal('#tileRadius', 0) || 0))); }
+
+/** Bloque `modular` listo para guardar (o undefined si no hay teselas). */
+function modularPayload() {
+  if (!tileCells.size) return undefined;
+  return serializeModularTerrain({ ...modularState, cells: tileCells });
+}
+
+/** El World del editor usa el mismo terreno modular al instante (alturas exactas). */
+function syncWorldModular() {
+  world.modular = normalizeModularTerrain(modularPayload());
+}
+
+function autoTileDir(c) {
+  const sel = tileVal('#tileDir', 'auto');
+  if (sel !== 'auto') return +sel;
+  for (let d = 0; d < 4; d++) {
+    const [dx, dz] = MODULAR_DIRS[d];
+    const n = tileCells.get(modularKey(c.gx + dx, c.gz + dz));
+    if (n && n.level === c.level + 1) return d;
+  }
+  return c.dir || 0;
+}
+
+function pickTileAt(wx, wz) {
+  const t = modularState.tile;
+  const c = tileCells.get(modularKey(modularIndex(wx, t), modularIndex(wz, t)));
+  if (!c) { document.querySelector('#status').textContent = 'No hay tesela ahí'; return; }
+  const set = (id, v) => { const el = document.querySelector(id); if (el) el.value = String(v); };
+  set('#tileLevel', c.level);
+  set('#tileSurface', c.surface);
+  set('#tileShape', c.shape);
+  set('#tileEdge', c.edge);
+  document.querySelector('#status').textContent = `Tesela ${c.gx},${c.gz}: nivel ${c.level}, ${c.surface}, ${c.shape}, borde ${c.edge}`;
+}
+
+function applyTiles(wx, wz) {
+  const tool = tileVal('#tileTool', 'paint');
+  const t = modularState.tile;
+  const cgx = modularIndex(wx, t), cgz = modularIndex(wz, t);
+  const r = tileRadius();
+  const level = Math.round(+tileVal('#tileLevel', 1) || 0);
+  const surface = tileVal('#tileSurface', 'grass');
+  const shape = tileVal('#tileShape', 'flat');
+  const edge = tileVal('#tileEdge', 'cliff');
+  let changed = 0;
+  for (let gz = cgz - r; gz <= cgz + r; gz++) {
+    for (let gx = cgx - r; gx <= cgx + r; gx++) {
+      const k = modularKey(gx, gz);
+      const cur = tileCells.get(k);
+      if ((tool === 'raise' || tool === 'lower') && tileStroke.has(k)) continue;
+      tileStroke.add(k);
+      if (tool === 'erase') { if (tileCells.delete(k)) changed++; continue; }
+      if (tool === 'paint') {
+        const c = { gx, gz, level, surface, shape: r === 0 ? shape : 'flat', dir: cur?.dir || 0, edge };
+        if (c.shape !== 'flat') c.dir = autoTileDir(c);
+        tileCells.set(k, c);
+        changed++;
+        continue;
+      }
+      if (tool === 'raise' || tool === 'lower') {
+        const base = cur || { gx, gz, level: tool === 'raise' ? -1 : 1, surface, shape: 'flat', dir: 0, edge };
+        tileCells.set(k, { ...base, level: base.level + (tool === 'raise' ? 1 : -1) });
+        changed++;
+        continue;
+      }
+      if (!cur) continue;
+      if (tool === 'surface') cur.surface = surface;
+      else if (tool === 'edge') cur.edge = edge;
+      else if (tool === 'shape') { cur.shape = shape; if (shape !== 'flat') cur.dir = autoTileDir(cur); }
+      changed++;
+    }
+  }
+  if (!changed) return;
+  syncWorldModular();
+  repositionPlacedToTerrain();
+  scheduleRebuild();
+  document.querySelector('#status').textContent = `Teselas: ${tileCells.size}`;
+}
+
+document.querySelector('#tileOutside')?.addEventListener('change', (e) => {
+  modularState.outside = e.target.value === 'terrain' ? 'terrain' : 'sea';
+  syncWorldModular();
+  scheduleRebuild();
+});
+document.querySelector('#clearTilesBtn')?.addEventListener('click', () => {
+  tileCells.clear();
+  syncWorldModular();
+  repositionPlacedToTerrain();
+  scheduleRebuild();
+  document.querySelector('#status').textContent = 'Teselas borradas';
+});
+
+// Abrir cualquier mapa del juego (mismo catálogo que el menú MAPAS).
+(async () => {
+  const sel = document.querySelector('#gameMapSelect');
+  if (!sel) return;
+  try {
+    const res = await fetch('/maps/index.json?t=' + Date.now());
+    const idx = await res.json();
+    const opts = [{ id: 'custom-map', name: 'Mapa personalizado (custom-map)', file: 'custom-map.json' }, ...(idx.maps || [])];
+    for (const m of opts) {
+      const o = document.createElement('option');
+      o.value = m.file || `${m.id}.json`;
+      o.textContent = m.name || m.id;
+      sel.appendChild(o);
+    }
+  } catch (e) { console.warn('[map-editor] index de mapas:', e); }
+  document.querySelector('#openGameMapBtn')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/maps/' + sel.value + '?t=' + Date.now());
+      const data = await res.json();
+      if (!data.id) data.id = sel.value.replace(/\.json$/, '');
+      await loadCustomMap(data);
+    } catch (e) {
+      document.querySelector('#status').textContent = 'No se pudo abrir: ' + e.message;
+    }
+  });
+})();
 
 let rebuildTimer = null;
 let rebuildChain = Promise.resolve();
@@ -921,6 +1066,8 @@ function syncBrushUI() {
   // Viento: mostrar panel de configuración de viento
   const windCtl = document.querySelector('#windControls');
   if (windCtl) windCtl.style.display = isWind ? '' : 'none';
+  const tileCtl = document.querySelector('#tileControls');
+  if (tileCtl) tileCtl.style.display = mode === 'tiles' ? '' : 'none';
 }
 const modeButtons = document.querySelectorAll('#modePalette button');
 modeButtons.forEach(b => b.addEventListener('click', () => {
@@ -1415,6 +1562,8 @@ canvas.addEventListener('pointerdown', (e) => {
 
   const hit = getGroundHit(e); if (!hit) return;
   painting = true;
+  tileStroke.clear();
+  tileStrokeActive = true;
   applyAt(hit, e.shiftKey);
 });
 canvas.addEventListener('pointermove', (e) => {
@@ -1471,6 +1620,7 @@ window.addEventListener('pointerup', (e) => {
   // Al soltar, aplica el pincel definitivo (preview sostenido sobre grid).
   const upHit = getGroundHit(e);
   if (upHit) applyAt(upHit, e.shiftKey);
+  tileStrokeActive = false;
 });
 
 function placeGrassAt(cx, cz) {
@@ -1523,6 +1673,12 @@ function placeDecorAt(cx, cz) {
 }
 
 function applyAt(hit, shift) {
+  if (mode === 'tiles') {
+    if (!tileStrokeActive) return;
+    if (shift) { pickTileAt(hit.x, hit.z); painting = false; tileStrokeActive = false; return; }
+    applyTiles(hit.x, hit.z);
+    return;
+  }
   if (mode === 'place') {
     if (isDecorType(selectedPiece)) { placeDecorAt(hit.x, hit.z); }
     else { placePieceAt(hit.x, hit.z); painting = false; }
@@ -1599,6 +1755,20 @@ async function loadCustomMap(dataOverride = null) {
     waterVegCells.set(k, w.veg);
   }
 
+  // Terreno modular (teselas) y nivel del agua: los mismos valores que usa el juego.
+  tileCells.clear();
+  if (norm.modular) {
+    Object.assign(modularState, { tile: norm.modular.tile, level: norm.modular.level, baseY: norm.modular.baseY, outside: norm.modular.outside });
+    for (const [k, c] of norm.modular.cells) tileCells.set(k, { ...c });
+  }
+  const outsideEl = document.querySelector('#tileOutside');
+  if (outsideEl) outsideEl.value = modularState.outside;
+  syncWorldModular();
+  if (Number.isFinite(norm.waterLevel)) {
+    world.setWaterLevelNow?.(norm.waterLevel);
+    if (waterLevelInput) waterLevelInput.value = snapH(norm.waterLevel);
+  }
+
   // Cargar vientos del mapa guardado
   winds.length = 0;
   for (const id of windGizmos.keys()) removeWindGizmo(id);
@@ -1611,7 +1781,7 @@ async function loadCustomMap(dataOverride = null) {
 
   await rebuildNow();
   refreshWindGizmos();
-  document.querySelector('#status').textContent = `Cargadas ${placed.length} piezas, ${heightOverrides.size} celdas de terreno, ${winds.length} vientos`;
+  document.querySelector('#status').textContent = `Cargadas ${placed.length} piezas, ${heightOverrides.size} celdas de terreno, ${tileCells.size} teselas, ${winds.length} vientos`;
 }
 document.querySelector('#waterVegetation')?.addEventListener('change', scheduleRebuild);
 loadCustomMap();
@@ -1648,13 +1818,18 @@ function buildSavePayload() {
     waterVegetation: +globalVeg.toFixed(2),
     waterCells: waterCellsArr,
     winds: winds.map(w => ({ ...w })),
+    // Mismo nivel de agua que se ve en el editor (antes el juego usaba otro).
+    waterLevel: snapH(Number.isFinite(world.waterLevelTarget) ? world.waterLevelTarget : (world.waterLevel ?? 0)),
+    modular: modularPayload(),
   };
 }
 
 document.querySelector('#saveMap').onclick = async () => {
   const payload = JSON.stringify(buildSavePayload(), null, 2);
   document.querySelector('#mapText').value = payload;
-  const paths = ['public/maps/custom-map.json', 'dist/maps/custom-map.json', 'maps/custom-map.json'];
+  const mapId = (baseCustomData.id && baseCustomData.id !== 'custom-map') ? String(baseCustomData.id).replace(/[^a-z0-9_-]/gi, '') : 'custom-map';
+  const fileName = `${mapId || 'custom-map'}.json`;
+  const paths = [`public/maps/${fileName}`, `dist/maps/${fileName}`, `maps/${fileName}`];
   let ok = 0;
   for (const p of paths) {
     try { await window.opennite?.app?.writeFile?.(p, payload); ok++; } catch {}
@@ -1662,10 +1837,10 @@ document.querySelector('#saveMap').onclick = async () => {
   if (!ok) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
-    a.download = 'custom-map.json';
+    a.download = fileName;
     a.click();
   }
-  document.querySelector('#status').textContent = `Guardado ${placed.length} piezas, ${heightOverrides.size} celdas terreno`;
+  document.querySelector('#status').textContent = `Guardado ${fileName}: ${placed.length} piezas, ${heightOverrides.size} celdas terreno, ${tileCells.size} teselas`;
 };
 
 document.querySelector('#loadMap').onclick = async () => {
