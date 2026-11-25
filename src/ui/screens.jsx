@@ -219,10 +219,7 @@ export function LobbyScreen() {
           </div>
         </div>
         <div className="panel-foot">
-          <Button className="small" onClick={() => window.openniteApp?.openEditor?.()} style={{ background: '#21456e' }}>🔫 EDITOR DE ARMAS</Button>
-          <Button className="small" onClick={() => window.openniteApp?.openMapEditor?.()} style={{ background: '#2a4a2a' }}>🗺️ EDITOR DE MAPA</Button>
-          <Button className="small" onClick={() => window.openniteApp?.openPartsEditor?.()} style={{ background: '#4a3520' }}>🧱 EDITOR DE PARTES</Button>
-          <Button className="small" onClick={() => window.openniteApp?.openCharacterEditor?.()} style={{ background: '#5b2d6e' }}>👤 EDITOR DE SKINS</Button>
+          <Button className="small" onClick={() => window.openniteApp?.openStudio?.()} style={{ background: '#5a4410' }} title="Mapas, escenas, personajes, equipo, vehículos y modelos (editores de Easy Game Developer)">🛠️ OPENNITE STUDIO</Button>
           <Button className="small" onClick={() => bridge.ui.showMenu()}>Volver</Button>
           <Button className="primary" style={{ minWidth: 190, justifyContent: 'center' }}
             onClick={() => bridge.app.startMatch(bridge.ui.selectedMap)}>DESPLEGAR ▶</Button>

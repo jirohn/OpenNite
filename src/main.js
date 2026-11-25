@@ -224,29 +224,22 @@ class AppController {
     else window.close();
   }
 
-  /** Abre la app aparte del Editor de armas (servida desde /tools/gun-editor.html). */
-  openEditor() {
+  /**
+   * Abre OpenNite Studio: el sistema de edición unificado al estilo de Easy Game
+   * Developer (Map Editor, Scene Editor, Personajes, Equipo, Vehículos y Modelos).
+   * Se sirve desde /tools/studio.html y solo se carga al abrirlo.
+   */
+  openStudio(tab = '') {
     if (this.input?.releaseLock) this.input.releaseLock();
-    setTimeout(() => { window.location.assign('/tools/gun-editor.html'); }, 30);
+    const q = tab ? `?tab=${encodeURIComponent(tab)}` : '';
+    setTimeout(() => { window.location.assign('/tools/studio.html' + q); }, 30);
   }
 
-  /** Abre la app aparte del Editor de mapa (servida desde /tools/map-editor.html). */
-  openMapEditor() {
-    if (this.input?.releaseLock) this.input.releaseLock();
-    setTimeout(() => { window.location.assign('/tools/map-editor.html'); }, 30);
-  }
-
-  /** Abre la app aparte del Editor de partes/piezas (servida desde /tools/parts-editor.html). */
-  openPartsEditor() {
-    if (this.input?.releaseLock) this.input.releaseLock();
-    setTimeout(() => { window.location.assign('/tools/parts-editor.html'); }, 30);
-  }
-
-  /** Abre el Editor de Skins/Personajes (servido desde /tools/character-editor.html). */
-  openCharacterEditor() {
-    if (this.input?.releaseLock) this.input.releaseLock();
-    setTimeout(() => { window.location.assign('/tools/character-editor.html'); }, 30);
-  }
+  // Nombres antiguos: todos abren el Studio en la pestaña que corresponde.
+  openEditor() { this.openStudio('equipment'); }
+  openMapEditor() { this.openStudio('world'); }
+  openPartsEditor() { this.openStudio('models'); }
+  openCharacterEditor() { this.openStudio('characters'); }
 }
 
 const app = new AppController();

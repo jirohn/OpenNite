@@ -255,10 +255,11 @@ async function createWindow() {
       { prefix: 'node_modules/', dir: join(rootDir, 'node_modules') },
     ]);
     let startUrl = `http://127.0.0.1:${server.port}/index.html`;
-    if (process.argv.includes('--editor')) startUrl = `http://127.0.0.1:${server.port}/tools/gun-editor.html`;
-    if (process.argv.includes('--map-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/map-editor.html`;
-    if (process.argv.includes('--parts-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/parts-editor.html`;
-    if (process.argv.includes('--character-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/character-editor.html`;
+    if (process.argv.includes('--studio')) startUrl = `http://127.0.0.1:${server.port}/tools/studio.html`;
+    if (process.argv.includes('--editor')) startUrl = `http://127.0.0.1:${server.port}/tools/studio.html?tab=equipment`;
+    if (process.argv.includes('--map-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/studio.html`;
+    if (process.argv.includes('--parts-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/studio.html?tab=models`;
+    if (process.argv.includes('--character-editor')) startUrl = `http://127.0.0.1:${server.port}/tools/studio.html?tab=characters`;
     await mainWindow.loadURL(startUrl);
   }
 }
