@@ -136,14 +136,18 @@ export function egdPieceToEntity(p) {
 // Agua del EGD nuevo: cada tesela puede tener un nivel de agua `w` (en pasos de
 // 0.5 m) por encima de su suelo `h`. La superficie está en w*0.5 - 0.15.
 export const EGD_WATER_OFFSET = 0.15;
-/** ¿Tiene agua la tesela? (mismo criterio que EGD: w > h) */
-export const egdTileHasWater = (t) => !!t && t.w !== undefined && t.w !== null && t.w > t.h;
+/** ¿Tiene líquido la tesela? (mismo criterio que EGD: w > h). `lq: "lava"` = lava. */
+export const egdTileHasLiquid = (t) => !!t && t.w !== undefined && t.w !== null && t.w > t.h;
+/** ¿Tiene agua (no lava) la tesela? */
+export const egdTileHasWater = (t) => egdTileHasLiquid(t) && t.lq !== 'lava';
+/** ¿Tiene lava la tesela? */
+export const egdTileHasLava = (t) => egdTileHasLiquid(t) && t.lq === 'lava';
 /** Altura de la superficie del agua de una tesela con agua. */
 export const egdTileWaterY = (t) => t.w * EGD_STEP - EGD_WATER_OFFSET;
 
 /**
- * Pasa las teselas de agua antiguas (tipo "water", lámina plana) al agua nueva de
- * EGD: misma superficie (w = h) y fondo de arena más hondo cuanto más lejos de la
+ * Pasa las teselas de agua y lava antiguas (tipo "water"/"lava", lámina plana) al
+ * agua y lava nuevas de EGD. Agua: misma superficie (w = h) y fondo de arena más hondo cuanto más lejos de la
  * orilla. Así el mapa se ve y se juega con el agua nueva (olas, reflejos, espuma,
  * cascadas y ondas). Devuelve cuántas teselas cambió.
  */
@@ -166,8 +170,13 @@ export function egdUpgradeWater(w) {
   }
   let n = 0;
   for (let i = 0; i < N * N; i++) {
-    if (!old(i)) continue;
     const t = tiles[i];
+    // Lava antigua -> lava nueva de EGD (misma superficie, 1 m de hondo, fondo volcánico).
+    if (t && t.t === 'lava') {
+      t.w = t.h; t.h -= 2; t.t = 'volcanic'; t.lq = 'lava'; t.m = 'block';
+      n++;
+    }
+    if (!old(i)) continue;
     const d = dist[i] > 0 ? dist[i] : 8; // todo agua: mar abierto
     const depth = Math.min(14, 1 + 2 * d); // 1.5 m en la orilla ... 7 m mar adentro
     t.w = t.h;

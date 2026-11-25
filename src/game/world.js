@@ -23,6 +23,7 @@ import { modularHeightAt, modularMinNear, normalizeModularTerrain } from '../cor
 import { buildModularTerrainMesh } from '../core/modular-terrain-mesh.mjs';
 import { EgdTerrain, EgdSurfaceMaterial, EGD_HEIGHT_STEP, EGD_TILE_TYPES } from '../core/egd-terrain.mjs';
 import { egdPieceToEntity } from '../core/egd-map.mjs';
+import { egdReloadGraphics } from '../core/egd-engine.mjs';
 import { egdBuildEntityObject } from '../core/egd-objects.mjs';
 
 /** Altura fuera del mundo de EGD (el vacío): se cae al agua/vacío como en el motor. */
@@ -2027,6 +2028,16 @@ transformed.y *= rise;`);
     const sea = this.waterLevel ?? -100;
     if (sea > -20 && ground < sea - 0.05) return sea;
     return -Infinity;
+  }
+
+  /** Daño por segundo de la lava de EGD en ese punto (0 si no hay lava o se está por encima). */
+  lavaDamageAt(pos) {
+    const t = this.egdTerrain;
+    if (!t || !pos) return 0;
+    const lq = t.liquidAt(pos.x, pos.z);
+    if (!lq?.damage) return 0;
+    const surface = t.heightAt(pos.x, pos.z, { liquidSurface: true });
+    return Number.isFinite(surface) && pos.y < surface + 0.3 ? lq.damage : 0;
   }
 
   isWaterfallAt(x, z, y) {
@@ -5609,9 +5620,20 @@ transformed.y *= rise;`);
     if (!this.egdWorld) return;
     // El agua es la del motor de EGD (olas, reflejos, espuma, cascadas y ondas).
     // Con la calidad de agua más baja se quita solo el reflejo (es lo que más cuesta).
-    if (Number(this.settings.get('waterQuality') ?? 1) < 1) {
+    const waterQuality = Number(this.settings.get('waterQuality') ?? 1);
+    if (waterQuality < 1) {
       this.egdWorld.water = { ...(this.egdWorld.water || {}), reflections: false };
     }
+    // Calidad del agua de EGD (detalle, ondas, reflejo) según el ajuste de OpenNite.
+    try {
+      const key = 'egd-graphics';
+      const cur = JSON.parse(localStorage.getItem(key) || '{}');
+      const q = Math.max(0, Math.min(3, Math.round(waterQuality)));
+      // particles controla también la cantidad de vida marina (algas, peces, rocas).
+      const water = ['low', 'medium', 'high', 'ultra'][q], particles = [0.5, 1, 1.5, 2.5][q];
+      if (cur.water !== water || cur.particles !== particles) localStorage.setItem(key, JSON.stringify({ ...cur, water, particles }));
+      egdReloadGraphics();
+    } catch { /* sin almacenamiento: calidad por defecto */ }
     this.egdTerrain = new EgdTerrain(this.egdWorld);
     this.egdTerrain.group.name = 'egd-terrain';
     this.egdTerrain.group.traverse((o) => {
@@ -5694,6 +5716,13 @@ transformed.y *= rise;`);
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('aDepth', new THREE.Float32BufferAttribute(depth, 1));
     geo.setAttribute('aFoam', new THREE.Float32BufferAttribute(foam, 1));
+    // Resto de atributos del agua de EGD: mar abierto, lejos de la orilla y sin corriente.
+    const n = pos.length / 3;
+    const fill = { aShore: 6, aOpen: 1 };
+    for (const [name, attr] of Object.entries(base.geometry.attributes)) {
+      if (geo.attributes[name]) continue;
+      geo.setAttribute(name, new THREE.Float32BufferAttribute(new Float32Array(n * attr.itemSize).fill(fill[name] ?? 0), attr.itemSize));
+    }
     geo.setIndex(idx);
     geo.computeBoundingSphere();
     // Fondo del mar exterior a la altura del fondo del agua del borde del mapa,
@@ -5702,7 +5731,7 @@ transformed.y *= rise;`);
     for (let i = 0; i < w.size; i++) {
       for (const [ix, iz] of [[i, 0], [i, w.size - 1], [0, i], [w.size - 1, i]]) {
         const t = w.tiles[iz * w.size + ix];
-        if (t && t.w > t.h) beds.push(t.h * EGD_HEIGHT_STEP);
+        if (t && t.w > t.h && t.lq !== 'lava') beds.push(t.h * EGD_HEIGHT_STEP);
       }
     }
     beds.sort((p, q) => p - q);
@@ -5710,8 +5739,7 @@ transformed.y *= rise;`);
     const bedGeo = geo.clone();
     const bp = bedGeo.attributes.position;
     for (let i = 0; i < bp.count; i++) bp.setY(i, bedY);
-    bedGeo.deleteAttribute('aDepth');
-    bedGeo.deleteAttribute('aFoam');
+    for (const name of Object.keys(bedGeo.attributes)) if (name !== 'position') bedGeo.deleteAttribute(name);
     bedGeo.computeVertexNormals();
     const bed = new THREE.Mesh(bedGeo, new EgdSurfaceMaterial({ color: EGD_TILE_TYPES.sand?.top || '#e0cf94' }));
     bed.name = 'egd-outer-seabed';

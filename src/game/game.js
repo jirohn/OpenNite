@@ -1182,6 +1182,22 @@ export class Game {
       }
     }
 
+    // Lava de EGD: quema (mismo daño por segundo que en EGD) a jugador y bots.
+    this.lavaDamageTimer = (this.lavaDamageTimer || 0) - dt;
+    if (this.lavaDamageTimer <= 0 && this.world.lavaDamageAt) {
+      this.lavaDamageTimer = 0.5;
+      const src = { name: 'la lava' };
+      if (player.alive && !player.inBus) {
+        const dmg = this.world.lavaDamageAt(player.position);
+        if (dmg > 0) this.onBotHit(player, dmg * 0.5, 'body', src, null);
+      }
+      for (const bot of this.bots) {
+        if (!bot.alive) continue;
+        const dmg = this.world.lavaDamageAt(bot.position);
+        if (dmg > 0 && bot.takeDamage(dmg * 0.5, 'body', src)) this.handleBotDeath(bot, src, 'Lava');
+      }
+    }
+
     this.world.update(player.position);
     this.world.tick(dt);
     this.world.updateDetailVisibility(player.position);
