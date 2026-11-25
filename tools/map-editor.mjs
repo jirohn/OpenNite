@@ -383,16 +383,17 @@ class EditorApp {
           try {
             const res = await fetch('/maps/' + m.file + '?t=' + Date.now());
             const raw = await res.json();
-            if (this.openMapData(raw, m.name)) modal?.remove();
+            if (this.openMapData(raw, m.name)) modal?.close();
           } catch (e) { alert('No se pudo abrir: ' + e.message); }
         },
       }, egdEl('span', { class: 'li-label' }, m.name || m.id), egdEl('small', {}, m.file)));
     }
     const fromFile = egdButton('📂 Desde un archivo (.json)…', async () => {
       const raw = await this.pickFile();
-      if (raw && this.openMapData(raw)) modal?.remove();
+      if (raw && this.openMapData(raw)) modal?.close();
     }, 'block');
-    modal = egdModal('Abrir mapa', egdHint('Mapas del juego:'), list, fromFile);
+    const close = egdEl('div', { class: 'btn-row', style: { justifyContent: 'flex-end', marginTop: '10px' } }, egdButton('Cerrar', () => modal?.close()));
+    modal = egdModal('Abrir mapa', egdHint('Mapas del juego:'), list, fromFile, close);
   }
 
   async pickFile() {
