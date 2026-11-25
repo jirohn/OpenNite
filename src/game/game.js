@@ -478,18 +478,17 @@ export class Game {
     this.storm.onStormFinal = () => this.hud.toast('La tormenta ha terminado', 'good');
 
     this.bots = [];
+    this.noiseEvents = [];
+    this._landingClaims = [];
+    this._landingSpots = null;
     const count = this.training ? 0 : clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
-    const dropZone = new THREE.Vector3(0, 220, this.world.half + 120);
     const spots = this.world.spawnPoints || [];
     const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
+    // Una sola ruta de autobús por partida: la comparten el jugador y los bots.
+    this.busRoute = this.training ? null : this.createBusRoute();
+    this.busTime = 0;
     for (let i = 0; i < count; i++) {
       const sp = spots.length ? spots[(i * 7 + 3) % spots.length] : { x: 0, y: 0, z: 0 };
-      const nearDrop = !this.training && i % 2 === 0;
-      const px = nearDrop ? (Math.random() - 0.5) * 24 : sp.x;
-      const pz = nearDrop ? (Math.random() - 0.5) * 24 : sp.z;
-      const botSpawn = this.training
-        ? { x: sp.x, y: 0, z: sp.z }
-        : { x: dropZone.x + px, y: dropZone.y + (nearDrop ? 20 + Math.random() * 180 : 30), z: dropZone.z + pz };
       const _cat = this.skinCatalog || DEFAULT_SKIN_CATALOG;
       const _botSkin = _cat[(i + 1) % _cat.length] || _cat[0] || {};
       const ch = await Character.create(kit, {
@@ -497,13 +496,12 @@ export class Game {
         presetIndex: i + 1,
         modelPath: _botSkin.modelPath,
       });
+      ch.world = this.world;
       this.scene.add(ch.group);
-      const bot = new Bot(ch, this.world, this, i, botSpawn);
-      bot.dropping = nearDrop;
+      const bot = new Bot(ch, this.world, this, i, this.training ? { spawn: { x: sp.x, y: 0, z: sp.z } } : {});
       bot.trainingDummy = !!this.training;
       bot.passive = !!this.training;
       if (this.training) {
-        bot.dropping = false;
         ch.group.traverse((o) => {
           if (o.isMesh) {
             const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -519,8 +517,11 @@ export class Game {
             if (!Array.isArray(mats)) o.material = o.material[0];
           }
         });
+        attachWeapon(ch, 'ar');
+      } else {
+        // Todos suben al autobús, como el jugador; cada uno decide dónde saltar.
+        bot.placeOnBus(this.busRoute);
       }
-      attachWeapon(ch, 'ar');
       this.bots.push(bot);
     }
 
@@ -541,7 +542,7 @@ export class Game {
       this.player.character.update(0.016);
       this.player.updateCamera(0.016);
     } else {
-      this.player.placeOnBus();
+      this.player.placeOnBus(this.busRoute);
     }
 
     this.world.debug?.setMarkers(() => [
@@ -569,6 +570,48 @@ export class Game {
     // Pintar ya el primer frame con la postura inicial, antes de cualquier update/pausa.
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * Ruta recta del autobús: cruza el mapa con una dirección aleatoria cada
+   * partida, pasando cerca del centro. La usan el jugador y los bots.
+   */
+  createBusRoute() {
+    const half = this.world.half;
+    const ang = Math.random() * Math.PI * 2;
+    const dir = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
+    const perp = new THREE.Vector3(-dir.z, 0, dir.x);
+    const offset = (Math.random() - 0.5) * half * 0.5;
+    const before = half + 120;
+    const start = perp.multiplyScalar(offset).addScaledVector(dir, -before);
+    start.y = 220;
+    const length = before + half + 40;
+    // Al menos ~14 s de viaje para poder elegir dónde saltar.
+    const speed = Math.min(78, Math.max(26, length / 14));
+    return {
+      start, dir, speed, length,
+      duration: length / speed,
+      yaw: Math.atan2(-dir.x, -dir.z),
+      positionAt(t, out = new THREE.Vector3()) {
+        return out.copy(this.start).addScaledVector(this.dir, Math.min(this.length, Math.max(0, t) * this.speed));
+      },
+    };
+  }
+
+  /** Sitios con botín (cofres, armas, objetos) y cuánto botín hay alrededor. */
+  getLandingSpots() {
+    if (this._landingSpots) return this._landingSpots;
+    const w = this.world;
+    const raw = [...(w.chestSpots || []), ...(w.weaponSpawnSpots || []), ...(w.lootSpots || [])];
+    const spots = raw.filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z)).map((p) => ({
+      pos: new THREE.Vector3(p.x, Number.isFinite(p.y) ? p.y : (w.surfaceHeightAt?.(p.x, p.z) ?? 0), p.z),
+      density: 0,
+    }));
+    for (const a of spots) {
+      for (const b of spots) if (a !== b && distance2D(a.pos, b.pos) < 30) a.density++;
+    }
+    this._landingSpots = spots;
+    return spots;
   }
 
   createBus() {
@@ -639,60 +682,132 @@ export class Game {
   // ---------------------- Combate ----------------------
 
   fire() {
-    const inv = this.player.inventory;
-    const shot = inv.fire(this.player.ads);
+    this.fireWeapon(this.player);
+  }
+
+  /**
+   * Disparo de cualquier jugador (persona o bot) con su arma real: misma
+   * munición, cadencia, dispersión, retroceso, alcance y daño para todos.
+   */
+  fireWeapon(shooter) {
+    const isHuman = shooter === this.player;
+    const body = isHuman ? this.player : shooter.body;
+    const inv = body.inventory;
+    const shot = inv.fire(body.ads);
     if (!shot) {
-      if (inv.current()?.ammo === 0) this.audio.play('empty');
+      if (isHuman && inv.current()?.ammo === 0) this.audio.play('empty');
       return;
     }
-    this.audio.play('shoot', { weapon: shot.weapon.type });
-    this.player.addRecoil(shot.recoil);
-    this.player.character.fire(shot.weapon.type);
-    const origin = this.camera.position.clone();
-    const muzzle = this.player.getMuzzlePosition();
-    const dirBase = this.player.getAimDirection(0);
+    const camDist = isHuman ? 0 : distance2D(body.position, this.camera.position);
+    const visible = isHuman || camDist < 260;
+    if (isHuman || camDist < 110) this.audio.play('shoot', { weapon: shot.weapon.type });
+    body.addRecoil(shot.recoil);
+    body.character.fire(shot.weapon.type);
+    // Ruido: los bots cercanos lo oyen.
+    const loud = { sniper: 220, shotgun: 110, ar: 130, smg: 100, pistol: 90, pickaxe: 12 }[shot.weapon.type] || 90;
+    this.noiseEvents.push({ x: body.position.x, y: body.position.y, z: body.position.z, time: this.matchTime, shooter, radius: loud });
+    if (this.noiseEvents.length > 64) this.noiseEvents.splice(0, this.noiseEvents.length - 64);
+
+    const origin = isHuman ? this.camera.position.clone() : body.eyePosition;
+    const muzzle = visible ? (isHuman ? this.player.getMuzzlePosition() : shooter.body.getMuzzlePosition()) : null;
+    const dirBase = body.getAimDirection(0);
+    const targets = [];
+    if (!isHuman && this.player.alive && !this.player.inBus) targets.push(this.player);
+    for (const bot of this.bots) if (bot !== shooter && bot.alive && !bot.inBus) targets.push(bot);
 
     for (let p = 0; p < shot.pellets; p++) {
-      const dir = this.player.getAimDirection(shot.spread);
+      const dir = body.getAimDirection(shot.spread);
       const worldHit = this.world.raycast(origin, dir, shot.range);
       let nearest = worldHit ? worldHit.distance : shot.range;
-      let hitBot = null;
+      let hitTarget = null;
       let hitPart = 'body';
       let hitPoint = null;
 
-      for (const bot of this.bots) {
-        if (!bot.alive) continue;
-        const d2 = distance2D(bot.position, this.player.position);
+      for (const t of targets) {
+        const d2 = distance2D(t.position, body.position);
         if (d2 > shot.range + 4) continue;
-        const boxes = bot.getHitboxes(this.hitboxes);
+        const boxes = t.getHitboxes(this.hitboxes);
         for (const b of boxes) {
-          const t = raySphere(origin, dir, b, b.r);
-          if (t > 0 && t < nearest) { nearest = t; hitBot = bot; hitPart = b.part; }
+          const hit = raySphere(origin, dir, b, b.r);
+          if (hit > 0 && hit < nearest) { nearest = hit; hitTarget = t; hitPart = b.part; }
         }
       }
 
-      if (hitBot) {
+      if (hitTarget) {
         hitPoint = origin.clone().addScaledVector(dir, nearest);
         const falloff = Math.max(0.4, 1 - nearest * shot.falloff);
         const mult = hitPart === 'head' ? 2.15 : hitPart === 'legs' ? 0.85 : 1;
         const dmg = shot.damage * falloff * mult;
-        this.effects.impact(hitPoint, dir.clone().negate(), hitPart === 'head' ? 'flesh' : 'flesh');
-        this.onBotHit(hitBot, dmg, hitPart, this.player, hitPoint, shot.weapon.name);
+        if (visible) this.effects.impact(hitPoint, dir.clone().negate(), 'flesh');
+        this.onBotHit(hitTarget, dmg, hitPart, shooter, hitPoint, shot.weapon.name);
       } else if (worldHit) {
         hitPoint = worldHit.point;
         if (worldHit.type === 'glass' && worldHit.glassKey) {
           this.world.breakGlass(worldHit.glassKey, worldHit.point);
-          this.effects.impact(worldHit.point, dir.clone().negate(), 'stone');
-        } else {
+          if (visible) this.effects.impact(worldHit.point, dir.clone().negate(), 'stone');
+        } else if (visible) {
           const surf = worldHit.type === 'terrain' ? 'terrain' : 'stone';
           this.effects.impact(worldHit.point, dir.clone().negate(), surf);
         }
       } else {
         hitPoint = origin.clone().addScaledVector(dir, shot.range);
       }
-      this.effects.tracer(muzzle, hitPoint, 0xffe08a);
+      if (visible) this.effects.tracer(muzzle, hitPoint, isHuman ? 0xffe08a : 0xffb04a);
     }
-    this.effects.muzzle(muzzle, dirBase, 0xffbb55);
+    if (visible) this.effects.muzzle(muzzle, dirBase, 0xffbb55);
+  }
+
+  /**
+   * Tecla E de un bot: mismas reglas que el jugador (coger al momento,
+   * cofres manteniendo 1 s, puertas manteniendo 0,5 s o corriendo contra ellas).
+   */
+  updateBotInteraction(bot, dt) {
+    const body = bot.body;
+    const st = bot._interact || (bot._interact = { chest: null, door: null, latch: false });
+    const holdE = bot.input.isDown('KeyE');
+    const nearDoor = this.world.findNearestDoor ? this.world.findNearestDoor(body.position, 2.6) : null;
+    if (nearDoor && !nearDoor.targetOpen && body.sprinting && body.grounded
+      && Math.hypot(body.velocity.x, body.velocity.z) > 3.5) {
+      this.world.setDoorOpen(nearDoor, true);
+      nearDoor.autoClose = 2.5;
+    }
+    if (!holdE || !body.alive) { st.chest = null; st.door = null; st.latch = false; return; }
+    if (st.chest) {
+      const e = st.chest.entity;
+      if (!e.group?.parent || e.pos.distanceToSquared(body.position) > 3.6 * 3.6) { st.chest = null; return; }
+      st.chest.time += dt;
+      body.character.play('chestOpen', 0.08);
+      if (st.chest.time >= st.chest.duration) {
+        this.loot.interact(e, body, { silent: bot.distToCamera > 30 });
+        st.chest = null;
+        st.latch = true;
+      }
+      return;
+    }
+    if (st.door) {
+      if (this.world.findNearestDoor(body.position, 3.0) !== st.door.entity) { st.door = null; return; }
+      st.door.time += dt;
+      if (st.door.time >= st.door.duration) {
+        this.world.toggleDoor(st.door.entity);
+        st.door.entity.autoClose = 2.5;
+        st.door = null;
+        st.latch = true;
+      }
+      return;
+    }
+    if (st.latch) return;
+    const near = this.loot.findNear(body.position, 3.4);
+    if (near) {
+      if (near.isChest) {
+        st.chest = { entity: near, time: 0, duration: 1.0 };
+        body.character.play('chestOpen', 0.08);
+      } else {
+        this.loot.interact(near, body, { silent: bot.distToCamera > 30 });
+        st.latch = true;
+      }
+    } else if (nearDoor && !nearDoor.targetOpen) {
+      st.door = { entity: nearDoor, time: 0, duration: 0.5 };
+    }
   }
 
   onBotHit(target, damage, part, attacker, point, weaponName = 'Fusil AR') {
@@ -741,27 +856,26 @@ export class Game {
       this.audio.play('kill');
       this.hud.banner('ELIMINADO', bot.name, 1.4);
     }
+    if (!isPlayer && attacker && attacker !== bot && typeof attacker.kills === 'number') attacker.kills++;
     this.hud.kill(isPlayer ? 'Tú' : attacker?.name || '???', bot.name, isPlayer ? weaponName : weaponName || 'AR');
     this.effects.burst(bot.position.clone().add(new THREE.Vector3(0, 1.2, 0)), 22, [0xff4d5e, 0x9b1c2e], { speed: 4, life: 0.8 });
     if (!this.training && this.loot) {
-      const drop = randomLoot(Math.random);
-      const angle = Math.random() * Math.PI * 2;
-      const pos = bot.position.clone().add(new THREE.Vector3(Math.cos(angle) * 1.5, 0.2, Math.sin(angle) * 1.5));
-      this.loot.createEntity(pos, drop, false);
+      // Suelta lo que llevaba encima, como un jugador.
+      const drops = bot.dropItems ? bot.dropItems() : [randomLoot(Math.random)];
+      if (!drops.length) drops.push(randomLoot(Math.random));
+      drops.forEach((drop, i) => {
+        const angle = (i / drops.length) * Math.PI * 2 + Math.random() * 0.4;
+        const pos = bot.position.clone().add(new THREE.Vector3(Math.cos(angle) * 1.5, 0.2, Math.sin(angle) * 1.5));
+        this.loot.createEntity(pos, drop, false);
+      });
     }
     if (this.training) {
       setTimeout(() => {
         if (this.mode !== 'playing') return;
         const spots = this.world?.spawnPoints || [{ x: 0, y: 0, z: 0 }];
         const sp = spots[Math.floor(Math.random() * spots.length)];
-        bot.alive = true;
-        bot.deathTimer = 0;
         bot.character.health = bot.character.maxHealth || 100;
-        bot.position.set(sp.x, 0, sp.z);
-        bot.velocity.set(0, 0, 0);
-        bot.character.group.visible = true;
-        bot.character.play('idle');
-        bot.character.group.position.copy(bot.position);
+        if (bot.respawn) bot.respawn(sp.x, 0, sp.z);
       }, 1500);
       return;
     }
@@ -915,12 +1029,8 @@ export class Game {
       player.update(dt, this.input);
 
       if (player.inBus) {
-        // Detrás y por debajo del jugador: la cámara nunca queda dentro del autobús.
-        this.bus.position.copy(player.position).add(new THREE.Vector3(0, -2.2, 13));
-        this.bus.visible = true;
         this.chute.visible = false;
       } else {
-        this.bus.visible = false;
         this.chute.visible = player.gliding;
         if (player.gliding) {
           this.chute.position.copy(player.position).add(new THREE.Vector3(0, 0.4, 0));
@@ -999,14 +1109,31 @@ export class Game {
       this.camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
     }
 
+    // Autobús: sigue su ruta aunque el jugador ya haya saltado (los bots siguen dentro).
+    if (this.busRoute && this.bus) {
+      this.busTime += dt;
+      const r = this.busRoute;
+      const onBoard = player.inBus || this.bots.some((b) => b.inBus);
+      this.bus.visible = this.busTime < r.duration + 1 && onBoard;
+      if (this.bus.visible) {
+        // Detrás y por debajo de la plaza del jugador: la cámara nunca queda dentro.
+        r.positionAt(this.busTime, this.bus.position).addScaledVector(r.dir, -13);
+        this.bus.position.y += -2.2 + Math.sin(player.time * 0.8) * 1.2;
+        this.bus.rotation.y = r.yaw;
+      }
+    } else if (this.bus) this.bus.visible = false;
+
     // Bots
+    if (this.noiseEvents?.length && this.matchTime - this.noiseEvents[0].time > 2) {
+      this.noiseEvents = this.noiseEvents.filter((n) => this.matchTime - n.time < 2);
+    }
     for (const bot of this.bots) bot.update(dt, player, this.bots, this.storm);
     if (player.alive) this.audio.applyDeaf(!!this.settings.get('deafMode'));
 
     // Tormenta y daño ambiental
     if (!this.training) {
-      if (player.inBus && this.matchTime > 8) this.storm.start();
-      if (!player.inBus && !this.storm.active) this.storm.start();
+      // Una sola vez: a los 8 s o cuando el jugador salta, lo que pase antes.
+      if (!this.storm.active && (this.matchTime > 8 || !player.inBus)) this.storm.start();
       this.storm.update(dt, player.position);
       this.stormDamageTimer -= dt;
       if (this.stormDamageTimer <= 0 && this.storm.active) {
