@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { clamp, lerp } from '../core/utils.js';
+import { StormDome } from './storm-dome.js';
 
 const PHASES = 9;
 
@@ -22,47 +23,11 @@ export class Storm {
     this.lastDamageSound = -100;
     this.time = 0;
 
-    const geo = new THREE.CylinderGeometry(1, 1, 1, 96, 1, true);
-    const mat = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      uniforms: {
-        uTime: { value: 0 },
-        uColor: { value: new THREE.Color(0x8a43ff) },
-        uFlash: { value: 0 },
-      },
-      vertexShader: `
-        varying vec2 vUv; varying vec3 vPos;
-        void main() {
-          vUv = uv; vPos = position;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }`,
-      fragmentShader: `
-        varying vec2 vUv; varying vec3 vPos;
-        uniform float uTime; uniform vec3 uColor; uniform float uFlash;
-        void main() {
-          float cols = 64.0;
-          float rows = 26.0;
-          vec2 g = vec2(fract(vUv.x * cols), fract(vUv.y * rows + uTime * 0.09));
-          vec2 cell = vec2(floor(vUv.x * cols), floor(vUv.y * rows + uTime * 0.09));
-          float jitter = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
-          g.y += (jitter - 0.5) * 0.4;
-          vec2 d = abs(fract(g) - 0.5);
-          float hex = 1.0 - smoothstep(0.34, 0.48, max(d.x, d.y));
-          float scan = sin(vUv.y * 120.0 - uTime * 3.0) * 0.5 + 0.5;
-          float edge = pow(1.0 - abs(vUv.y - 0.5) * 2.0, 2.0);
-          float a = (0.12 + hex * 0.3 + scan * 0.06) * (0.5 + edge * 0.5) + uFlash;
-          gl_FragColor = vec4(uColor * (0.8 + hex * 0.6), clamp(a, 0.0, 0.75));
-        }`,
-    });
-    this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.frustumCulled = false;
-    this.mesh.renderOrder = 4;
-    this.mesh.visible = false;
-    scene.add(this.mesh);
-    this.geo = geo;
-    this.mat = mat;
+    // Cúpula de cristales hexagonales (ver storm-dome.js).
+    this.dome = new StormDome(scene);
+    this.dome.setSky(world.theme?.sky, world.sunDirection);
+    this.mesh = this.dome.mesh;
+    this.mat = this.dome.mat;
   }
 
   start() {
@@ -122,11 +87,18 @@ export class Storm {
       this.center.lerpVectors(this._centerFrom || this.center, this.nextCenter, t);
     }
 
-    // Visual: cilindro centrado en el jugador
-    const height = 520;
-    this.mesh.scale.set(this.radius, height, this.radius);
-    this.mesh.position.set(playerPos.x, height / 2 - 90, playerPos.z);
-    this.mesh.material.uniforms.uColor.value.setHSL(0.76 - this.phase * 0.012, 0.75, 0.55);
+    // Visual: cúpula centrada en la zona segura.
+    this.dome.setShape(this.center, this.radius);
+    this.mat.uniforms.uColor.value.setHSL(0.76 - this.phase * 0.012, 0.75, 0.55);
+  }
+
+  /** ¿Necesita la cúpula la textura de refracción este frame? (solo si está al alcance de la cámara) */
+  needsRefraction(camera) {
+    if (!this.active || !this.mesh.visible) return false;
+    const p = camera.position;
+    const d = Math.abs(Math.hypot(p.x - this.center.x, p.z - this.center.z) - this.radius);
+    const capTop = 150 + this.dome.uniforms.uCapH.value;
+    return d < camera.far || Math.abs(p.y - capTop) < camera.far;
   }
 
   beginShrinkValues() {
@@ -141,8 +113,6 @@ export class Storm {
   }
 
   dispose() {
-    this.mesh.removeFromParent();
-    this.geo.dispose();
-    this.mat.dispose();
+    this.dome.dispose();
   }
 }

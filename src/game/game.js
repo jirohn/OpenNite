@@ -930,17 +930,30 @@ export class Game {
   }
 
   renderWaterRefraction() {
-    if (!this.world?.hasWater?.() || this.paused) return;
-    if (Number(this.settings.get('waterQuality') || 0) < 1) return;
+    if (this.paused || !this.world) return;
+    const needWater = !!this.world.hasWater?.() && Number(this.settings.get('waterQuality') || 0) >= 1;
+    const storm = this.mode === 'playing' ? this.storm : null;
+    const needStorm = !!storm?.needsRefraction(this.camera);
+    if (!needWater && !needStorm) {
+      storm?.dome.setSceneTexture(null, this._drawSize.x, this._drawSize.y);
+      return;
+    }
+    const stormWasVisible = storm ? storm.mesh.visible : false;
     try {
-      this.world.setWaterVisible(false);
+      this.world.setWaterVisible?.(false);
+      if (storm) storm.mesh.visible = false;
       this.renderer.setRenderTarget(this.refractionTarget);
       this.renderer.render(this.scene, this.camera);
     } finally {
       this.renderer.setRenderTarget(null);
-      this.world.setWaterVisible(true);
+      this.world.setWaterVisible?.(true);
+      if (storm) storm.mesh.visible = stormWasVisible;
     }
-    this.world.setRefractionTexture(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+    if (needWater) this.world.setRefractionTexture(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+    if (storm) {
+      storm.dome.setSceneTexture(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
+      storm.dome.uniforms.uFar.value = this.camera.far;
+    }
   }
 
   renderWaterReflections() {
@@ -986,8 +999,11 @@ export class Game {
     const prevTarget = this.renderer.getRenderTarget();
     const prevClipping = this.renderer.clippingPlanes;
     this._reflectPlane.set(this._reflectNormal, -planeY);
+    const stormMesh = this.storm?.mesh;
+    const stormWasVisible = stormMesh ? stormMesh.visible : false;
     try {
       this.world.setWaterVisible(false);
+      if (stormMesh) stormMesh.visible = false;
       this.renderer.clippingPlanes = [this._reflectPlane];
       this.renderer.setRenderTarget(this.reflectionTarget);
       this.renderer.render(this.scene, virtual);
@@ -995,6 +1011,7 @@ export class Game {
       this.renderer.setRenderTarget(prevTarget);
       this.renderer.clippingPlanes = prevClipping;
       this.world.setWaterVisible(true);
+      if (stormMesh) stormMesh.visible = stormWasVisible;
     }
     this.world.setReflectionTexture(this.reflectionTarget.texture, this.reflectionMatrix, true, planeY);
   }
