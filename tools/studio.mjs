@@ -26,6 +26,8 @@ import {
   EgdWorldEditor, EgdSceneEditor, EgdViewport, egdDispose, egdNewEntity, egdEl, egdModal, egdButton, egdSection, egdHint, egdRow, egdNumber, egdText, egdClear, egdCreateWorld as Hr, egdNormalizeWorld as M0, EGD_PROPS as Hn, EGD_BUILD_MATERIALS as Kt, EGD_BUILD_PIECES as Ei, EGD_SHAPES as bo, EGD_ENTITY_TYPES as qr, EGD_PRESET_LIST as ii, egdNormalizeEntity as S0, egdNewCharacter as _n, egdMakeTile as gh,
 } from '../src/core/egd-engine.mjs';
 import { isEgdMap, EGD_MAP_FORMAT, egdUpgradeWater, egdTileHasWater } from '../src/core/egd-map.mjs';
+import { seedOpenNiteCharacters, installAssetResolver, applyOpenNiteTextures, skinsCatalogFromProject, skinSection } from './studio-skins.mjs';
+import { egdSelect, egdCheck } from '../src/core/egd-engine.mjs';
 
 const $ = (s) => document.querySelector(s);
 const AUTOSAVE_KEY = 'opennite-editor-autosave-v1';
@@ -339,16 +341,31 @@ class EditorApp {
   async loadStudioFile() {
     let unsaved = false;
     try { unsaved = localStorage.getItem(AUTOSAVE_KEY + ':unsaved') === '1'; } catch {}
-    if (unsaved) return this.log('Personajes, equipo y modelos: se recuperan los cambios sin guardar.');
+    if (unsaved) {
+      this.log('Personajes, equipo y modelos: se recuperan los cambios sin guardar.');
+      if (await this.seedGameCharacters()) { this.snapshot = JSON.stringify(this.project); this.rev++; this.reloadCurrent(); }
+      return;
+    }
     try {
       const res = await fetch('/' + STUDIO_FILE + '?t=' + Date.now());
-      if (!res.ok) return;
-      applyStudio(this.project, await res.json());
+      let data = null;
+      if (res.ok) { try { data = JSON.parse(await res.text()); } catch {} }
+      if (data) applyStudio(this.project, data);
+      await this.seedGameCharacters();
       this.snapshot = JSON.stringify(this.project);
       this.rev++;
       this.reloadCurrent();
       this.loadModels();
     } catch (e) { this.log('No se pudo leer ' + STUDIO_FILE + ': ' + e.message, 'warn'); }
+  }
+
+  /** Los avatares del juego entran como modelos y personajes de EGD (solo los que falten). */
+  async seedGameCharacters() {
+    let catalog = null;
+    try { const r = await fetch('/config/character-skins.json?t=' + Date.now()); if (r.ok) catalog = await r.json(); } catch {}
+    const added = seedOpenNiteCharacters(this.project, catalog, _n);
+    if (added) this.log(`Personajes del juego añadidos al Studio: ${added}`);
+    return added;
   }
 
   /** Los editores de EGD (Personajes, Equipo, Vehículos, Modelos) se cargan al abrir su pestaña. */
@@ -357,7 +374,16 @@ class EditorApp {
     this._studioLoading ??= (async () => {
       const m = await import('../src/core/egd-studio.mjs');
       this.studio = m;
-      this.editors.characters = new m.EgdCharacterEditor(this);
+      installAssetResolver(m.egdAssetStore, () => this.project);
+      m.egdModelLibrary.on('ready', (id) => applyOpenNiteTextures(this, id));
+      m.egdModelLibrary.on('error', (model, err) => this.log(`No se pudo cargar el modelo «${model?.name}»: ${err?.message || err}`, 'warn'));
+      const app = this;
+      const ui = { egdSection, egdRow, egdText, egdNumber, egdSelect, egdCheck, egdHint, egdEl };
+      // Personajes de EGD + la sección "Skin de OpenNite".
+      class OpenNiteCharacterEditor extends m.EgdCharacterEditor {
+        renderLook(e, t) { super.renderLook(e, t); e.append(skinSection(app, t, ui)); }
+      }
+      this.editors.characters = new OpenNiteCharacterEditor(this);
       this.editors.equipment = new m.EgdEquipmentEditor(this);
       this.editors.vehicles = new m.EgdVehicleEditor(this);
       this.editors.models = new m.EgdModelEditor(this);
@@ -539,6 +565,13 @@ class EditorApp {
     for (const dir of ['public', 'dist']) {
       try { await write(`${dir}/${STUDIO_FILE}`, studioJson); } catch (e) { this.log(`No se pudo guardar ${dir}/${STUDIO_FILE}: ${e.message}`, 'warn'); }
     }
+    // Skins del juego (menú, taquilla y partida).
+    const { catalog, skipped } = skinsCatalogFromProject(this.project);
+    if (catalog.skins.length) {
+      const sj = JSON.stringify(catalog, null, 2);
+      for (const dir of ['public', 'dist']) { try { await write(`${dir}/config/character-skins.json`, sj); } catch {} }
+    }
+    if (skipped.length) this.log('Sin modelo 3D, no salen como skin: ' + skipped.join(', '), 'warn');
     let ok = 0;
     for (const dir of ['public/maps', 'dist/maps']) {
       try { await write(`${dir}/${fileName}`, json); ok++; } catch {}

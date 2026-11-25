@@ -50,6 +50,29 @@ const NEW_MIXAMO_ANIMS = [
 
 const customModelCache = new Map();
 
+/**
+ * Los FBX de 100Avatars guardan la textura con una ruta del PC de su autor
+ * (c:/PolygonalMind/...) y algunos traen opacidad 0. Se usa la textura .png que
+ * está junto al modelo y opacidad 1 (igual que en OpenNite Studio).
+ */
+function fixAvatarMaterials(root, modelPath) {
+  let tex = null;
+  const sibling = String(modelPath).replace(/\.fbx$/i, '.png');
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m) continue;
+      if (m.opacity === 0) { m.opacity = 1; m.transparent = false; }
+      if (!m.map || !m.map.image) {
+        if (!tex) { tex = new THREE.TextureLoader().load(sibling); tex.colorSpace = THREE.SRGBColorSpace; }
+        m.map = tex;
+        if (m.color) m.color.set(0xffffff);
+        m.needsUpdate = true;
+      }
+    }
+  });
+}
+
 async function loadSharedJimmyAnims() {
   if (sharedJimmyAnimsPromise) return sharedJimmyAnimsPromise;
   sharedJimmyAnimsPromise = (async () => {
@@ -312,7 +335,9 @@ export class Character {
       entry = { template: (async () => {
         if (isFbx) {
           const loader = new FBXLoader();
-          return new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
+          const fbx = await new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
+          if (/100avatars/i.test(modelPath)) fixAvatarMaterials(fbx, modelPath);
+          return fbx;
         }
         const loader = new GLTFLoader();
         const gltf = await new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
