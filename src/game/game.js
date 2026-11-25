@@ -208,7 +208,9 @@ export class Game {
     const dpr = window.devicePixelRatio || 1;
     const maxDpr = s.quality === 'low' ? 1 : s.quality === 'medium' ? 1.25 : 1.5;
     const pr = Math.min(dpr, maxDpr) * (s.resolutionScale || 1);
-    this.renderer.setPixelRatio(Math.min(pr, 1.25));
+    this._basePixelRatio = Math.min(pr, 1.25);
+    this._dynScale = 1;
+    this.renderer.setPixelRatio(this._basePixelRatio);
     this.renderer.shadowMap.enabled = !!s.shadows;
     if (this.world?.sun) {
       this.world.sun.castShadow = !!s.shadows;
@@ -228,6 +230,30 @@ export class Game {
     this.useComposer = this.bloomEnabled;
     this.renderer.info.autoReset = true;
     this.applyViewDistances(s);
+    this.resize();
+  }
+
+  /**
+   * Resolución dinámica: si el FPS medio cae por debajo de ~45, se baja la
+   * resolución interna (hasta el 60 % de la elegida); cuando sobra margen se
+   * vuelve a subir. Todos los efectos siguen activos; solo cambia la nitidez
+   * mientras el equipo no da abasto (gráficas integradas, GPUs modestas).
+   */
+  updateDynamicResolution(dt) {
+    if (!this._basePixelRatio || this.paused || this.settings.get('dynamicResolution') === false) return;
+    this._dynAcc = (this._dynAcc || 0) + dt;
+    this._dynFrames = (this._dynFrames || 0) + 1;
+    if (this._dynAcc < 1.5) return;
+    const fps = this._dynFrames / this._dynAcc;
+    this._dynAcc = 0;
+    this._dynFrames = 0;
+    // dt está limitado a 0.05 s: con menos de 20 FPS reales esta cuenta se queda en 20.
+    let next = this._dynScale || 1;
+    if (fps < 45) next = Math.max(0.6, next - (fps < 30 ? 0.15 : 0.08));
+    else if (fps > 57) next = Math.min(1, next + 0.05);
+    if (Math.abs(next - (this._dynScale || 1)) < 0.001) return;
+    this._dynScale = next;
+    this.renderer.setPixelRatio(Math.max(0.35, this._basePixelRatio * next));
     this.resize();
   }
 
@@ -938,16 +964,23 @@ export class Game {
       storm?.dome.setSceneTexture(null, this._drawSize.x, this._drawSize.y);
       return;
     }
+    // Solo la cúpula (sin agua clásica): basta con refrescarla a la mitad de
+    // frecuencia, lo de detrás se ve deformado y casi no cambia entre frames.
+    this._refractionFrame = (this._refractionFrame || 0) + 1;
+    if (!needWater && (this._refractionFrame & 1)) return;
     const stormWasVisible = storm ? storm.mesh.visible : false;
+    let restoreDetail = null;
     try {
       this.world.setWaterVisible?.(false);
       if (storm) storm.mesh.visible = false;
+      restoreDetail = this.world.hideFineDetailForPass?.();
       // El reflejo del agua de EGD ya se calcula en el pase principal.
       this.world.skipEgdReflection = true;
       this.renderer.setRenderTarget(this.refractionTarget);
       this.renderer.render(this.scene, this.camera);
     } finally {
       this.world.skipEgdReflection = false;
+      restoreDetail?.();
       this.renderer.setRenderTarget(null);
       this.world.setWaterVisible?.(true);
       if (storm) storm.mesh.visible = stormWasVisible;
@@ -1036,6 +1069,8 @@ export class Game {
         this.updateMatch(dt);
       }
     }
+    this.world?.updateMarineLod?.(this.camera.position);
+    this.updateDynamicResolution(dt);
     this.renderWaterRefraction();
     this.renderWaterReflections();
     const uw = this.underwaterPass?.uniforms;

@@ -5654,6 +5654,39 @@ transformed.y *= rise;`);
    * las colisiones ya están creadas como cajas aparte.
    */
   /**
+   * Para pases secundarios (refracción de la cúpula): la hierba y la vida marina
+   * no se distinguen a través del cristal deformado y son lo que más triángulos
+   * tiene. Devuelve una función que restaura lo que se ocultó.
+   */
+  hideFineDetailForPass() {
+    const t = this.egdTerrain;
+    if (!t) return () => {};
+    if (!this._fineDetail || this._fineDetailFor !== t) {
+      this._fineDetailFor = t;
+      this._fineDetail = () => [t.group.getObjectByName('Hierba'), t.water?.marine?.group].filter(Boolean);
+    }
+    const list = this._fineDetail();
+    const prev = list.map((o) => o.visible);
+    for (const o of list) o.visible = false;
+    return () => list.forEach((o, i) => { o.visible = prev[i]; });
+  }
+
+  /**
+   * Vida marina por distancia: algas, rocas y peces miden centímetros. Desde el
+   * autobús o planeando muy alto no se distinguen pero sus cientos de miles de
+   * triángulos se dibujaban igual. Se ocultan cuando la cámara está a más de
+   * 35 m por encima del agua y reaparecen al bajar.
+   */
+  updateMarineLod(camPos) {
+    const group = this.egdTerrain?.water?.marine?.group;
+    if (!group || !camPos) return;
+    const water = Number.isFinite(this.waterLevel) ? this.waterLevel : 0;
+    const high = camPos.y - water;
+    const show = group.visible ? high < 40 : high < 35;
+    if (group.visible !== show) group.visible = show;
+  }
+
+  /**
    * El reflejo del agua de EGD vuelve a dibujar toda la escena. La vida marina
    * está bajo el agua y no sale en el reflejo, pero sus ~400.000 triángulos se
    * procesaban igual, así que se oculta durante ese pase. Además, si el reflejo se
