@@ -1,5 +1,14 @@
 /**
- * OpenNite - Editor de mapas.
+ * OpenNite Studio - el sistema de edición unificado de OpenNite.
+ *
+ * Una sola ventana con las pestañas de Easy Game Developer: Map Editor, Scene
+ * Editor, Personajes, Equipo, Vehículos y Modelos. Las dos primeras son el
+ * editor de mapas (abajo); las otras cuatro son los editores reales de EGD
+ * (src/core/egd-studio.mjs), que se cargan la primera vez que se abre su pestaña.
+ * Lo que no es del mapa (personajes, equipo, modelos, vehículos) se guarda en
+ * config/egd-studio.json con los mismos campos que un proyecto de EGD.
+ *
+ * Editor de mapas:
  *
  * Es el editor de Easy Game Developer (EGD): las pestañas "Map Editor" y
  * "Scene Editor" son las clases de EGD (editor de Mundo y editor de Escena)
@@ -20,6 +29,10 @@ import { isEgdMap, EGD_MAP_FORMAT, egdUpgradeWater, egdTileHasWater } from '../s
 
 const $ = (s) => document.querySelector(s);
 const AUTOSAVE_KEY = 'opennite-editor-autosave-v1';
+const STUDIO_FILE = 'config/egd-studio.json';
+// Campos de un proyecto de EGD que no son del mapa: viven en STUDIO_FILE.
+const STUDIO_FIELDS = ['characters', 'items', 'models', 'assets', 'modelOverrides', 'vehicleRide', 'player', 'sounds'];
+const STUDIO_TABS = ['characters', 'equipment', 'vehicles', 'models'];
 const MAX_UNDO = 60;
 const WIND_DEFAULTS = { strength: 2.5, radius: 40 };
 
@@ -27,6 +40,9 @@ const WIND_DEFAULTS = { strength: 2.5, radius: 40 };
 const WEAPON_ITEM = {
   id: 'opennite_weapon',
   name: 'Arma + munición (aleatoria)',
+  category: 'weapon',
+  subtype: 'ranged',
+  description: 'Punto de botín de OpenNite: al empezar la partida sale un arma al azar con su munición.',
   parts: [
     { shape: 'box', color: '#3d4350', size: [0.9, 0.22, 0.2], pos: [0, 0.05, 0], rot: [0, 0, 0] },
     { shape: 'box', color: '#2a2e36', size: [0.16, 0.3, 0.14], pos: [-0.22, -0.16, 0], rot: [0, 0, 14] },
@@ -40,6 +56,40 @@ const WEAPON_ITEM = {
 qr.wind = { name: 'Viento', icon: '💨' };
 qr.spawn = { name: 'Spawn (entrenamiento)', icon: '⚑' };
 qr.pickup = { name: 'Arma + munición', icon: '✦' };
+
+// ------------------------------------------------------------------ datos del Studio
+/** Datos del Studio (lo que no es del mapa) con los valores por defecto de EGD. */
+function normalizeStudio(raw = {}) {
+  const d = {};
+  d.characters = Array.isArray(raw.characters) && raw.characters.length ? raw.characters : [_n('Jugador')];
+  d.items = (Array.isArray(raw.items) ? raw.items : []).filter((it) => it.id !== WEAPON_ITEM.id);
+  d.models = Array.isArray(raw.models) ? raw.models : [];
+  d.assets = raw.assets && typeof raw.assets === 'object' ? raw.assets : {};
+  d.modelOverrides = raw.modelOverrides && typeof raw.modelOverrides === 'object' ? raw.modelOverrides : {};
+  d.vehicleRide = raw.vehicleRide && typeof raw.vehicleRide === 'object' ? raw.vehicleRide : {};
+  d.sounds = Array.isArray(raw.sounds) ? raw.sounds : [];
+  for (const it of d.items) { it.parts ??= []; it.stats ??= {}; it.scriptParams ??= {}; it.category ??= 'weapon'; it.subtype ??= 'ranged'; }
+  d.player = { maxHealth: 100, speed: 5, jump: 8, camera: 'third', ...(raw.player || {}) };
+  d.player.startItems = (Array.isArray(d.player.startItems) ? d.player.startItems : []).filter((s) => s.itemId !== WEAPON_ITEM.id);
+  if (!d.characters.some((c) => c.id === d.player.characterId)) d.player.characterId = d.characters[0].id;
+  return d;
+}
+
+/** Pone los datos del Studio en el proyecto (el arma de OpenNite siempre va la primera). */
+function applyStudio(p, studio) {
+  const d = normalizeStudio(studio);
+  for (const k of STUDIO_FIELDS) p[k] = d[k];
+  p.items = [JSON.parse(JSON.stringify(WEAPON_ITEM)), ...d.items];
+  return p;
+}
+
+/** Datos del Studio del proyecto, listos para guardar en STUDIO_FILE. */
+function studioFromProject(p) {
+  const out = { format: 'opennite-studio', version: 1 };
+  for (const k of STUDIO_FIELDS) out[k] = JSON.parse(JSON.stringify(p[k] ?? null));
+  out.items = (out.items || []).filter((it) => it.id !== WEAPON_ITEM.id);
+  return out;
+}
 
 // ------------------------------------------------------------------ mapa <-> proyecto
 function slug(s) {
@@ -270,7 +320,7 @@ class EditorApp {
     this.dirty = false;
     this.consoleCount = 0;
     this.mapIndex = null;
-    this.project = this.loadAutosave() || newProject();
+    this.project = this.loadAutosave() || applyStudio(newProject(), {});
     this.snapshot = JSON.stringify(this.project);
     this.engine = new EgdViewport($('#canvas-host'));
     this.editors = { world: new OpenNiteWorldEditor(this), scene: new OpenNiteSceneEditor(this) };
@@ -278,12 +328,55 @@ class EditorApp {
     this.bindUI();
     this.updateTitle();
     this.setDirty(false);
-    this.switchTab('world');
-    this.log('Editor de mapas de OpenNite listo (motor de Easy Game Developer).');
+    const start = new URLSearchParams(location.search).get('tab');
+    this.switchTab(start && (start in this.editors || STUDIO_TABS.includes(start)) ? start : 'world');
+    this.log('OpenNite Studio listo (editores de Easy Game Developer).');
+    this.loadStudioFile();
   }
 
-  switchTab(name) {
-    if (this.current === this.editors[name]) return;
+  // ---- Studio: personajes, equipo, vehículos y modelos
+  /** Carga config/egd-studio.json salvo que haya cambios sin guardar en el autoguardado. */
+  async loadStudioFile() {
+    let unsaved = false;
+    try { unsaved = localStorage.getItem(AUTOSAVE_KEY + ':unsaved') === '1'; } catch {}
+    if (unsaved) return this.log('Personajes, equipo y modelos: se recuperan los cambios sin guardar.');
+    try {
+      const res = await fetch('/' + STUDIO_FILE + '?t=' + Date.now());
+      if (!res.ok) return;
+      applyStudio(this.project, await res.json());
+      this.snapshot = JSON.stringify(this.project);
+      this.rev++;
+      this.reloadCurrent();
+      this.loadModels();
+    } catch (e) { this.log('No se pudo leer ' + STUDIO_FILE + ': ' + e.message, 'warn'); }
+  }
+
+  /** Los editores de EGD (Personajes, Equipo, Vehículos, Modelos) se cargan al abrir su pestaña. */
+  async loadStudioEditors() {
+    if (this.editors.characters) return;
+    this._studioLoading ??= (async () => {
+      const m = await import('../src/core/egd-studio.mjs');
+      this.studio = m;
+      this.editors.characters = new m.EgdCharacterEditor(this);
+      this.editors.equipment = new m.EgdEquipmentEditor(this);
+      this.editors.vehicles = new m.EgdVehicleEditor(this);
+      this.editors.models = new m.EgdModelEditor(this);
+      this.loadModels();
+    })();
+    return this._studioLoading;
+  }
+
+  getBuffer = (id) => this.studio?.egdAssetStore.get(id, this.project.assets?.[id]);
+  loadModels() { this.studio?.egdModelLibrary.prepareAll(this.project, this.getBuffer).catch(() => {}); }
+
+  async switchTab(name) {
+    if (!this.editors[name] && STUDIO_TABS.includes(name)) {
+      this.status('Cargando editor…');
+      try { await this.loadStudioEditors(); }
+      catch (e) { this.log('No se pudo cargar el editor: ' + e.message, 'error'); return; }
+      this.status('Listo');
+    }
+    if (!this.editors[name] || this.current === this.editors[name]) return;
     this.current?.deactivate();
     for (const el of [this.left, this.right, this.overlay]) egdClear(el);
     this.closeDrawers();
@@ -305,6 +398,8 @@ class EditorApp {
     if (this.current && 'lastRev' in this.current) this.current.lastRev = this.rev;
     this.setDirty(true);
     this.status(label);
+    clearTimeout(this._modelsTimer);
+    this._modelsTimer = setTimeout(() => this.loadModels(), 300);
     clearTimeout(this._autosave);
     this._autosave = setTimeout(() => this.autosave(), 800);
   }
@@ -335,10 +430,18 @@ class EditorApp {
     this.setDirty(false);
     this.reloadCurrent();
     this.autosave();
+    this.loadModels();
   }
 
   // ---- archivo
-  autosave() { try { localStorage.setItem(AUTOSAVE_KEY, this.snapshot); } catch {} }
+  autosave() {
+    try {
+      localStorage.setItem(AUTOSAVE_KEY, this.snapshot);
+      localStorage.setItem(AUTOSAVE_KEY + ':unsaved', this.dirty ? '1' : '0');
+    } catch {}
+  }
+  /** Un mapa nuevo o abierto conserva los personajes, el equipo y los modelos del Studio. */
+  withStudio(p) { return applyStudio(p, studioFromProject(this.project)); }
   loadAutosave() {
     try {
       const s = localStorage.getItem(AUTOSAVE_KEY);
@@ -347,8 +450,8 @@ class EditorApp {
       if (!p?.world?.tiles) return null;
       M0(p.world);
       p.entities ??= []; p.entities.forEach(S0);
-      p.items = [JSON.parse(JSON.stringify(WEAPON_ITEM))];
-      p.characters ??= [_n('Héroe')]; p.scripts ??= []; p.models ??= []; p.opennite ??= {};
+      applyStudio(p, p);
+      p.scripts ??= []; p.opennite ??= {};
       return p;
     } catch { return null; }
   }
@@ -357,7 +460,7 @@ class EditorApp {
 
   async newMap() {
     if (this.dirty && !confirm('Hay cambios sin guardar. ¿Crear un mapa nuevo?')) return;
-    this.replaceProject(newProject());
+    this.replaceProject(this.withStudio(newProject()));
     this.toast('Mapa nuevo: plano y bajo el nivel del agua');
   }
 
@@ -366,7 +469,7 @@ class EditorApp {
       alert('Este mapa es del sistema antiguo de OpenNite (terreno procedural) y no tiene teselas. Abre un mapa egd-map o crea uno nuevo.');
       return false;
     }
-    this.replaceProject(projectFromMap(raw));
+    this.replaceProject(this.withStudio(projectFromMap(raw)));
     this.toast('Mapa abierto: ' + (label || this.project.world.name));
     return true;
   }
@@ -431,6 +534,11 @@ class EditorApp {
     const fileName = `${id}.json`;
     const write = window.opennite?.app?.writeFile;
     if (!write) { this.download(fileName, json); this.setDirty(false); return; }
+    // Personajes, equipo, vehículos y modelos.
+    const studioJson = JSON.stringify(studioFromProject(this.project), null, 2);
+    for (const dir of ['public', 'dist']) {
+      try { await write(`${dir}/${STUDIO_FILE}`, studioJson); } catch (e) { this.log(`No se pudo guardar ${dir}/${STUDIO_FILE}: ${e.message}`, 'warn'); }
+    }
     let ok = 0;
     for (const dir of ['public/maps', 'dist/maps']) {
       try { await write(`${dir}/${fileName}`, json); ok++; } catch {}
@@ -454,7 +562,8 @@ class EditorApp {
       await window.opennite?.settings?.set?.({ ...(s || {}), mapId: id });
     } catch {}
     this.setDirty(false);
-    this.toast('Mapa guardado en el juego: ' + file.name);
+    this.autosave();
+    this.toast('Guardado en el juego: ' + file.name + ' y el Studio');
     this.log(`Guardado ${fileName}: ${file.world.size}×${file.world.size} teselas, ${file.entities.length} objetos, ${file.opennite.winds.length} vientos`);
   }
 
@@ -481,7 +590,7 @@ class EditorApp {
   }
   updateTitle() {
     $('#project-name').value = this.project.world.name || 'Mapa';
-    document.title = (this.project.world.name || 'Mapa') + ' — OpenNite · Editor de mapas';
+    document.title = (this.project.world.name || 'Mapa') + ' — OpenNite Studio';
   }
   status(t) { $('#status-text').textContent = t; }
   toast(t) {
@@ -527,6 +636,18 @@ class EditorApp {
     $('#mb-right').onclick = () => this.toggleDrawer('right');
     $('#drawer-backdrop').addEventListener('click', () => this.closeDrawers());
     document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => this.switchTab(b.dataset.tab)));
+    // Flechas de las pestañas cuando no caben (como en EGD).
+    const tabs = $('#tabs');
+    const arrows = () => {
+      const l = tabs.scrollLeft > 2, r = tabs.scrollLeft + tabs.clientWidth < tabs.scrollWidth - 2;
+      tabs.classList.toggle('can-left', l); tabs.classList.toggle('can-right', r);
+      $('#tabs-left').classList.toggle('show', l); $('#tabs-right').classList.toggle('show', r);
+    };
+    $('#tabs-left').onclick = () => { tabs.scrollLeft -= 160; };
+    $('#tabs-right').onclick = () => { tabs.scrollLeft += 160; };
+    tabs.addEventListener('scroll', arrows);
+    window.addEventListener('resize', arrows);
+    setTimeout(arrows, 0);
     $('#project-name').addEventListener('change', (e) => {
       const v = e.target.value || 'Mapa';
       this.project.world.name = v; this.project.name = v;

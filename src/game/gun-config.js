@@ -1,5 +1,5 @@
 /**
- * Colocación del arma (exportada desde tools/gun-editor.html).
+ * Colocación del arma (antes se exportaba desde el editor de armas antiguo; ahora el equipo se edita en OpenNite Studio).
  * Soporta config por arma y una config global por defecto ("default").
  * Si una arma no tiene entrada propia, usa "default".
  * Formato: { "default": {position, quaternion}, "ar": {position, quaternion}, ... }
