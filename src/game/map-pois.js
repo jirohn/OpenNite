@@ -76,7 +76,9 @@ export function ensureMatchLoot(world, buildings, players = 20) {
 
   // 1) Cada casa con al menos un cofre y algo de botín en sus suelos.
   for (const b of buildings) {
-    const spots = b.floors.length ? b.floors : [b.center];
+    // Solo suelos de planta baja: nada de cofres en lo alto de torres.
+    const ground = b.floors.filter((f) => f.y <= b.center.y + 0.8);
+    const spots = ground.length ? ground : [b.center];
     const insideChest = chests.some((c) => Math.hypot(c.x - b.center.x, c.z - b.center.z) < b.radius);
     if (!insideChest) {
       const f = spots[Math.floor(rnd() * spots.length)];

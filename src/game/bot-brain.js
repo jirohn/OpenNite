@@ -100,6 +100,8 @@ export class BotBrain {
     this.detourUntil = 0;
     this.badSpots = [];
     this.knownItems = new WeakSet();
+    this.badItems = new WeakSet();
+    this.useTime = 0;
     this.visited = new Set();
     this.scanPhase = rand(0, 6.28);
     this.spaceCd = 0;
@@ -494,7 +496,7 @@ export class BotBrain {
       if (d > (e.isChest ? maxDist * 0.75 : maxDist)) continue;
       if (Math.abs(e.pos.y - b.position.y) > 12) continue;
       if (e._botClaim && e._botClaim.bot !== this.bot && e._botClaim.until > this.game.matchTime) continue;
-      if (this._isBad(e.pos)) continue;
+      if (this._isBad(e.pos) || this.badItems.has(e)) continue;
       if (filter && !filter(e)) continue;
       const v = this._itemValue(e);
       if (v <= 0.05) continue;
@@ -806,8 +808,20 @@ export class BotBrain {
       const dz = g.pos.z - b.position.z;
       const d = Math.hypot(dx, dz);
       if (g.type === 'loot' && g.entity) {
-        if (d < 1.8) stopAndUse = true;
-        else { moveX = dx; moveZ = dz; }
+        const dy = g.entity.pos.y - b.position.y;
+        if (d < 1.8 && Math.abs(dy) < 2.2) {
+          stopAndUse = true;
+          this.useTime += dt;
+          // Lleva rato pulsando E y no lo coge (fuera de alcance): olvidarlo.
+          if (this.useTime > 2.6) this._giveUpItem(g.entity);
+        } else {
+          this.useTime = 0;
+          moveX = dx; moveZ = dz;
+          // Justo encima o debajo (otro piso, tejado) y no sube: no es alcanzable.
+          if (d < 2.5 && Math.abs(dy) >= 2.2 && b.grounded) this._giveUpItem(g.entity);
+        }
+        // Demasiado tiempo yendo hacia el mismo objeto: probablemente no hay camino.
+        if (this.time - g.since > 14) this._giveUpItem(g.entity);
         // El objeto ya no existe (otro lo cogió).
         if (!g.entity.group?.parent) { g.type = 'roam'; this.thinkTimer = 0; }
       } else if (g.type === 'cover') {
@@ -884,6 +898,16 @@ export class BotBrain {
     // --- Disparo ---
     if (engage) this._fireControl(dt, dT);
     else this.adsTime = 0;
+  }
+
+  _giveUpItem(e) {
+    this.badItems.add(e);
+    if (e._botClaim?.bot === this.bot) e._botClaim = null;
+    this._log('giveUp', { at: [Math.round(e.pos.x), Math.round(e.pos.y), Math.round(e.pos.z)] });
+    this.goal.type = 'roam';
+    this.goal.entity = null;
+    this.useTime = 0;
+    this.thinkTimer = 0;
   }
 
   _prepareSwap() {

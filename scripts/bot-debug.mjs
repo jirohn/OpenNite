@@ -8,6 +8,8 @@ const seconds = Number(process.argv[3] || 70);
 const bots = Number(process.argv[4] || 19);
 const port = Number(process.env.CDP_PORT || 9222);
 
+// Mantiene vivo el proceso (Node 24 sale con 'unsettled top-level await' si no hay nada pendiente).
+const keepAlive = setInterval(() => {}, 1000);
 let WS = globalThis.WebSocket;
 if (!WS) WS = (await import('ws')).default;
 
@@ -35,9 +37,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 for (let i = 0; i < 60 && !(await evaluate('!!window.openniteApp?.game')); i++) await sleep(1000);
 await evaluate(`(() => { const app = window.openniteApp; app.requestPause = () => {}; app.game.settings.set('maxBots', ${bots}); app.startMatch(${JSON.stringify(mapId)}); return 1; })()`);
-for (let i = 0; i < 300; i++) {
+for (let i = 0; i < 900; i++) {
   const mode = await evaluate('window.openniteApp.game.mode');
   if (mode === 'playing') break;
+  if (i % 15 === 0) console.log('Cargando partida...', mode);
   await sleep(1000);
 }
 await evaluate(`(() => { const g = window.openniteApp.game; g.player.takeDamage = () => ({ damage: 0, killed: false }); g.botLog = g.botLog || []; return 1; })()`);
@@ -59,4 +62,5 @@ while (Date.now() - t0 < seconds * 1000) {
   if (out.mode !== 'playing') break;
 }
 ws.close();
+clearInterval(keepAlive);
 process.exit(0);
