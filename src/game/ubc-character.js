@@ -48,6 +48,8 @@ const NEW_MIXAMO_ANIMS = [
   { file: '/models/opennite/characters/100avatars/anims/Running Turn 180.fbx', names: ['Run_Turn_180'] },
 ];
 
+const customModelCache = new Map();
+
 async function loadSharedJimmyAnims() {
   if (sharedJimmyAnimsPromise) return sharedJimmyAnimsPromise;
   sharedJimmyAnimsPromise = (async () => {
@@ -302,17 +304,29 @@ export class Character {
   async _initCustomModel(modelPath) {
     const lower = String(modelPath).toLowerCase();
     const isFbx = lower.endsWith('.fbx');
-    let obj;
-    if (isFbx) {
-      const loader = new FBXLoader();
-      obj = await new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
-    } else {
-      const loader = new GLTFLoader();
-      const gltf = await new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
-      obj = gltf.scene || gltf.scenes?.[0];
+    // El modelo se descarga y se analiza una sola vez por ruta; cada personaje usa un clon.
+    // Antes, cada bot volvía a leer el FBX y a reajustar todas las animaciones (≈0,8 s
+    // de hilo principal por bot: tirones fuertes al empezar la partida con 19 bots).
+    let entry = customModelCache.get(modelPath);
+    if (!entry) {
+      entry = { template: (async () => {
+        if (isFbx) {
+          const loader = new FBXLoader();
+          return new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
+        }
+        const loader = new GLTFLoader();
+        const gltf = await new Promise((res, rej) => loader.load(modelPath, res, undefined, rej));
+        const scene = gltf.scene || gltf.scenes?.[0];
+        scene.animations = gltf.animations || scene.animations || [];
+        return scene;
+      })(), clips: null };
+      customModelCache.set(modelPath, entry);
     }
+    let template;
+    try { template = await entry.template; } catch (e) { customModelCache.delete(modelPath); throw e; }
+    const obj = SkeletonUtils.clone(template);
     // Capture any embedded animations before replacing root
-    const embeddedClips = [...(obj.animations || []), ...(isFbx ? [] : [])];
+    const embeddedClips = [...(template.animations || [])];
     this.root = obj;
     this.root.updateMatrixWorld(true);
     this.holder.add(this.root);
@@ -335,10 +349,22 @@ export class Character {
     this._customModel = true;
     this._remappedClips = new Map();
     this._overrideClips = new Map();
-    // Shared Jimmy animations for all 100Avatars skins
-    await this._loadSharedJimmyAnims();
-    if (embeddedClips.length) this._remapClipsToSelf(embeddedClips, 'Embedded_');
-    await this._remapKitAnimsForCustom(); // includes _loadAnimOverrides()
+    // Las animaciones reajustadas solo dependen de los nombres de huesos, iguales en
+    // todos los clones: se calculan con el primer personaje y se comparten.
+    if (!entry.clips) {
+      entry.clips = (async () => {
+        // Shared Jimmy animations for all 100Avatars skins
+        await this._loadSharedJimmyAnims();
+        if (embeddedClips.length) this._remapClipsToSelf(embeddedClips, 'Embedded_');
+        await this._remapKitAnimsForCustom(); // includes _loadAnimOverrides()
+        return { remapped: new Map(this._remappedClips), overrides: new Map(this._overrideClips || []) };
+      })();
+      await entry.clips;
+    } else {
+      const shared = await entry.clips;
+      this._remappedClips = new Map(shared.remapped);
+      this._overrideClips = new Map(shared.overrides);
+    }
     this.setHeight(1.78);
     if (this.options.color) this.setBodyColor(this.options.color);
   }

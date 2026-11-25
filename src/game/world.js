@@ -5629,8 +5629,9 @@ transformed.y *= rise;`);
       const key = 'egd-graphics';
       const cur = JSON.parse(localStorage.getItem(key) || '{}');
       const q = Math.max(0, Math.min(3, Math.round(waterQuality)));
-      // particles controla también la cantidad de vida marina (algas, peces, rocas).
-      const water = ['low', 'medium', 'high', 'ultra'][q], particles = [0.5, 1, 1.5, 2.5][q];
+      // particles controla también la cantidad de vida marina (algas, peces, rocas): en
+      // calidad baja/media se dibuja menos para GPUs modestas; alta/ultra igual que EGD.
+      const water = ['low', 'medium', 'high', 'ultra'][q], particles = [0.35, 0.6, 1.5, 2.5][q];
       if (cur.water !== water || cur.particles !== particles) localStorage.setItem(key, JSON.stringify({ ...cur, water, particles }));
       egdReloadGraphics();
     } catch { /* sin almacenamiento: calidad por defecto */ }
