@@ -117,6 +117,7 @@ export class BotBrain {
     const s = _v.copy(spot).sub(route.start).dot(route.dir);
     const t = (s - 6) / route.speed + rand(-0.5, 0.5);
     this.jumpAt = clamp(t, 0.8 + Math.random() * 0.6, route.duration - 0.25);
+    this._log('board', { target: [Math.round(spot.x), Math.round(spot.z)], land: this.game.isLand(spot.x, spot.z), jumpAt: +this.jumpAt.toFixed(1), dur: +route.duration.toFixed(1) });
   }
 
   /** Elige dónde aterrizar entre los sitios con botín alcanzables desde la ruta. */
@@ -163,6 +164,13 @@ export class BotBrain {
     if (this.game.isLand(jx, jz)) { chosen.x = jx; chosen.z = jz; }
     claims.push(chosen);
     return chosen;
+  }
+
+  /** Registro de decisiones (game.botLog) para depurar en partida. */
+  _log(ev, data) {
+    const log = this.game.botLog || (this.game.botLog = []);
+    log.push({ t: +(this.game.matchTime || 0).toFixed(1), bot: this.bot.name, ev, ...data });
+    if (log.length > 400) log.shift();
   }
 
   _updateSkydive(dt) {
@@ -226,6 +234,7 @@ export class BotBrain {
       if ((b.busTime || 0) >= this.jumpAt) {
         bot.pressSpace();
         this.skydiving = true;
+        this._log('jump', { busTime: +(b.busTime || 0).toFixed(1), at: [Math.round(b.position.x), Math.round(b.position.z)] });
       }
       return;
     }
@@ -234,6 +243,7 @@ export class BotBrain {
     if (this.skydiving) {
       if (b.grounded || b.swimming) {
         this.skydiving = false;
+        this._log('landed', { at: [Math.round(b.position.x), Math.round(b.position.z)], water: b.swimming, land: this.game.isLand(b.position.x, b.position.z), miss: Math.round(distance2D(b.position, this.landing)) });
         this.goal.type = 'roam';
         this.thinkTimer = 0;
       } else {
