@@ -848,10 +848,11 @@ export class Player {
     const baseDist = clamp(Number(this.settings.get('cameraDistance')) || 3.6, 1.8, 6);
     const baseShoulder = clamp(Number(this.settings.get('cameraShoulder')) || 1.15, 0.25, 2.4);
     this.cameraDistance = baseDist;
-    const dist = this.ads ? Math.max(2.2, baseDist * 0.68) : this.gliding ? Math.max(5, baseDist * 1.45) : baseDist;
-    const shoulder = this.ads ? baseShoulder * 0.82 : baseShoulder;
+    // En el bus: cámara lejana, alta y centrada para que no se meta en el autobús (mide 20 m).
+    const dist = this.inBus ? 26 : this.ads ? Math.max(2.2, baseDist * 0.68) : this.gliding ? Math.max(5, baseDist * 1.45) : baseDist;
+    const shoulder = this.inBus ? 0 : this.ads ? baseShoulder * 0.82 : baseShoulder;
 
-    const camH = this.swimming ? 0.95 : (this.crouching ? 1.05 : 1.48);
+    const camH = this.inBus ? 4.5 : this.swimming ? 0.95 : (this.crouching ? 1.05 : 1.48);
     this.camTarget.set(this.position.x, this.position.y + camH, this.position.z);
     this.desiredCam.copy(this.camTarget).addScaledVector(forward, -dist).addScaledVector(right, shoulder);
     this.landCameraKick = Math.max(0, (this.landCameraKick || 0) - dt * 1.8);
