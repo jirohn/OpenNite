@@ -4,7 +4,9 @@
  * Un mapa de EGD es:
  *   { format: "egd-map", version: 1, name, world, entities }
  *   - world: { size, tileSize, tiles[size*size], style, round, fade, paths, sky, fog, ... }
- *     cada tesela { t: tipo, h: altura en pasos de 0.5 m, m: "block"|"ramp", d: 0..3, r: subida }
+ *     cada tesela { t: tipo, h: altura en pasos de 0.5 m, m: "block"|"ramp", d: 0..3, r: subida,
+ *                   w: nivel del agua (opcional, en pasos de 0.5 m; hay agua si w > h) }
+ *     water: ajustes del agua (colores, opacidad, olas, reflejos, espuma, cascadas...)
  *   - entities: [{ id, type, name, position[3], rotation[3] (grados), scale[3], ... }]
  *
  * OpenNite lee y guarda ese archivo tal cual. Lo propio de OpenNite que EGD no
@@ -131,6 +133,52 @@ export function egdPieceToEntity(p) {
 }
 
 // ------------------------------------------------------------------ agua
+// Agua del EGD nuevo: cada tesela puede tener un nivel de agua `w` (en pasos de
+// 0.5 m) por encima de su suelo `h`. La superficie está en w*0.5 - 0.15.
+export const EGD_WATER_OFFSET = 0.15;
+/** ¿Tiene agua la tesela? (mismo criterio que EGD: w > h) */
+export const egdTileHasWater = (t) => !!t && t.w !== undefined && t.w !== null && t.w > t.h;
+/** Altura de la superficie del agua de una tesela con agua. */
+export const egdTileWaterY = (t) => t.w * EGD_STEP - EGD_WATER_OFFSET;
+
+/**
+ * Pasa las teselas de agua antiguas (tipo "water", lámina plana) al agua nueva de
+ * EGD: misma superficie (w = h) y fondo de arena más hondo cuanto más lejos de la
+ * orilla. Así el mapa se ve y se juega con el agua nueva (olas, reflejos, espuma,
+ * cascadas y ondas). Devuelve cuántas teselas cambió.
+ */
+export function egdUpgradeWater(w) {
+  const N = w.size, tiles = w.tiles;
+  const old = (i) => tiles[i] && tiles[i].t === 'water';
+  const dist = new Int32Array(N * N).fill(-1);
+  const q = [];
+  for (let i = 0; i < N * N; i++) if (tiles[i] && !old(i)) { dist[i] = 0; q.push(i); }
+  for (let qi = 0; qi < q.length; qi++) {
+    const i = q[qi], x = i % N, z = (i / N) | 0;
+    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, nz = z + dz;
+      if (nx < 0 || nz < 0 || nx >= N || nz >= N) continue;
+      const j = nz * N + nx;
+      if (dist[j] !== -1) continue;
+      dist[j] = dist[i] + 1;
+      q.push(j);
+    }
+  }
+  let n = 0;
+  for (let i = 0; i < N * N; i++) {
+    if (!old(i)) continue;
+    const t = tiles[i];
+    const d = dist[i] > 0 ? dist[i] : 8; // todo agua: mar abierto
+    const depth = Math.min(14, 1 + 2 * d); // 1.5 m en la orilla ... 7 m mar adentro
+    t.w = t.h;
+    t.h = t.h - depth;
+    t.t = 'sand';
+    t.m = 'block';
+    n++;
+  }
+  return n;
+}
+
 /** Nivel del mar: si la mayoría del borde del mundo es agua, su superficie; si no, sin mar. */
 export function egdSeaLevel(w) {
   const N = w.size;
@@ -140,17 +188,18 @@ export function egdSeaLevel(w) {
     for (const [ix, iz] of [[i, 0], [i, N - 1], [0, i], [N - 1, i]]) {
       const t = egdTileAt(w, ix, iz);
       border++;
-      if (t && t.t === 'water') counts.set(t.h, (counts.get(t.h) || 0) + 1);
+      if (egdTileHasWater(t)) counts.set(t.w, (counts.get(t.w) || 0) + 1);
+      else if (t && t.t === 'water') counts.set(t.h, (counts.get(t.h) || 0) + 1);
     }
   }
   let best = null, bestN = 0;
   for (const [h, n] of counts) if (n > bestN) { best = h; bestN = n; }
-  return bestN > border * 0.5 ? best * EGD_STEP - 0.15 : null;
+  return bestN > border * 0.5 ? best * EGD_STEP - EGD_WATER_OFFSET : null;
 }
 
 /**
- * Celdas de agua de OpenNite (rejilla de `cell` m) que cubren las teselas de agua
- * de EGD, a la altura de su superficie (h*0.5 - 0.15, igual que EGD).
+ * Celdas de agua de OpenNite (rejilla de `cell` m) que cubren el agua de EGD,
+ * a la altura de su superficie (igual que EGD).
  */
 export function egdWaterCells(w, cell = 2) {
   const out = new Map();
@@ -158,8 +207,10 @@ export function egdWaterCells(w, cell = 2) {
   for (let iz = 0; iz < w.size; iz++) {
     for (let ix = 0; ix < w.size; ix++) {
       const t = w.tiles[iz * w.size + ix];
-      if (!t || t.t !== 'water') continue;
-      const y = t.h * EGD_STEP - 0.15;
+      let y;
+      if (egdTileHasWater(t)) y = egdTileWaterY(t);
+      else if (t && t.t === 'water') y = t.h * EGD_STEP - EGD_WATER_OFFSET;
+      else continue;
       const [cx, cz] = egdTileCenter(w, ix, iz);
       const n = Math.max(1, Math.round(ts / cell));
       for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
@@ -182,6 +233,7 @@ export function egdMapToOpenNite(raw) {
   const file = raw.world ? raw : { world: raw, entities: [] };
   const world = egdWorldDefaults(JSON.parse(JSON.stringify(file.world)));
   if (file.name) world.name = file.name;
+  egdUpgradeWater(world);
   const extra = [];
   const pieces = [];
   for (const e of Array.isArray(file.entities) ? file.entities : []) {

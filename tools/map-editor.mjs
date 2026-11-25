@@ -14,11 +14,9 @@
  */
 import * as THREE from 'three';
 import {
-  EgdWorldEditor, EgdSceneEditor, EgdViewport, egdDispose,
-  egdNewEntity, egdEl, egdModal, egdButton, egdSection, egdHint, egdRow, egdNumber, egdText, egdClear,
-  Hr, M0, Hn, Kt, Ei, bo, qr, ii, S0, _n, gh,
+  EgdWorldEditor, EgdSceneEditor, EgdViewport, egdDispose, egdNewEntity, egdEl, egdModal, egdButton, egdSection, egdHint, egdRow, egdNumber, egdText, egdClear, egdCreateWorld as Hr, egdNormalizeWorld as M0, EGD_PROPS as Hn, EGD_BUILD_MATERIALS as Kt, EGD_BUILD_PIECES as Ei, EGD_SHAPES as bo, EGD_ENTITY_TYPES as qr, EGD_PRESET_LIST as ii, egdNormalizeEntity as S0, egdNewCharacter as _n, egdMakeTile as gh,
 } from '../src/core/egd-engine.mjs';
-import { isEgdMap, EGD_MAP_FORMAT } from '../src/core/egd-map.mjs';
+import { isEgdMap, EGD_MAP_FORMAT, egdUpgradeWater, egdTileHasWater } from '../src/core/egd-map.mjs';
 
 const $ = (s) => document.querySelector(s);
 const AUTOSAVE_KEY = 'opennite-editor-autosave-v1';
@@ -55,6 +53,8 @@ function projectFromMap(raw) {
   const world = JSON.parse(JSON.stringify(file.world));
   M0(world);
   if (file.name) world.name = file.name;
+  // El agua antigua (teselas "water") pasa al agua nueva de EGD, igual que en el juego.
+  egdUpgradeWater(world);
   const opennite = { ...(file.opennite || {}) };
   const entities = (file.entities || []).map((e) => { const c = JSON.parse(JSON.stringify(e)); S0(c); return c; });
   // Los vientos de OpenNite se editan como objetos de la escena.
@@ -97,7 +97,9 @@ function mapFromProject(p) {
 
 /** Mapa nuevo de OpenNite: plano y por debajo del nivel del agua (todo mar). */
 function newProject() {
-  const world = Hr(48, 2, 'water');
+  // Fondo de arena a -2 m y agua de EGD a nivel 0 (la superficie queda en -0.15 m).
+  const world = Hr(48, 2, 'sand');
+  for (const t of world.tiles) { t.h = -4; t.w = 0; }
   world.name = 'Mapa nuevo';
   return projectFromMap({ format: EGD_MAP_FORMAT, version: 1, name: world.name, world, entities: [] });
 }
@@ -131,13 +133,19 @@ function windObject(e) {
 // ------------------------------------------------------------------ Map Editor
 /**
  * Editor de Mundo de EGD. Único cambio: como un mapa nuevo de OpenNite empieza
- * bajo el agua, "Elevar" sobre el agua saca tierra del material elegido.
+ * bajo el agua, "Elevar" saca tierra del material elegido cuando la tesela sale
+ * del agua (el fondo sumergido sigue siendo de arena).
  */
 class OpenNiteWorldEditor extends EgdWorldEditor {
   applyTool(tile, idx) {
     const liquid = (t) => t === 'water' || t === 'lava';
-    if (this.tool === 'raise' && liquid(tile.t) && !liquid(this.paintType)) tile.t = this.paintType;
-    return super.applyTool(tile, idx);
+    const underwater = egdTileHasWater(tile);
+    const r = super.applyTool(tile, idx);
+    if (this.tool === 'raise' && !liquid(this.paintType)) {
+      if (liquid(tile.t)) tile.t = this.paintType;
+      else if (underwater && !egdTileHasWater(tile)) tile.t = this.paintType;
+    }
+    return r;
   }
 }
 

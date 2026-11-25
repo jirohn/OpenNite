@@ -3,7 +3,9 @@
  * motor, ver egd-engine.mjs): llano, colinas, isla, montañas, cañón y San Borondón.
  * Rellena world.tiles de un mundo egd-map.
  */
-import { dr } from './egd-engine.mjs';
+import {
+  egdGenerateInto as dr,
+} from './egd-engine.mjs';
 
 export const EGD_GENERATORS = { flat: 'Llano', hills: 'Colinas', island: 'Isla', mountains: 'Montañas', canyon: 'Cañón', sanborondon: 'San Borondón' };
 /** Genera el terreno de `world` (igual que "Generar" en EGD). */

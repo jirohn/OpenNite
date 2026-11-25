@@ -7,8 +7,7 @@
  * Lo único que cambia en OpenNite son los materiales y colores.
  */
 import {
-  us, Hr, M0, fi, Gi, yh, hr, Vi, gh, Nn, d0, gl, yl,
-  ds, Ns, ji, Y1, p0, mt, hn, c0, h0, io,
+  EgdTerrain as us, egdCreateWorld as Hr, egdNormalizeWorld as M0, egdTileHeightAt as fi, egdTileIndexAt as Gi, egdTileCenter as yh, egdOrigin as hr, egdTile as Vi, egdMakeTile as gh, egdMakePath as Nn, egdGrassAt as d0, egdEnsureGrass as gl, egdSetGrass as yl, EGD_STEP as ds, EGD_MIN_HEIGHT as Ns, EGD_MAX_HEIGHT as ji, EGD_DIRS as Y1, EGD_DIR_NAMES as p0, EGD_TILE_TYPES as mt, EGD_PATH_TYPES as hn, EGD_PATH_MODES as c0, EGD_GRASS_LEVELS as h0, EGD_GRASS_UNIFORMS as io,
 } from './egd-engine.mjs';
 
 export { EgdSurfaceMaterial, EgdGrassMaterial, EGD_ORIGINAL_TILE_COLORS, applyOpenNiteLook } from './egd-engine.mjs';

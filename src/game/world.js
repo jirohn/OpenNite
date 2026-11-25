@@ -21,8 +21,8 @@ import {
 } from '../core/map-system.mjs';
 import { modularHeightAt, modularMinNear, normalizeModularTerrain } from '../core/modular-terrain.mjs';
 import { buildModularTerrainMesh } from '../core/modular-terrain-mesh.mjs';
-import { EgdTerrain, EGD_TILE_TYPES } from '../core/egd-terrain.mjs';
-import { egdWaterCells, egdPieceToEntity } from '../core/egd-map.mjs';
+import { EgdTerrain, EgdSurfaceMaterial, EGD_HEIGHT_STEP, EGD_TILE_TYPES } from '../core/egd-terrain.mjs';
+import { egdPieceToEntity } from '../core/egd-map.mjs';
 import { egdBuildEntityObject } from '../core/egd-objects.mjs';
 
 /** Altura fuera del mundo de EGD (el vacío): se cae al agua/vacío como en el motor. */
@@ -1262,15 +1262,9 @@ transformed.y *= rise;`);
       }
     }
     if (this.egdWorld) {
-      // Las teselas de agua de EGD son el agua del mapa (mismo nivel que en EGD).
+      // El agua de EGD la dibuja y la simula el propio motor (EgdTerrain.water):
+      // OpenNite no crea sus láminas de agua encima.
       this.heightOverrideCell = GRID_SIZE;
-      // Las que están al nivel del mar ya las cubre el mar; EGD no tiene algas.
-      const sea = Number.isFinite(this.waterLevel) ? this.waterLevel : -100;
-      for (const [k, y] of egdWaterCells(this.egdWorld, GRID_SIZE)) {
-        if (Math.abs(y - sea) < 0.05) continue;
-        this.waterCells.set(k, y);
-        this.waterVegCells.set(k, 0);
-      }
     }
     if (this.waterCells.size) {
       this._waterLevels = createWaterLevels(this.waterCells, {
@@ -1281,6 +1275,9 @@ transformed.y *= rise;`);
   }
 
   spawnRipple(x, y, z, strength = 1) {
+    // Ondas en el agua de EGD (simulación de ondas del motor).
+    const egdWater = this.egdTerrain?.water;
+    if (egdWater?.meshes?.length) egdWater.disturb(x, z, 0.45 + 0.3 * strength, Math.min(2.5, strength));
     if (!this._rippleData) this._rippleData = [];
     const now = this._waterTime || 0;
     this._rippleData.push({ x, z, birth: now, strength: clamp(strength, 0.2, 2) });
@@ -1310,6 +1307,8 @@ transformed.y *= rise;`);
   }
 
   hasWater() {
+    // El agua de EGD hace sus propios reflejos: no hacen falta los pases de OpenNite.
+    if (this.egdTerrain) return false;
     return (this.waterLevel > -20) || (this.waterCells?.size || 0) > 0 || (this.waterPatches?.length || 0) > 0;
   }
 
@@ -2007,6 +2006,15 @@ transformed.y *= rise;`);
 
   waterYAt(x, z) {
     const ground = this.heightAt(x, z);
+    if (this.egdTerrain) {
+      // Agua de EGD: la superficie de la tesela (cada una con su nivel).
+      const s = this.egdTerrain.water?.surfaceAt(x, z);
+      if (s !== null && s !== undefined) return ground < s - 0.05 ? s : -Infinity;
+      const w = this.egdWorld, half = w.size * w.tileSize / 2;
+      const outside = Math.abs(x) > half || Math.abs(z) > half;
+      const sea = this.waterLevel ?? -100;
+      return outside && sea > -20 && ground < sea - 0.05 ? sea : -Infinity;
+    }
     const levels = this._waterLevels;
     if (levels) {
       const wy = levels.levelAt(x, z);
@@ -3217,6 +3225,7 @@ transformed.y *= rise;`);
 
   setupWater() {
     if (this.waterLevel < -20) return;
+    if (this.egdTerrain) { this._buildEgdOuterSea(); return; }
     // El mar global convive con los lagos del editor: los lagos están por encima
     // del nivel del mar y se dibujan en su propia superficie, pero el océano
     // que rodea la isla debe seguir existiendo siempre.
@@ -5598,16 +5607,16 @@ transformed.y *= rise;`);
     }
     this.egdWorld = world || null;
     if (!this.egdWorld) return;
+    // El agua es la del motor de EGD (olas, reflejos, espuma, cascadas y ondas).
+    // Con la calidad de agua más baja se quita solo el reflejo (es lo que más cuesta).
+    if (Number(this.settings.get('waterQuality') ?? 1) < 1) {
+      this.egdWorld.water = { ...(this.egdWorld.water || {}), reflections: false };
+    }
     this.egdTerrain = new EgdTerrain(this.egdWorld);
     this.egdTerrain.group.name = 'egd-terrain';
-    // El agua la dibuja OpenNite (mismo nivel); se ocultan las láminas de agua de EGD.
-    const waterTop = new THREE.Color(EGD_TILE_TYPES.water.top);
-    const waterSide = new THREE.Color(EGD_TILE_TYPES.water.side);
     this.egdTerrain.group.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = o.castShadow && !!this.settings.get('shadows');
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      if (mats.some((m) => m?.transparent && m.color && (m.color.equals(waterTop) || m.color.equals(waterSide)))) o.visible = false;
     });
     console.info('[World] egd terrain:', { size: this.egdWorld.size, tileSize: this.egdWorld.tileSize, style: this.egdWorld.style, meshes: this.egdTerrain.meshes.length });
   }
@@ -5646,6 +5655,79 @@ transformed.y *= rise;`);
       return;
     }
     addBox(box, 0.05);
+  }
+
+  /**
+   * Mar alrededor del mapa de EGD: la misma agua del motor (mismo material y
+   * nivel que el agua del borde) hasta el horizonte, con un hueco del tamaño
+   * del mapa para no taparlo.
+   */
+  _buildEgdOuterSea() {
+    const water = this.egdTerrain?.water;
+    if (!water?.meshes?.length) return;
+    const w = this.egdWorld;
+    const y = this.waterLevel;
+    const base = water.meshes.find((m) => m.userData.water && Math.abs(m.userData.level * EGD_HEIGHT_STEP - 0.15 - y) < 0.01)
+      || water.meshes.find((m) => m.userData.water);
+    if (!base) return;
+    const half = w.size * w.tileSize / 2;
+    const far = half + 900;
+    const cell = 32;
+    const pos = [], depth = [], foam = [], idx = [];
+    const quad = (x0, z0, x1, z1) => {
+      const nx = Math.max(1, Math.round((x1 - x0) / cell)), nz = Math.max(1, Math.round((z1 - z0) / cell));
+      const start = pos.length / 3;
+      for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
+        pos.push(x0 + (x1 - x0) * i / nx, y, z0 + (z1 - z0) * j / nz);
+        depth.push(8); foam.push(0);
+      }
+      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+        const a = start + j * (nx + 1) + i, b = a + 1, c = a + nx + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+    };
+    quad(-far, -far, far, -half);
+    quad(-far, half, far, far);
+    quad(-far, -half, -half, half);
+    quad(half, -half, far, half);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('aDepth', new THREE.Float32BufferAttribute(depth, 1));
+    geo.setAttribute('aFoam', new THREE.Float32BufferAttribute(foam, 1));
+    geo.setIndex(idx);
+    geo.computeBoundingSphere();
+    // Fondo del mar exterior a la altura del fondo del agua del borde del mapa,
+    // para que se vea igual que dentro y no asome el lateral del terreno.
+    const beds = [];
+    for (let i = 0; i < w.size; i++) {
+      for (const [ix, iz] of [[i, 0], [i, w.size - 1], [0, i], [w.size - 1, i]]) {
+        const t = w.tiles[iz * w.size + ix];
+        if (t && t.w > t.h) beds.push(t.h * EGD_HEIGHT_STEP);
+      }
+    }
+    beds.sort((p, q) => p - q);
+    const bedY = beds.length ? beds[beds.length >> 1] : y - 7;
+    const bedGeo = geo.clone();
+    const bp = bedGeo.attributes.position;
+    for (let i = 0; i < bp.count; i++) bp.setY(i, bedY);
+    bedGeo.deleteAttribute('aDepth');
+    bedGeo.deleteAttribute('aFoam');
+    bedGeo.computeVertexNormals();
+    const bed = new THREE.Mesh(bedGeo, new EgdSurfaceMaterial({ color: EGD_TILE_TYPES.sand?.top || '#e0cf94' }));
+    bed.name = 'egd-outer-seabed';
+    bed.receiveShadow = true;
+    water.group.add(bed);
+    // La profundidad del mar exterior es la del borde (mismo color de agua).
+    const da = geo.attributes.aDepth;
+    for (let i = 0; i < da.count; i++) da.setX(i, Math.max(0.5, y - bedY));
+    const sea = new THREE.Mesh(geo, base.material);
+    sea.name = 'egd-outer-sea';
+    sea.renderOrder = base.renderOrder;
+    sea.userData.water = true;
+    sea.userData.level = base.userData.level;
+    sea.onBeforeRender = base.onBeforeRender;
+    water.group.add(sea);
+    water.meshes.push(sea);
   }
 
   _showEgdTerrain() {

@@ -5,7 +5,9 @@
  * misma forma que en EGD. Solo cambian los materiales (toon de OpenNite).
  */
 import * as THREE from 'three';
-import { EgdSurfaceMaterial, Hn, Ei, co, Op, kp, Kt, nE, T0, xh, Wi, Ht } from './egd-engine.mjs';
+import {
+  EgdSurfaceMaterial, EGD_PROPS as Hn, EGD_BUILD_PIECES as Ei, egdPresetHouse as co, egdPresetHouse2 as Op, egdPresetTower as kp, EGD_BUILD_MATERIALS as Kt, egdPrimitiveGeometry as nE, egdPropObject as T0, egdBuildObject as xh, egdCompositeObject as Wi, EGD_DEG as Ht,
+} from './egd-engine.mjs';
 
 // ----------------------------------------------------------------------------
 export const EGD_PROPS = Hn;
