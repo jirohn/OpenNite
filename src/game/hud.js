@@ -158,13 +158,20 @@ export class HUD {
       patch.pickupText = od.entity?.targetOpen ? 'Cerrando puerta...' : 'Abriendo puerta...';
       patch.chestOpening = { progress, active: true };
     } else {
-      const near = loot.findNear(player.position, 3.4);
-      if (near && player.alive) {
+      const near = player.ride ? null : loot.findNear(player.position, 3.4);
+      const vText = player.alive && game.vehicles ? game.vehicles.hudText(player) : null;
+      if (player.ride && vText) {
+        patch.pickupVisible = true;
+        patch.pickupText = vText;
+      } else if (near && player.alive) {
         patch.pickupVisible = true;
         patch.pickupText = near.isChest ? 'Mantén E para abrir cofre' : `${near.item.name} (E)`;
       } else if (nearDoor && player.alive) {
         patch.pickupVisible = true;
         patch.pickupText = nearDoor.targetOpen ? 'Mantén E para cerrar puerta' : 'Mantén E para abrir puerta';
+      } else if (vText) {
+        patch.pickupVisible = true;
+        patch.pickupText = vText;
       } else if (player.alive && player.glidePrompt) {
         patch.pickupVisible = true;
         patch.pickupText = 'Pulsa ESPACIO para abrir paracaídas';

@@ -106,6 +106,17 @@ export class BotBrain {
     this.scanPhase = rand(0, 6.28);
     this.spaceCd = 0;
     this.wantMove = false;
+    // Vehículos (ver _drive): cuándo puede volver a buscar uno y adónde conduce.
+    this.vehicleCd = rand(4, 20);
+    this.driveTo = null;
+    this.driveReplan = 0;
+    this.driveSince = 0;
+    this.driveYaw = null;
+    this.driveProbeAt = 0;
+    this.reverseUntil = 0;
+    this.slowTime = 0;
+    this.driveStuck = 0;
+    this.wasRiding = false;
   }
 
   // ------------------------------------------------------------------
@@ -231,6 +242,8 @@ export class BotBrain {
     input.button(2, false);
     input.key('KeyE', false);
     input.key('KeyR', false);
+    input.key('Space', false);
+    input.key('KeyF', false);
 
     if (b.inBus) {
       if ((b.busTime || 0) >= this.jumpAt) {
@@ -260,6 +273,32 @@ export class BotBrain {
       if (b.fallPeakY - g > SAFE_DROP + 2) { bot.pressSpace(); this.gliderCd = 1; }
     }
 
+    // En un vehículo: ve y oye igual, pero conduce (pulsando las mismas teclas).
+    if (b.ride) {
+      if (!this.wasRiding) {
+        this.wasRiding = true;
+        this.driveSince = this.time;
+        this.driveTo = null;
+        this.driveStuck = 0;
+        this.slowTime = 0;
+        this._log('vehicleIn', { kind: b.ride.vehicle.kind });
+      }
+      this.thinkTimer -= dt;
+      if (this.thinkTimer <= 0) {
+        this.thinkTimer = rand(0.18, 0.32);
+        this._perceive(player, bots);
+        this._chooseTarget();
+      }
+      this._drive(dt, storm);
+      return;
+    }
+    if (this.wasRiding) {
+      this.wasRiding = false;
+      this.vehicleCd = this.time + rand(18, 35);
+      if (this.goal.type === 'vehicle') { this.goal.type = 'roam'; this.goal.entity = null; }
+      this.thinkTimer = 0;
+    }
+
     this.thinkTimer -= dt;
     if (this.thinkTimer <= 0) {
       this.thinkTimer = rand(0.18, 0.32);
@@ -270,6 +309,159 @@ export class BotBrain {
     }
 
     this._act(dt, storm);
+  }
+
+  // ------------------------------------------------------------------
+  // Vehículos
+  // ------------------------------------------------------------------
+
+  /** Vehículo libre cercano que le sirve (coche, buggy o helicóptero). */
+  _findVehicle(maxDist) {
+    const vm = this.game.vehicles;
+    if (!vm?.list.length) return null;
+    const b = this.bot.body;
+    let best = null, bestD = maxDist;
+    for (const v of vm.list) {
+      if (v.wrecked || v.driver || v.def.mode === 'water' || v.def.mode === 'plane') continue;
+      if (v._botClaim && v._botClaim.bot !== this.bot && v._botClaim.until > this.time) continue;
+      if (vm.waterAt(v.position.x, v.position.z) !== null && v.position.y < vm.waterAt(v.position.x, v.position.z) - 0.5) continue;
+      if (this.badItems.has(v)) continue;
+      const d = distance2D(v.position, b.position);
+      if (d < bestD && Math.abs(v.position.y - b.position.y) < 12) { bestD = d; best = v; }
+    }
+    return best ? { v: best, d: bestD } : null;
+  }
+
+  /** Adónde ir en el vehículo: dentro de la zona segura o a su destino de paseo. */
+  _driveDestination(st) {
+    const b = this.bot.body;
+    if (st && (st.urgency > 0 || st.outside > -15)) {
+      const c = st.c;
+      const dx = b.position.x - c.x, dz = b.position.z - c.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const k = Math.min(d, st.r * 0.3) / d;
+      return new THREE.Vector3(c.x + dx * k, 0, c.z + dz * k);
+    }
+    if (!this.roamPos || distance2D(this.roamPos, b.position) < 30) this.roamPos = this._pickRoam(st);
+    return this.roamPos.clone();
+  }
+
+  /** ¿Se puede circular por ese punto? (sin muros, agua honda, lava ni cortados). */
+  _roadClear(v, x, z, fromY) {
+    const vm = this.game.vehicles;
+    const half = (this.bot.world.half || 200) - v.radius - 2;
+    if (Math.abs(x) > half || Math.abs(z) > half) return false;
+    const g = vm.ground(x, z, fromY + v.def.climb + 0.3, v);
+    if (g > fromY + v.def.climb + 0.3) return false;
+    if (fromY - g > 6) return false;
+    const w = vm.waterAt(x, z);
+    if (w !== null && g < w - 0.5) return false;
+    if (this.bot.world.lavaDamageAt?.({ x, y: g, z }) > 0) return false;
+    return !vm.hits(x, z, g, v.radius * 0.8, 1.4, v);
+  }
+
+  /**
+   * Conducir como una persona: elige destino, mira la carretera de delante,
+   * gira con A/D, acelera con W, da marcha atrás si se atasca y se baja (E)
+   * al llegar, si ve a un enemigo cerca o si el vehículo está muy dañado.
+   */
+  _drive(dt, storm) {
+    const bot = this.bot;
+    const b = bot.body;
+    const input = bot.input;
+    const r = b.ride;
+    const v = r.vehicle;
+    const vm = this.game.vehicles;
+    if (r.phase !== 'seated' || !vm) return;
+    if (!r.seat.driver) { input.key('KeyE', true); return; }
+    const st = this._stormInfo(storm);
+    const p = v.position;
+    if (!this.driveTo || this.time > this.driveReplan) {
+      this.driveTo = this._driveDestination(st);
+      this.driveReplan = this.time + 5;
+    }
+    const dest = this.driveTo;
+    const dx = dest.x - p.x, dz = dest.z - p.z;
+    const d = Math.hypot(dx, dz);
+    const air = v.def.mode === 'heli';
+    const tgt = this.target;
+    const dT = tgt ? distance2D(b.position, tgt.position) : Infinity;
+    const alt = p.y - vm.ground(p.x, p.z, p.y + 0.5, v);
+
+    // ¿Bajarse?
+    let leave = d < (air ? 20 : 12)
+      || v.health < v.maxHealth * 0.3
+      || this.time - this.driveSince > 90
+      || this.driveStuck >= 4;
+    if (tgt && this.targetVisible && dT < 32 && this._rangedWeapons().length && !(st && st.inStorm)) leave = true;
+    if (leave) {
+      if (air && alt > 1.2) { input.key('ShiftLeft', true); return; } // aterrizar primero
+      if (!air && v.speed > 2) { input.key('KeyS', true); return; } // frenar
+      input.key('KeyE', true);
+      this.vehicleCd = this.time + rand(18, 35);
+      this.driveTo = null;
+      this.goal.type = 'roam';
+      this.goal.entity = null;
+      this._log('vehicleOut', { kind: v.kind, at: [Math.round(p.x), Math.round(p.z)], hp: Math.round(v.health) });
+      return;
+    }
+
+    const want = Math.atan2(dx, dz); // rumbo del vehículo (sin, cos), como en EGD
+    if (air) {
+      // Helicóptero: subir a altura de crucero, avanzar hacia el destino.
+      let gAhead = vm.ground(p.x, p.z, p.y + 0.5, v);
+      for (const k of [10, 22, 36]) gAhead = Math.max(gAhead, vm.ground(p.x + Math.sin(v.yaw) * k, p.z + Math.cos(v.yaw) * k, 200, v));
+      if (p.y < gAhead + 14) input.key('Space', true);
+      else if (p.y > gAhead + 26) input.key('ShiftLeft', true);
+      const diff = angleDiff(want, v.yaw);
+      if (diff > 0.08) input.key('KeyA', true);
+      else if (diff < -0.08) input.key('KeyD', true);
+      if (alt > 5 && Math.abs(diff) < 0.6) input.key('KeyW', true);
+      return;
+    }
+
+    // Coche y buggy: buscar un rumbo libre cerca del deseado.
+    if (this.time >= this.driveProbeAt) {
+      this.driveProbeAt = this.time + 0.25;
+      this.driveYaw = null;
+      for (const off of [0, 0.3, -0.3, 0.6, -0.6, 0.95, -0.95, 1.4, -1.4]) {
+        const a = want + off;
+        let ok = true;
+        let y = p.y;
+        for (const k of [3.5, 7, 11]) {
+          const x = p.x + Math.sin(a) * k, z = p.z + Math.cos(a) * k;
+          if (!this._roadClear(v, x, z, y)) { ok = false; break; }
+          y = vm.ground(x, z, y + v.def.climb + 0.3, v);
+        }
+        if (ok) { this.driveYaw = a; break; }
+      }
+    }
+    const target = this.driveYaw ?? want;
+    const diff = angleDiff(target, v.yaw);
+
+    // Atascado: marcha atrás girando al otro lado.
+    const pushing = input.isDown('KeyW') || this._pushing;
+    if (this.time < this.reverseUntil) {
+      input.key('KeyS', true);
+      if (diff > 0) input.key('KeyD', true); else input.key('KeyA', true);
+      this._pushing = false;
+      return;
+    }
+    if (pushing && v.realSpeed < 1.2) this.slowTime += dt; else this.slowTime = 0;
+    if (this.slowTime > 1.3) {
+      this.slowTime = 0;
+      this.driveStuck++;
+      this.reverseUntil = this.time + rand(1.0, 1.6);
+      this.driveProbeAt = 0;
+      return;
+    }
+    if (diff > 0.06) input.key('KeyA', true);
+    else if (diff < -0.06) input.key('KeyD', true);
+    const sharp = Math.abs(diff) > 1.2;
+    if (!(sharp && v.speed > 9) && (this.driveYaw !== null || Math.abs(diff) > 0.5 || v.speed < 6)) input.key('KeyW', true);
+    else if (this.driveYaw === null && v.speed > 6) input.key('Space', true); // freno de mano: no hay paso
+    this._pushing = input.isDown('KeyW');
+    if (v.realSpeed > 4) this.driveStuck = Math.max(0, this.driveStuck - dt * 0.2);
   }
 
   // ------------------------------------------------------------------
@@ -603,6 +795,23 @@ export class BotBrain {
       options.push({ type: 'explore', score: 0.18 + need * 0.35 + this.greed * 0.08, entity: house });
     }
 
+    // Vehículo: si tiene que ir lejos (tormenta o destino) y hay uno libre cerca.
+    if (this.time > this.vehicleCd && this.game.vehicles?.list.length) {
+      let travel = 0;
+      if (st) travel = Math.max(travel, st.outside + (st.inStorm ? 40 : 0));
+      if (this.roamPos && (g.type === 'roam' || g.type === 'vehicle')) travel = Math.max(travel, distance2D(this.roamPos, b.position));
+      if (travel > 55) {
+        const found = this._findVehicle(Math.min(55, travel * 0.6));
+        if (found) {
+          options.push({
+            type: 'vehicle',
+            score: 0.26 + (st ? st.urgency * 0.75 : 0) + Math.min(0.3, (travel - found.d) / 260),
+            entity: found.v,
+          });
+        }
+      }
+    }
+
     options.push({ type: 'roam', score: 0.16 });
 
     // Seguir con lo que estaba haciendo un poco más (no cambiar de idea cada tick).
@@ -630,6 +839,13 @@ export class BotBrain {
         break;
       }
       case 'loot': g.pos.copy(g.entity.pos); break;
+      case 'vehicle': {
+        const v = g.entity;
+        if (!v || v.wrecked || v.driver) { g.type = 'roam'; g.entity = null; this.thinkTimer = 0; break; }
+        v._botClaim = { bot, until: this.time + 6 };
+        g.pos.copy(v.doorPoint());
+        break;
+      }
       case 'explore': {
         const h = g.entity;
         // Entra hasta el centro de la casa; al llegar la da por registrada.
@@ -824,6 +1040,18 @@ export class BotBrain {
         if (g.entity && this.time - g.since > 14) this._giveUpItem(g.entity);
         // El objeto ya no existe (otro lo cogió) o lo acabamos de descartar.
         if (!g.entity?.group?.parent) { g.type = 'roam'; this.thinkTimer = 0; }
+      } else if (g.type === 'vehicle' && g.entity) {
+        // Hasta la puerta del conductor y E para subir.
+        const dy = g.entity.position.y - b.position.y;
+        if (d < 2.4 && Math.abs(dy) < 2.5) {
+          stopAndUse = true;
+          this.useTime += dt;
+          if (this.useTime > 2.5) { this.badItems.add(g.entity); this.goal.type = 'roam'; this.goal.entity = null; this.useTime = 0; this.thinkTimer = 0; }
+        } else {
+          this.useTime = 0;
+          moveX = dx; moveZ = dz;
+        }
+        if (this.time - g.since > 20) { this.badItems.add(g.entity); this.vehicleCd = this.time + 15; this.goal.type = 'roam'; this.goal.entity = null; this.thinkTimer = 0; }
       } else if (g.type === 'cover') {
         if (d < 0.9) {
           crouch = true;

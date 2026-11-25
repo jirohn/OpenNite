@@ -25911,6 +25911,141 @@
       },
       "type": "prop",
       "prop": "bigrock"
+    },
+    {
+      "id": "veh_car_1",
+      "type": "vehicle",
+      "name": "Coche",
+      "position": [
+        -30,
+        5.5,
+        12
+      ],
+      "rotation": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "props": {},
+      "color": "#ffffff",
+      "collidable": true,
+      "vehicle": {
+        "kind": "car"
+      }
+    },
+    {
+      "id": "veh_buggy_2",
+      "type": "vehicle",
+      "name": "Buggy todoterreno",
+      "position": [
+        -18,
+        5.5,
+        -6
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "props": {},
+      "color": "#ffffff",
+      "collidable": true,
+      "vehicle": {
+        "kind": "buggy"
+      }
+    },
+    {
+      "id": "veh_helicopter_3",
+      "type": "vehicle",
+      "name": "Helicóptero",
+      "position": [
+        38,
+        2,
+        46
+      ],
+      "rotation": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "props": {},
+      "color": "#ffffff",
+      "collidable": true,
+      "vehicle": {
+        "kind": "helicopter"
+      }
+    },
+    {
+      "id": "veh_boat_4",
+      "type": "vehicle",
+      "name": "Lancha",
+      "position": [
+        46,
+        0,
+        70
+      ],
+      "rotation": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "props": {},
+      "color": "#ffffff",
+      "collidable": true,
+      "vehicle": {
+        "kind": "boat"
+      }
+    },
+    {
+      "id": "veh_car_5",
+      "type": "vehicle",
+      "name": "Coche",
+      "position": [
+        -10,
+        5.5,
+        12
+      ],
+      "rotation": [
+        0,
+        -90,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "scripts": [],
+      "props": {},
+      "color": "#ffffff",
+      "collidable": true,
+      "vehicle": {
+        "kind": "car"
+      }
     }
   ],
   "opennite": {

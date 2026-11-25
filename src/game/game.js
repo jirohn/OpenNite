@@ -20,6 +20,7 @@ import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
 import { WorldDebug } from './debug.js';
 import { BuildingManager } from './building.js';
+import { VehicleManager } from './vehicles.js';
 import { findBuildings, ensureMatchLoot, isLand, isSafeLand } from './map-pois.js';
 
 const DEFAULT_SKIN_CATALOG = [
@@ -428,6 +429,9 @@ export class Game {
     this.world.debug.setEnabled(!!this.settings.get('debugMode'));
     this.app.setLoading?.(40, config.map.type === 'glb' ? 'Cargando escena 3D completa...' : 'Creando San Borondon y colocando la naturaleza...');
     await this.world.load();
+    // Vehículos de EGD colocados en el mapa (pestaña Escena del Studio).
+    this.vehicles = new VehicleManager(this, this.world, this.scene);
+    await this.vehicles.load(this.world.map);
     applyCartoonStyle(this.scene, this._cartoonCache);
     this.world.setRefractionTexture?.(this.refractionTarget.texture, this._drawSize.x, this._drawSize.y);
     this.world.setReflectionTexture?.(
@@ -704,6 +708,8 @@ export class Game {
   fireWeapon(shooter) {
     const isHuman = shooter === this.player;
     const body = isHuman ? this.player : shooter.body;
+    // Dentro de un vehículo no se dispara (como en EGD).
+    if (body.ride) return;
     const inv = body.inventory;
     const shot = inv.fire(body.ads);
     if (!shot) {
@@ -754,7 +760,14 @@ export class Game {
         this.onBotHit(hitTarget, dmg, hitPart, shooter, hitPoint, shot.weapon.name);
       } else if (worldHit) {
         hitPoint = worldHit.point;
-        if (worldHit.type === 'glass' && worldHit.glassKey) {
+        if (worldHit.collider?.role === 'vehicle' && worldHit.collider.vehicle) {
+          // Los vehículos se dañan con las armas y acaban explotando.
+          const v = worldHit.collider.vehicle;
+          const falloff = Math.max(0.4, 1 - worldHit.distance * shot.falloff);
+          this.vehicles?.damage(v, shot.damage * falloff, isHuman ? this.player : shooter.body);
+          if (visible) this.effects.impact(worldHit.point, dir.clone().negate(), 'stone');
+          if (isHuman) this.hud.hitMarker();
+        } else if (worldHit.type === 'glass' && worldHit.glassKey) {
           this.world.breakGlass(worldHit.glassKey, worldHit.point);
           if (visible) this.effects.impact(worldHit.point, dir.clone().negate(), 'stone');
         } else if (visible) {
@@ -784,6 +797,17 @@ export class Game {
       nearDoor.autoClose = 2.5;
     }
     if (!holdE || !body.alive) { st.chest = null; st.door = null; st.latch = false; return; }
+    // Vehículos: E para bajar, o para subir al que ha elegido su IA.
+    if (!st.latch && this.vehicles) {
+      if (body.ride) { this.vehicles.exit(body); st.latch = true; return; }
+      const want = bot.brain.goal.type === 'vehicle' ? bot.brain.goal.entity : null;
+      if (want && this.vehicles.nearest(body.position, 3.4, (v) => v === want)) {
+        this.vehicles.enter(want, body);
+        st.latch = true;
+        return;
+      }
+    }
+    if (body.ride) return;
     if (st.chest) {
       const e = st.chest.entity;
       if (!e.group?.parent || e.pos.distanceToSquared(body.position) > 3.6 * 3.6) { st.chest = null; return; }
@@ -1055,6 +1079,9 @@ export class Game {
       if (mouse.wheel) player.inventory.cycle(mouse.wheel > 0 ? 1 : -1);
     }
 
+    // Vehículos: se mueven con las teclas de quien conduce (persona o bot).
+    this.vehicles?.update(dt);
+
     if (this.mode === 'playing' && player.alive) {
       this.syncWeaponModel();
       this.world.playerState = { pos: player.position, vx: player.velocity.x, vy: player.velocity.y, vz: player.velocity.z, speed: Math.hypot(player.velocity.x, player.velocity.z), sprinting: player.sprinting, grounded: player.grounded, swimming: player.swimming };
@@ -1062,6 +1089,12 @@ export class Game {
 
       if (player.inBus) {
         this.chute.visible = false;
+      } else if (player.ride) {
+        // En un vehículo: solo E para bajar (también si está entrando).
+        this.chute.visible = false;
+        const holdE = this.input.isDown('KeyE');
+        if (holdE && !this.vehicleLatch) { this.vehicles.exit(player); this.vehicleLatch = true; }
+        if (!holdE) this.vehicleLatch = false;
       } else {
         this.chute.visible = player.gliding;
         if (player.gliding) {
@@ -1086,7 +1119,15 @@ export class Game {
 
         // Interacción: cofres/puertas con canalización + progreso circular
         const holdE = this.input.isDown('KeyE');
-        if (this.chestOpening) {
+        if (!holdE) this.vehicleLatch = false;
+        // Subir a un vehículo (si no hay botín más cerca).
+        const nearVehicle = !this.building?.enabled && !this.chestOpening && !this.doorOpening ? this.vehicles?.nearest(player.position, 3.2) : null;
+        const lootFirst = near && nearVehicle && near.pos.distanceTo(player.position) < nearVehicle.position.distanceTo(player.position) - nearVehicle.radius;
+        if (holdE && nearVehicle && !lootFirst && !this.pickupLatch && !this.vehicleLatch) {
+          this.vehicles.enter(nearVehicle, player);
+          this.vehicleLatch = true;
+          this.pickupLatch = true;
+        } else if (this.chestOpening) {
           const co = this.chestOpening;
           const stillNear = co.entity && !co.entity.dead && co.entity.pos.distanceToSquared(player.position) < 3.6 * 3.6;
           if (!holdE || !stillNear || !player.alive) {
@@ -1233,6 +1274,8 @@ export class Game {
     for (const bot of this.bots) bot.destroy();
     this.bots.length = 0;
     this.loot?.dispose();
+    this.vehicles?.dispose();
+    this.vehicles = null;
     this.storm?.dispose();
     this.effects?.dispose();
     this.world?.dispose();

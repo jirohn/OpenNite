@@ -179,9 +179,57 @@ export class AudioEngine {
         this.tone({ freq: 70, end: 95, type: 'sawtooth', dur: 1.4, gain: 0.055, dest: this.music });
         this.noise({ dur: 1.6, gain: 0.035, filter: 'lowpass', freq: 320, dest: this.music });
         break;
+      case 'horn': {
+        // Claxon de los vehículos de EGD (la lancha, más grave).
+        const f = opts.big ? 196 : 392;
+        this.tone({ freq: f, type: 'square', dur: 0.4, gain: 0.07 });
+        this.tone({ freq: f * 1.26, type: 'square', dur: 0.4, gain: 0.05 });
+        break;
+      }
       default:
         break;
     }
+  }
+
+  /**
+   * Motor del vehículo que conduce el jugador: zumbido continuo cuyo tono sube
+   * con la velocidad (`load` 0..1). engine(false) lo apaga.
+   */
+  engine(on, load = 0, mode = 'ground') {
+    if (!this.ctx || !this.enabled) return;
+    const t = this.ctx.currentTime;
+    if (!on) {
+      if (this._engine) {
+        const e = this._engine;
+        this._engine = null;
+        e.gain.gain.setTargetAtTime(0.0001, t, 0.08);
+        e.osc.stop(t + 0.4);
+        e.osc2.stop(t + 0.4);
+      }
+      return;
+    }
+    if (!this._engine) {
+      const osc = this.ctx.createOscillator();
+      const osc2 = this.ctx.createOscillator();
+      const filter = this.ctx.createBiquadFilter();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc2.type = 'square';
+      filter.type = 'lowpass';
+      filter.frequency.value = 420;
+      gain.gain.value = 0.0001;
+      osc.connect(filter); osc2.connect(filter);
+      filter.connect(gain).connect(this.sfx);
+      osc.start(); osc2.start();
+      this._engine = { osc, osc2, filter, gain };
+    }
+    const e = this._engine;
+    const air = mode === 'heli' || mode === 'plane';
+    const base = air ? 34 : mode === 'water' ? 48 : 42;
+    e.osc.frequency.setTargetAtTime(base + load * (air ? 50 : 95), t, 0.08);
+    e.osc2.frequency.setTargetAtTime((base + load * (air ? 50 : 95)) * 0.5, t, 0.08);
+    e.filter.frequency.setTargetAtTime(300 + load * 900, t, 0.1);
+    e.gain.gain.setTargetAtTime(0.035 + load * 0.03, t, 0.1);
   }
 
   footstep(running = false) {

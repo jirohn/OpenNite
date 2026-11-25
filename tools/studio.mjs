@@ -16,7 +16,7 @@
  * abren y se guardan en el formato de EGD ("egd-map"), el mismo que lee el juego.
  *
  * Lo propio de OpenNite:
- *  - Scene Editor: solo objetos de la escena, viento, cofres, armas y el spawn
+ *  - Scene Editor: objetos de la escena, vehículos, viento, cofres, armas y el spawn
  *    del modo entrenamiento (en partida se cae del cielo, no hay punto de inicio).
  *  - Mapa nuevo: plano y por debajo del nivel del agua.
  *  - Guardar escribe en los mapas del juego (public/maps) y en su índice.
@@ -27,7 +27,7 @@ import {
 } from '../src/core/egd-engine.mjs';
 import { isEgdMap, EGD_MAP_FORMAT, egdUpgradeWater, egdTileHasWater } from '../src/core/egd-map.mjs';
 import { seedOpenNiteCharacters, installAssetResolver, applyOpenNiteTextures, skinsCatalogFromProject, skinSection } from './studio-skins.mjs';
-import { egdSelect, egdCheck } from '../src/core/egd-engine.mjs';
+import { egdSelect, egdCheck, EGD_VEHICLES } from '../src/core/egd-engine.mjs';
 
 const $ = (s) => document.querySelector(s);
 const AUTOSAVE_KEY = 'opennite-editor-autosave-v1';
@@ -281,6 +281,12 @@ class OpenNiteSceneEditor extends EgdSceneEditor {
       ),
       egdSection('🌲 Decorado',
         egdRow('Decorado', decor, egdButton('Añadir', () => this.addEntity('prop', { prop: decor.value, name: Hn[decor.value].name }))),
+      ),
+      // Vehículos de EGD: en la partida se suben con E (jugador y bots).
+      egdSection('🚗 Vehículos',
+        egdEl('div', { class: 'grid-buttons' }, Object.entries(EGD_VEHICLES).map(([k, v]) =>
+          add(({ car: '🚗', buggy: '🏎️', boat: '🚤', helicopter: '🚁', plane: '✈️' }[k] || '🚗') + ' ' + v.name, 'vehicle', { name: v.name, vehicle: { kind: k } }))),
+        egdHint('En la partida: acércate y pulsa E para subir o bajar. Los bots también los usan para ir lejos o huir de la tormenta. La lancha necesita agua. Los asientos se ajustan en la pestaña Vehículos.'),
       ),
     );
     this.outliner = egdEl('div', { class: 'list' });

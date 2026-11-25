@@ -4372,6 +4372,25 @@ transformed.y *= rise;`);
     }
   }
 
+  /** Mueve una caja de colisión (vehículos): actualiza sus celdas de la rejilla. */
+  moveCollider(c, minX, maxX, minY, maxY, minZ, maxZ) {
+    const cells = (a, b, d, e) => [Math.floor(a / COLLIDER_CELL), Math.floor(b / COLLIDER_CELL), Math.floor(d / COLLIDER_CELL), Math.floor(e / COLLIDER_CELL)];
+    const [ox0, ox1, oz0, oz1] = cells(c.minX, c.maxX, c.minZ, c.maxZ);
+    const [nx0, nx1, nz0, nz1] = cells(minX, maxX, minZ, maxZ);
+    Object.assign(c, { minX, maxX, minY, maxY, minZ, maxZ });
+    if (ox0 === nx0 && ox1 === nx1 && oz0 === nz0 && oz1 === nz1) return;
+    for (let x = ox0; x <= ox1; x++) for (let z = oz0; z <= oz1; z++) {
+      const list = this.colliderGrid.get(`${x},${z}`);
+      const i = list ? list.indexOf(c) : -1;
+      if (i >= 0) list.splice(i, 1);
+    }
+    for (let x = nx0; x <= nx1; x++) for (let z = nz0; z <= nz1; z++) {
+      const key = `${x},${z}`;
+      if (!this.colliderGrid.has(key)) this.colliderGrid.set(key, []);
+      this.colliderGrid.get(key).push(c);
+    }
+  }
+
   addGeo(bucket, geo, x, y, z, rotY = 0, sx = 1, sy = 1, sz = 1, rotX = 0) {
     if (rotY) geo.rotateY(rotY);
     if (rotX) geo.rotateX(rotX);

@@ -91,6 +91,8 @@ export class Player {
     this.mantleEnd = new THREE.Vector3();
     this.mantleMid = new THREE.Vector3();
     this._mantleProbeCd = 0;
+    // Vehículo de EGD en el que va (ver vehicles.js): { vehicle, seat, phase, ... }.
+    this.ride = null;
   }
 
   get eyePosition() {
@@ -116,6 +118,7 @@ export class Player {
    * Los bots usan exactamente esta misma función.
    */
   placeOnBus(route = null) {
+    this.ride = null;
     this.busRoute = route;
     if (route) this.busSpeed = route.speed;
     this.inBus = true;
@@ -169,7 +172,7 @@ export class Player {
 
   /** ESPACIO: saltar en el suelo, trepar bordes o alternar el paracaídas en el aire. */
   onSpacePress() {
-    if (!this.alive || this.inBus) return;
+    if (!this.alive || this.inBus || this.ride) return;
     if (this.mantling) return;
     if (this.sliding) {
       // Saltar desde deslizamiento
@@ -222,6 +225,7 @@ export class Player {
   handleMouse(dx, dy) {
     const sens = this.settings.get('sensitivity');
     const inv = this.settings.get('invertY') ? -1 : 1;
+    if (dx || dy) this._camInputAt = this.time;
     this.yaw -= dx * sens;
     this.pitch = clamp(this.pitch - dy * sens * inv, -1.45, 1.35);
     this.recoil = Math.max(0, this.recoil - Math.abs(dx) * sens * 0.9);
@@ -410,6 +414,14 @@ export class Player {
     this._mantleProbeCd = Math.max(0, this._mantleProbeCd - dt);
     const inv = this.inventory.update(dt);
     if (inv === 'reloaded') this.audio.play('reload');
+
+    // En un vehículo: lo conduce el sistema de vehículos con estas mismas teclas.
+    if (this.ride) {
+      if (this.world.vehicles) this.world.vehicles.updateRider(this, dt);
+      else this.ride = null;
+      this.updateCamera(dt);
+      return;
+    }
 
     if (this.inBus) {
       this.busTime = (this.busTime || 0) + dt;
@@ -849,11 +861,14 @@ export class Player {
     const baseShoulder = clamp(Number(this.settings.get('cameraShoulder')) || 1.15, 0.25, 2.4);
     this.cameraDistance = baseDist;
     // En el bus: cámara lejana, alta y centrada para que no se meta en el autobús (mide 20 m).
-    const dist = this.inBus ? 26 : this.ads ? Math.max(2.2, baseDist * 0.68) : this.gliding ? Math.max(5, baseDist * 1.45) : baseDist;
-    const shoulder = this.inBus ? 0 : this.ads ? baseShoulder * 0.82 : baseShoulder;
+    // En un vehículo: detrás de él, a la distancia de EGD.
+    const ride = this.ride ? this.world.vehicles?.cameraFor(this) : null;
+    const dist = ride ? ride.dist : this.inBus ? 26 : this.ads ? Math.max(2.2, baseDist * 0.68) : this.gliding ? Math.max(5, baseDist * 1.45) : baseDist;
+    const shoulder = ride ? 0 : this.inBus ? 0 : this.ads ? baseShoulder * 0.82 : baseShoulder;
 
     const camH = this.inBus ? 4.5 : this.swimming ? 0.95 : (this.crouching ? 1.05 : 1.48);
-    this.camTarget.set(this.position.x, this.position.y + camH, this.position.z);
+    if (ride) this.camTarget.copy(ride.target);
+    else this.camTarget.set(this.position.x, this.position.y + camH, this.position.z);
     this.desiredCam.copy(this.camTarget).addScaledVector(forward, -dist).addScaledVector(right, shoulder);
     this.landCameraKick = Math.max(0, (this.landCameraKick || 0) - dt * 1.8);
     this.damageShake = Math.max(0, (this.damageShake || 0) - dt * 1.2);
@@ -865,7 +880,11 @@ export class Player {
       const dir = this.desiredCam.clone().sub(this.camTarget);
       const len = dir.length();
       dir.normalize();
+      // La caja del propio vehículo no tapa la cámara.
+      const own = ride?.vehicle?.collider;
+      if (own) own.enabled = false;
       const hit = this.world.raycast(this.camTarget, dir, len);
+      if (own) own.enabled = true;
       if (hit && hit.distance > 0.25) {
         // Nunca meter la cámara dentro del personaje (si no, solo se ve el arma).
         this.desiredCam.copy(this.camTarget).addScaledVector(dir, Math.max(1.7, hit.distance - 0.35));

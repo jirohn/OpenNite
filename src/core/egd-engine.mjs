@@ -1469,4 +1469,6 @@ export {
   ur as egdLavaSettings,
   $o as egdLiquidSurface,
   _c as egdTide,
+  Ky as egdVehicleObject,
+  Ji as EGD_VEHICLES,
 };
