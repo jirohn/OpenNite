@@ -19,6 +19,27 @@ export function isLand(world, x, z) {
   return !(Number.isFinite(w) && w > -50 && g < w - 0.35);
 }
 
+/**
+ * Tierra firme de verdad: el punto y un anillo a su alrededor son tierra, y bien
+ * por encima del agua (sin orillas, bordes de acantilado ni arena que moja).
+ */
+export function isSafeLand(world, x, z, ring = 3.5, margin = 0.6) {
+  const ok = (px, pz) => {
+    if (!isLand(world, px, pz)) return false;
+    const g = world.surfaceHeightAt?.(px, pz) ?? world.heightAt(px, pz);
+    const w = world.waterYAt?.(px, pz);
+    const sea = Number.isFinite(world.waterLevel) && world.waterLevel > -50 ? world.waterLevel : -Infinity;
+    const top = Math.max(Number.isFinite(w) ? w : -Infinity, sea);
+    return !(top > -50 && g < top + margin);
+  };
+  if (!ok(x, z)) return false;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    if (!ok(x + Math.cos(a) * ring, z + Math.sin(a) * ring)) return false;
+  }
+  return true;
+}
+
 /** Altura del suelo pisable en (x, z) cerca de la altura `y` (suelos de casas incluidos). */
 function floorY(world, x, z, y) {
   return world.groundAt ? world.groundAt(x, z, y + 2.2, y - 2.5) : (world.surfaceHeightAt?.(x, z) ?? world.heightAt(x, z));
@@ -104,7 +125,7 @@ export function ensureMatchLoot(world, buildings, players = 20) {
   while (all().length < want && tries++ < 4000) {
     const x = (rnd() * 2 - 1) * half * 0.95;
     const z = (rnd() * 2 - 1) * half * 0.95;
-    if (!isLand(world, x, z) || near(all(), x, z, 7)) continue;
+    if (!isSafeLand(world, x, z, 2.5) || near(all(), x, z, 7)) continue;
     const y = world.surfaceHeightAt?.(x, z) ?? world.heightAt(x, z);
     const roll = rnd();
     if (roll < 0.2) chests.push(new THREE.Vector3(x, y, z));

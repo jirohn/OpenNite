@@ -20,7 +20,7 @@ import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
 import { WorldDebug } from './debug.js';
 import { BuildingManager } from './building.js';
-import { findBuildings, ensureMatchLoot, isLand } from './map-pois.js';
+import { findBuildings, ensureMatchLoot, isLand, isSafeLand } from './map-pois.js';
 
 const DEFAULT_SKIN_CATALOG = [
   { id: '100avatars_003_jimmy', name: 'Jimmy', color: 0x1e88e5, modelPath: '/models/opennite/characters/100avatars/100Avatars_003_Jimmy.fbx', anim: 'idle' },
@@ -612,7 +612,7 @@ export class Game {
     const loot = [...(w.chestSpots || []), ...(w.weaponSpawnSpots || []), ...(w.lootSpots || [])];
     const raw = [...loot, ...(this.buildings || []).map((b) => b.center)];
     const spots = raw
-      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z) && isLand(w, p.x, p.z))
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z) && isSafeLand(w, p.x, p.z))
       .map((p) => ({ pos: new THREE.Vector3(p.x, w.surfaceHeightAt?.(p.x, p.z) ?? 0, p.z), density: 0 }));
     for (const a of spots) {
       for (const q of loot) if (Math.hypot(q.x - a.pos.x, q.z - a.pos.z) < 30) a.density++;
@@ -622,6 +622,9 @@ export class Game {
   }
 
   isLand(x, z) { return isLand(this.world, x, z); }
+
+  /** Tierra firme lejos de la orilla (para aterrizar). */
+  isSafeLand(x, z) { return isSafeLand(this.world, x, z); }
 
   createBus() {
     const group = new THREE.Group();

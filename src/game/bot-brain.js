@@ -155,7 +155,7 @@ export class BotBrain {
         const off = rand(-1, 1) * Math.min(90, world.half);
         const x = route.start.x + route.dir.x * along - route.dir.z * off;
         const z = route.start.z + route.dir.z * along + route.dir.x * off;
-        if (this.game.isLand(x, z)) best = new THREE.Vector3(x, world.surfaceHeightAt?.(x, z) ?? 0, z);
+        if (this.game.isSafeLand(x, z)) best = new THREE.Vector3(x, world.surfaceHeightAt?.(x, z) ?? 0, z);
       }
       if (!best) best = new THREE.Vector3(0, 0, 0);
     }
@@ -163,7 +163,7 @@ export class BotBrain {
     // Un poco de dispersión (sin salir de tierra firme): no todos al mismo cofre exacto.
     const jx = chosen.x + rand(-3, 3);
     const jz = chosen.z + rand(-3, 3);
-    if (this.game.isLand(jx, jz)) { chosen.x = jx; chosen.z = jz; }
+    if (this.game.isSafeLand(jx, jz)) { chosen.x = jx; chosen.z = jz; }
     claims.push(chosen);
     return chosen;
   }
@@ -867,6 +867,7 @@ export class BotBrain {
       this._steer(_dir, dt);
       moveX = _dir.x;
       moveZ = _dir.z;
+      if (moveX * moveX + moveZ * moveZ < 0.01) this.wantMove = false;
     }
     this._checkStuck(dt);
 
@@ -1012,13 +1013,14 @@ export class BotBrain {
       return;
     }
     this.detourYaw = null;
+    this._waterAhead = false;
     const base = Math.atan2(dir.x, dir.z);
     const angles = [0, 0.45, -0.45, 0.9, -0.9, 1.4, -1.4, 2.0, -2.0];
     for (const a0 of angles) {
       const a = base + a0 * this.avoidSide;
       _probe.set(Math.sin(a), 0, Math.cos(a));
       const res = this._probeDir(_probe);
-      if (res === 'ok' || res === 'step' || (res === 'water' && b.swimming)) {
+      if (res === 'ok' || res === 'step' || (res === 'water' && (b.swimming || this.goal.type === 'storm'))) {
         if (res === 'step' && a0 === 0 && b.grounded) {
           // Escalón o muro bajo: saltar para trepar (mirando hacia allí).
           if (Math.abs(angleDiff(yawTo(_probe.x, _probe.z), b.yaw)) < 0.5) this._space();
@@ -1032,7 +1034,8 @@ export class BotBrain {
         this._waterAhead = true;
       }
     }
-    // Nada despejado: seguir recto (el desatasco se encargará).
+    // Nada despejado. Si delante hay agua y está en tierra, mejor quedarse en la orilla.
+    if (this._waterAhead && !b.swimming && this.goal.type !== 'storm') dir.set(0, 0, 0);
   }
 
   _probeDir(dir) {
