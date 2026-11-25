@@ -2,7 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<title>OpenNite - Editor de mapa/terreno</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenNite - Editor de mapas</title>
 <script type="importmap">
 {
   "imports": {
@@ -12,275 +13,350 @@
 }
 </script>
 <style>
-  html, body { margin: 0; padding: 0; background: #0b0d12; color: #e6e8ee; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; overflow: hidden; }
-  canvas#map-canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
-  .panel { position: fixed; left: 12px; top: 12px; width: 292px; max-height: calc(100vh - 24px); overflow-y: auto; background: rgba(12, 16, 24, .95); border: 1px solid #27303f; border-radius: 8px; backdrop-filter: blur(3px); padding: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.4); }
-  .panel h2 { margin: 0 0 2px; font-size: 16px; }
-  .tag { display: inline-block; font-size: 10px; background: #3b4b6a; color: #c4d1e6; padding: 2px 8px; border-radius: 99px; margin-left: 8px; }
-  h3 { font-size: 12px; color: #8d9bb0; margin: 12px 0 6px; text-transform: uppercase; letter-spacing: .4px; }
-  button { background: #213046; color: #e8eef6; border: 1px solid #34435c; padding: 7px 10px; border-radius: 6px; cursor: pointer; width: 100%; font-size: 12px; margin: 3px 0; }
-  button.primary { background: #22478b; border-color: #2b5cb8; font-weight: 600; }
-  button.ghost { background: transparent; border: 1px solid #34435c; color: #9db0c7; font-size: 11px; }
-  button.active { background: #2b5cb8; border-color: #4a8cff; }
-  select, input[type="number"], input[type="range"] { width: 100%; background: #0f141b; border: 1px solid #27303f; color: #e6e8ee; padding: 6px 8px; border-radius: 6px; margin: 4px 0; box-sizing: border-box; }
-  input[type="range"] { padding: 0; }
-  .palette { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 6px 0; }
-  .palette button { font-size: 10px; padding: 6px 4px; margin:0; }
-  .hint { font-size: 10px; color: #7c8897; line-height: 1.5; }
-  .row { display:flex; gap:6px; }
-  .row > * { flex:1; }
-  .back { position: fixed; left: 12px; bottom: 10px; font-size: 11px; color: #7a8499; z-index: 2; }
-  .back a { color: #9db3d5; text-decoration: none; }
-  #error-overlay { display:none; position:fixed; left:320px; top:12px; z-index:9; background:#3a1414; border:1px solid #7a3030; color:#ffdada; padding:12px 14px; border-radius:8px; font:12px Consolas,monospace; max-width:60vw; white-space:pre-wrap; }
-  label.small { font-size:11px; color:#9db0c7; display:block; margin-top:4px; }
-  label.toggle { display:flex; gap:6px; align-items:center; margin:0; cursor:pointer; }
-  label.toggle input { margin:0; }
-  #marquee { position:fixed; border:1px solid #7fd0ff; background:rgba(127,208,255,0.15); pointer-events:none; display:none; z-index:5; }
+/* Estilos del editor de Easy Game Developer (mismos que en EGD). */
+:root {
+  --bg: #14161b; --panel: #1c1f26; --panel2: #232731; --line: #2f3440; --text: #dde2ea; --muted: #8a93a3;
+  --accent: #ffb020; --accent2: #3b82f6; --danger: #e0314b; --ok: #33d17a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; -webkit-tap-highlight-color: transparent; }
+.hidden { display: none !important; }
+.spacer { flex: 1; }
+
+#topbar { position: relative; flex-shrink: 0; height: 48px; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: #101217; border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; font-size: 15px; white-space: nowrap; }
+.logo { color: var(--accent); }
+#tabs { display: flex; gap: 2px; margin-left: 12px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+#tabs button { flex-shrink: 0; background: transparent; border: 0; color: var(--muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+#tabs button:hover { background: var(--panel2); color: var(--text); }
+#tabs button.active { background: var(--panel2); color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); }
+#project-name { background: transparent; border: 1px solid transparent; color: var(--text); font-weight: 600; width: 180px; text-align: right; padding: 5px 8px; border-radius: 6px; }
+#project-name:hover, #project-name:focus { border-color: var(--line); background: var(--panel); outline: none; }
+.actions { display: flex; gap: 6px; align-items: center; }
+.file-menu { display: flex; gap: 6px; }
+.btn.icon { padding: 6px 9px; font-size: 15px; line-height: 1; }
+.mobile-only, #mobile-bar, #drawer-backdrop { display: none; }
+
+.btn { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 11px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+.btn:hover { border-color: #4a5160; background: #2a2f3a; }
+.btn.primary, .btn.play { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 700; }
+.btn.play:hover, .btn.primary:hover { background: #ffc24d; }
+.btn.danger { color: #ff8090; }
+.btn.danger:hover { background: #3a1d24; border-color: var(--danger); }
+.btn.active { border-color: var(--accent); color: var(--accent); }
+.btn.small { padding: 3px 8px; font-size: 11.5px; }
+.btn.block { width: 100%; }
+
+#main { position: relative; flex: 1; min-height: 0; display: flex; }
+.panel { width: 290px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 10px; flex-shrink: 0; }
+#right-panel { width: 330px; border-right: 0; border-left: 1px solid var(--line); }
+#viewport { flex: 1; position: relative; min-width: 0; }
+#canvas-host { position: absolute; inset: 0; }
+#canvas-host canvas { display: block; width: 100%; height: 100%; }
+#viewport-overlay { position: absolute; left: 10px; top: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; pointer-events: none; }
+#viewport-overlay > * { pointer-events: auto; }
+#viewport-overlay .tool-group { display: flex; gap: 2px; background: rgba(16,18,23,.85); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+#viewport-overlay .info { background: rgba(16,18,23,.75); border-radius: 8px; padding: 6px 10px; color: var(--muted); font-size: 12px; }
+#center-panel { position: absolute; inset: 0; background: var(--bg); display: flex; flex-direction: column; }
+#play-host { position: absolute; inset: 0; z-index: 20; }
+
+.section { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.section-title { font-weight: 700; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+.row-label { width: 92px; flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.row-inputs { flex: 1; display: flex; gap: 4px; align-items: center; min-width: 0; }
+.row-inputs > * { flex: 1; min-width: 0; }
+input[type=text], input[type=number], select, textarea { background: #15181e; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 5px 6px; font: inherit; width: 100%; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent2); }
+input[type=color] { width: 100%; height: 28px; border: 1px solid var(--line); border-radius: 5px; background: #15181e; padding: 2px; cursor: pointer; }
+input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+.check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.vec3 { display: flex; gap: 3px; width: 100%; }
+.vec3 input { padding: 4px; }
+.slider { display: flex; align-items: center; gap: 6px; width: 100%; }
+.slider input { flex: 1; accent-color: var(--accent); }
+.slider-val { width: 40px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hint { color: var(--muted); font-size: 11.5px; margin: 6px 0; line-height: 1.5; }
+.btn-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.grid-buttons { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 4px; }
+.grid-buttons .btn { padding: 7px 4px; font-size: 12px; min-width: 0; white-space: normal; line-height: 1.2; word-break: break-word; }
+
+.list { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow-y: auto; }
+.list-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 5px; cursor: pointer; }
+.list-item:hover { background: #2a2f3a; }
+.list-item.active { background: #33302a; color: var(--accent); }
+.li-icon { width: 18px; text-align: center; }
+.li-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { font-size: 10.5px; padding: 1px 6px; border-radius: 10px; background: #2e3340; color: var(--muted); }
+.tag.star { background: #4a3a10; color: var(--accent); }
+
+.swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.swatch { display: flex; align-items: center; gap: 6px; padding: 5px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 12px; background: #15181e; }
+.swatch.active { border-color: var(--accent); }
+.swatch i { width: 16px; height: 16px; border-radius: 4px; display: inline-block; border: 1px solid rgba(0,0,0,.4); }
+
+.tabs-mini { display: flex; gap: 2px; margin-bottom: 10px; }
+.tabs-mini .btn { flex: 1; }
+
+.script-card { background: #15181e; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 6px; }
+.script-card .head { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+
+.timeline { position: relative; background: #15181e; border: 1px solid var(--line); border-radius: 6px; padding: 4px 0; user-select: none; }
+.tl-row { position: relative; height: 20px; display: flex; align-items: center; cursor: pointer; }
+.tl-row.active { background: rgba(255,176,32,.08); }
+.tl-label { width: 74px; padding-left: 6px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.tl-track { position: relative; flex: 1; height: 100%; margin-right: 8px; border-left: 1px solid var(--line); }
+.tl-key { position: absolute; top: 5px; width: 10px; height: 10px; margin-left: -5px; background: var(--accent2); transform: rotate(45deg); cursor: pointer; }
+.tl-key.sel { background: var(--accent); }
+.tl-cursor { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); pointer-events: none; }
+
+#statusbar { position: relative; flex-shrink: 0; height: 28px; display: flex; align-items: center; gap: 10px; padding: 0 10px; background: #101217; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+#console { position: fixed; left: 0; right: 0; bottom: 28px; height: 220px; background: #0d0f13; border-top: 1px solid var(--line); z-index: 30; display: flex; flex-direction: column; }
+.console-head { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--line); font-weight: 600; }
+#console-body { flex: 1; overflow-y: auto; padding: 6px 10px; font: 12px/1.5 Consolas, monospace; }
+#console-body .warn { color: #ffcc66; }
+#console-body .error { color: #ff7080; }
+#toast-host { position: fixed; right: 16px; bottom: 40px; display: flex; flex-direction: column; gap: 6px; z-index: 40; }
+.toast { background: #2a2f3a; border: 1px solid var(--line); border-left: 3px solid var(--accent); padding: 8px 14px; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+
+/* Editor de micro-códigos */
+.code-toolbar { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel); align-items: center; }
+.code-wrap { flex: 1; display: flex; min-height: 0; font: 13.5px/1.55 Consolas, 'Cascadia Code', monospace; }
+.code-gutter { width: 46px; text-align: right; padding: 10px 8px 10px 0; color: #566070; background: #111318; overflow: hidden; white-space: pre; user-select: none; }
+.code-area { flex: 1; resize: none; border: 0 !important; border-radius: 0 !important; background: #15181e !important; padding: 10px !important; font: inherit !important; white-space: pre; tab-size: 2; color: #e6e9ef; }
+.code-status { padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; background: var(--panel); }
+.code-status.ok { color: var(--ok); }
+.code-status.err { color: #ff7080; }
+.api-doc { font-size: 12px; line-height: 1.6; }
+.api-doc code { background: #15181e; padding: 1px 4px; border-radius: 3px; color: #ffcf70; font-size: 11.5px; }
+.api-doc h4 { margin: 10px 0 4px; color: var(--accent); font-size: 12px; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #2f3440; border-radius: 6px; border: 2px solid var(--panel); }
+
+/* Ventanas modales */
+.modal-wrap { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; width: min(720px, 92vw); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+.modal h2 { margin: 0 0 12px; font-size: 18px; }
+.modal .warn { color: #ffcc66; margin: 0 0 10px; }
+.modal-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.modal-card { text-align: left; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 14px; color: var(--text); cursor: pointer; display: flex; flex-direction: column; gap: 6px; font: inherit; }
+.modal-card:hover { border-color: var(--accent); }
+.modal-card b { font-size: 14px; }
+.modal-card span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+/* ---------- Móvil / Android ---------- */
+@media (max-width: 900px), (max-height: 520px) {
+  body { font-size: 14px; }
+  #topbar { height: auto; flex-wrap: wrap; gap: 6px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top)); }
+  .brand-name { display: none; }
+  .brand { font-size: 20px; }
+  #project-name { flex: 1; width: auto; min-width: 0; text-align: left; font-size: 14px; }
+  .spacer { display: none; }
+  #tabs { order: 3; width: 100%; margin: 0; overflow-x: auto; scrollbar-width: none; }
+  #tabs::-webkit-scrollbar { display: none; }
+  #tabs button { flex-shrink: 0; padding: 9px 12px; font-size: 14px; }
+  .mobile-only { display: inline-flex; }
+  .file-menu { display: none; position: absolute; top: 100%; right: 8px; z-index: 70; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.5); min-width: 170px; }
+  #topbar.menu-open .file-menu { display: flex; }
+  .file-menu .btn { text-align: left; padding: 11px 12px; font-size: 15px; }
+  .btn { padding: 9px 12px; font-size: 14px; }
+  .btn.small { padding: 7px 10px; font-size: 13px; }
+  .btn.icon { padding: 8px 11px; font-size: 18px; }
+  input[type=text], input[type=number], select, textarea { font-size: 16px; padding: 8px; }
+  input[type=color] { height: 36px; }
+  input[type=checkbox] { width: 20px; height: 20px; }
+  input[type=range] { height: 28px; }
+  .row-label { width: 86px; font-size: 13px; }
+  .list-item { padding: 9px 8px; }
+  .grid-buttons { grid-template-columns: repeat(2, 1fr); }
+  .grid-buttons .btn { padding: 10px 4px; }
+  .swatch { padding: 8px 6px; font-size: 13px; }
+
+  .panel { position: absolute; top: 0; bottom: 0; z-index: 30; width: min(88vw, 360px) !important; transition: transform .22s ease; box-shadow: 0 0 40px rgba(0,0,0,.6); }
+  #left-panel { left: 0; transform: translateX(-105%); }
+  #right-panel { right: 0; transform: translateX(105%); }
+  #left-panel.open, #right-panel.open { transform: none; }
+  #drawer-backdrop { position: absolute; inset: 0; z-index: 29; background: rgba(0,0,0,.45); }
+  #drawer-backdrop.show { display: block; }
+  #mobile-bar { display: flex; gap: 6px; padding: 6px 8px; padding-bottom: max(6px, env(safe-area-inset-bottom)); background: #101217; border-top: 1px solid var(--line); flex-shrink: 0; }
+  #mobile-bar .btn { flex: 1; padding: 11px; font-size: 15px; }
+  #mobile-bar .btn.active { border-color: var(--accent); color: var(--accent); }
+  #statusbar { display: none; }
+  #console { bottom: 0; height: 45vh; }
+
+  #viewport-overlay { left: 6px; right: 6px; top: 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  #viewport-overlay::-webkit-scrollbar { display: none; }
+  #viewport-overlay > * { flex-shrink: 0; }
+  #viewport-overlay .info { display: none; }
+  #viewport-overlay .btn.small { padding: 9px 10px; font-size: 13px; }
+
+  .modal-cards { grid-template-columns: 1fr; }
+  .modal { padding: 16px; max-height: 90vh; overflow-y: auto; }
+  .code-toolbar { flex-wrap: wrap; }
+  .code-wrap { font-size: 13px; }
+  .code-gutter { width: 34px; }
+  #toast-host { right: 8px; left: 8px; bottom: 70px; align-items: center; }
+  body.playing #topbar, body.playing #mobile-bar { display: none; }
+}
+html.touch .touch-only { display: inline-flex !important; }
+.touch-only { display: none !important; }
+
+/* Móvil en horizontal: barra superior en una sola fila */
+@media (max-height: 520px) and (min-width: 600px) {
+  #topbar { flex-wrap: nowrap; padding-top: 4px; padding-bottom: 4px; }
+  #tabs { order: 0; width: auto; flex: 1; }
+  #tabs button span { display: none; }
+  #project-name { display: none; }
+  #mobile-bar { padding-top: 4px; padding-bottom: 4px; }
+  #mobile-bar .btn { padding: 7px; }
+}
+
+/* IA */
+.ai-prompt { width: 100%; min-height: 110px; font-size: 14px; line-height: 1.5; resize: vertical; }
+.ai-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.ai-chip { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); border-radius: 14px; padding: 5px 10px; font-size: 12px; cursor: pointer; text-align: left; }
+.ai-chip:hover { color: var(--text); border-color: var(--accent); }
+.ai-status { min-height: 20px; font-size: 13px; margin-top: 6px; }
+.ai-status.busy { color: #58d0ff; }
+.ai-status.busy::before { content: ''; display: inline-block; width: 12px; height: 12px; margin-right: 8px; border: 2px solid #58d0ff; border-top-color: transparent; border-radius: 50%; animation: egdspin .8s linear infinite; vertical-align: -2px; }
+.ai-status.ok { color: var(--ok); }
+.ai-status.err { color: #ff7080; }
+@keyframes egdspin { to { transform: rotate(360deg); } }
+.modal .row-label { width: 90px; }
+.modal input[type=password] { background: #15181e; color: var(--text); border: 1px solid var(--line); border-radius: 5px; padding: 7px; width: 100%; font: inherit; }
+
+/* GitHub */
+.gh-modal { width: min(640px, 94vw); }
+.gh-build { margin-top: 10px; }
+.gh-build .row-inputs { flex-wrap: wrap; }
+
+/* ---------- Audio ---------- */
+.audio-lib { overflow: auto; padding: 10px 14px 20px; flex: 1; }
+.audio-lib h3 { margin: 14px 0 8px; font-size: 14px; }
+.audio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.audio-card { display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.audio-card.playing { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.audio-card .play-btn { width: 34px; height: 34px; border-radius: 50%; padding: 0; }
+.audio-info { flex: 1; display: flex; flex-direction: column; min-width: 0; font-size: 12px; }
+.audio-info b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.audio-info span { opacity: .65; font-size: 11px; }
+.audio-info .tag.star { opacity: 1; color: var(--accent); font-weight: 700; }
+/* ---------- Interfaz ---------- */
+.ui-stage-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 14px; min-height: 0; overflow: hidden; container-type: size; }
+.ui-stage { position: relative; aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); background: linear-gradient(135deg, #3c6e3a, #6aa5c9 60%, #9fc7de); border-radius: 6px; overflow: hidden; box-shadow: 0 6px 30px rgba(0,0,0,.4); container-type: size; touch-action: none; }
+.ui-stage.hud-bg { background: linear-gradient(180deg, #8fc3e4, #cfe6f2 55%, #4f8a3c 56%, #3b6e2d); }
+.ui-stage .egd-uie { cursor: move; outline: 1px dashed rgba(255,255,255,.25); }
+.ui-stage .egd-uie.ui-sel { outline: 2px solid #4fc3ff; z-index: 5; }
+.ui-handle { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; background: #4fc3ff; border: 2px solid #fff; border-radius: 3px; cursor: nwse-resize; z-index: 6; }
+.icon-previews { display: flex; gap: 18px; justify-content: center; align-items: flex-end; padding: 0 0 16px; }
+.icon-previews div { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; opacity: .8; }
+.icon-previews canvas { border-radius: 18%; box-shadow: 0 3px 12px rgba(0,0,0,.35); }
+.ui-stage .egd-splash { inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3cqh; }
+.ui-stage .egd-splash h1 { margin: 0; text-align: center; padding: 0 4%; }
+.ui-stage .egd-splash .bar { width: 40%; height: 1.2cqh; border-radius: 1cqh; background: rgba(255,255,255,.18); overflow: hidden; }
+.ui-stage .egd-splash .bar i { display: block; height: 100%; background: currentColor; }
+
+/* Escritorio estrecho: pestañas solo con icono (el nombre sale al pasar el ratón) */
+@media (min-width: 901px) and (max-width: 1560px) {
+  #tabs button span { display: none; }
+  #tabs button { font-size: 18px; padding: 6px 10px; }
+}
+.modal .row-inputs .btn.small { flex: 0 0 auto; min-width: 38px; }
+.row-inputs .slider { min-width: 0; flex: 1; }
+.gh-platforms { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 4px 0; }
+@media (max-width: 600px) { .gh-platforms { grid-template-columns: 1fr; } }
+
+/* ---------- Agente IA ---------- */
+#tabs button.tab-agent { color: #c9a7ff; }
+#tabs button.tab-agent.active { color: #d9bfff; box-shadow: inset 0 -2px 0 #a879ff; }
+.agent-model { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 8px; margin: 6px 0; background: var(--panel2); border-radius: 6px; font-size: 12px; }
+.agent-model.warn { color: #ffb020; }
+.genre-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.genre-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; color: var(--text); cursor: pointer; font-size: 12px; text-align: center; }
+.genre-card span { font-size: 22px; }
+.genre-card:hover { border-color: #a879ff; background: #2a2540; }
+.agent-chat { flex: 1; overflow: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.agent-empty { margin: auto; max-width: 560px; text-align: center; color: var(--muted); }
+.agent-empty h3 { color: var(--text); margin: 8px 0; }
+.agent-msg { padding: 8px 12px; border-radius: 10px; max-width: 86%; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+.agent-msg.user { align-self: flex-end; background: #3b2f63; color: #fff; }
+.agent-msg.think { align-self: flex-start; background: var(--panel2); color: var(--text); margin-top: 6px; }
+.agent-msg.think b { color: #c9a7ff; }
+.agent-msg.done { align-self: stretch; max-width: none; background: #10331f; border: 1px solid #2e8b57; }
+.agent-msg.error { align-self: stretch; max-width: none; background: #3a1418; border: 1px solid #a33; }
+.agent-msg.info { align-self: center; color: var(--muted); font-size: 12px; }
+.agent-act { margin-left: 14px; font-size: 12px; border-left: 2px solid var(--line); padding: 2px 8px; }
+.agent-act summary { cursor: pointer; list-style: none; color: var(--text); }
+.agent-act summary::-webkit-details-marker { display: none; }
+.agent-act .lbl { color: var(--muted); }
+.agent-act.ok .st { color: var(--ok); } .agent-act.err .st { color: #ff6b7a; } .agent-act.run .st { color: #ffb020; }
+.agent-act.err { border-left-color: #a33; }
+.agent-act pre { margin: 4px 0; padding: 6px 8px; background: #0f1115; border-radius: 6px; white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: 11px; color: #b9c2d0; }
+.agent-compose { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.agent-input { flex: 1; resize: vertical; min-height: 54px; max-height: 200px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; }
+.agent-send { display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; }
+.agent-status { font-size: 12px; color: var(--muted); margin-right: 6px; }
+.agent-status.busy::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: #a879ff; animation: agentPulse 1s infinite alternate; }
+@keyframes agentPulse { from { opacity: .3; } to { opacity: 1; } }
+.agent-plan { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.agent-plan li { padding: 3px 0; }
+.agent-plan li.done { color: var(--muted); text-decoration: line-through; }
+
+/* OpenNite: solo dos pestañas, con su nombre visible. */
+#tabs button span { display: inline !important; }
+.map-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; margin: 10px 0; }
+.map-list .list-item small { color: var(--muted); margin-left: auto; }
 </style>
 </head>
 <body>
-<canvas id="map-canvas"></canvas>
-<div class="panel">
-  <h2>Editor de mapa <span class="tag">Teselas</span></h2>
-  <small class="hint">Clic izq: aplicar herramienta. Clic der: borrar. Arrastra der/medio: orbitar. Rueda: zoom.</small>
-  <div class="row" style="margin-top:8px">
-    <label class="small toggle"><input type="checkbox" id="finalRender"> Render final</label>
-    <label class="small toggle"><input type="checkbox" id="gridVisibility" checked> Rejilla 3D</label>
-  </div>
-
-  <h3>Modo</h3>
-  <div class="palette" id="modePalette">
-    <button data-mode="tiles" class="active">🧱 Teselas</button>
-    <button data-mode="select">Seleccionar</button>
-    <button data-mode="place">Colocar pieza</button>
-    <button data-mode="water" style="display:none">🌊 Agua/Lago</button>
-    <button data-mode="erase-water" style="display:none">🗑️ Borrar agua</button>
-    <button data-mode="grass" style="display:none">🌿 Césped</button>
-    <button data-mode="path" style="display:none">🪨 Camino</button>
-    <button data-mode="road" style="display:none">🛣️ Carretera</button>
-    <button data-mode="wind">🌬️ Viento</button>
-    <button data-mode="erase">❌ Borrar pieza</button>
-  </div>
-
-  <div id="tileControls" style="display:none">
-    <h3>🧱 Teselas (Easy Game Developer)</h3>
-    <small class="hint" id="tileInfo">Clic/arrastrar: aplicar. Shift+clic: coger tesela.</small>
-    <label class="small">Herramienta</label>
-    <select id="tileTool">
-      <option value="paint">Pintar tesela (tipo + altura)</option>
-      <option value="raise">⬆ Subir</option>
-      <option value="lower">⬇ Bajar</option>
-      <option value="flat">▬ Aplanar a la altura</option>
-      <option value="surface">🖌️ Pintar terreno (solo tipo)</option>
-      <option value="shape">◢ Rampa / bloque</option>
-      <option value="grass">🌿 Hierba</option>
-      <option value="erase">Borrar tesela (hueco)</option>
-    </select>
-    <label class="small">Tipo de terreno</label>
-    <select id="tileSurface">
-      <option value="grass">Césped</option>
-      <option value="dirt">Tierra</option>
-      <option value="sand">Arena</option>
-      <option value="stone">Piedra</option>
-      <option value="brick">Ladrillo</option>
-      <option value="wood">Madera</option>
-      <option value="snow">Nieve</option>
-      <option value="volcanic">Roca volcánica</option>
-      <option value="picon">Picón (lapilli)</option>
-      <option value="blacksand">Arena negra</option>
-      <option value="water">Agua</option>
-      <option value="lava">Lava</option>
-    </select>
-    <label class="small">Altura (pasos de 0,5 m): <strong id="tileLevelLabel">1.0 m</strong></label>
-    <input id="tileLevel" type="number" min="-4" max="40" step="1" value="2">
-    <label class="small">Forma</label>
-    <select id="tileShape">
-      <option value="block">Bloque</option>
-      <option value="ramp">Rampa</option>
-    </select>
-    <label class="small">Rampa sube hacia</label>
-    <select id="tileDir">
-      <option value="auto">Automático (vecina más alta)</option>
-      <option value="0">Norte (+Z)</option>
-      <option value="1">Este (+X)</option>
-      <option value="2">Sur (-Z)</option>
-      <option value="3">Oeste (-X)</option>
-    </select>
-    <label class="small">Subida de la rampa (pasos de 0,5 m)</label>
-    <input id="tileRise" type="number" min="1" max="8" step="1" value="2">
-    <label class="small">Hierba</label>
-    <select id="tileGrass"><option value="0">Sin hierba</option><option value="1">Rala</option><option value="2" selected>Normal</option><option value="3">Densa</option></select>
-    <label class="small">Radio del pincel: <strong id="tileRadiusLabel">0</strong> teselas</label>
-    <input id="tileRadius" type="range" min="0" max="8" step="1" value="0">
-    <button class="ghost" id="clearTilesBtn">🗑️ Reiniciar terreno (llano)</button>
-
-    <h3>Mundo</h3>
-    <label class="small">Estilo</label>
-    <select id="egdStyle"><option value="smooth">Suave (bordes redondeados)</option><option value="blocks">Bloques</option></select>
-    <label class="small">Redondeo: <strong id="egdRoundLabel">0.8 m</strong></label>
-    <input id="egdRound" type="range" min="0" max="3" step="0.1" value="0.8">
-    <label class="small">Fundido de colores: <strong id="egdFadeLabel">1.2 m</strong></label>
-    <input id="egdFade" type="range" min="0" max="4" step="0.1" value="1.2">
-    <label class="small"><input id="egdGrassOn" type="checkbox" checked> Hierba</label>
-    <div class="row">
-      <div><label class="small">Teselas por lado</label><input id="worldSize" type="number" min="8" max="320" step="1" value="48"></div>
-      <div><label class="small">Tesela (m)</label>
-        <select id="worldTile"><option value="1">1</option><option value="2" selected>2</option><option value="4">4</option></select></div>
-    </div>
-    <button class="ghost" id="applyResolutionBtn">Aplicar tamaño (conserva el relieve)</button>
-    <h3>Generar terreno</h3>
-    <div class="row">
-      <div><select id="egdGenKind"><option value="island">Isla</option><option value="hills">Colinas</option><option value="mountains">Montañas</option><option value="canyon">Cañón</option><option value="sanborondon">San Borondón</option><option value="flat">Llano</option></select></div>
-      <div><input id="egdGenSeed" type="number" value="7" step="1"></div>
-    </div>
-    <button class="ghost" id="egdGenerateBtn">Generar (reemplaza el terreno)</button>
-  </div>
-
-  <h3>Abrir mapa del juego</h3>
-  <select id="gameMapSelect" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;"></select>
-  <button class="ghost" id="openGameMapBtn">Abrir</button>
-
-  <h3>Agua y snap de piezas</h3>
-  <label class="small" id="gridSizeLabel">Snap de piezas: <strong>2u (módulo base)</strong></label>
-  <div class="row">
-    <button class="ghost" id="gridSm" title="Grid 2u - módulo base (muro, suelo)">2u</button>
-    <button class="ghost" id="gridMd" title="Grid 4u - módulo carretera">4u</button>
-    <button class="ghost" id="gridLg" title="Grid 8u - módulo edificio">8u</button>
-  </div>
-  <label class="small">Nivel de agua (0 = sin agua)</label>
-  <input id="waterLevelInput" type="number" step="0.5" value="5" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;margin:3px 0;">
-  <div class="row" style="margin:3px 0;">
-    <button class="ghost" id="setWaterLevelBtn" style="margin:0;">Aplicar nivel</button>
-    <button class="ghost" id="tideToggleBtn" style="margin:0;">Activar tides</button>
-  </div>
-  <label class="small" style="display:flex;gap:4px;align-items:center;">Mareas min / max / s</label>
-  <div class="row" style="margin:3px 0;">
-    <input id="tideMin" type="number" step="0.5" value="-4" style="width:32%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:4px 6px;border-radius:6px;box-sizing:border-box;">
-    <input id="tideMax" type="number" step="0.5" value="8" style="width:32%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:4px 6px;border-radius:6px;box-sizing:border-box;">
-    <input id="tideDuration" type="number" step="0.5" value="6" style="width:36%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:4px 6px;border-radius:6px;box-sizing:border-box;">
-  </div>
-
-  <div id="windControls" style="display:none;">
-    <h3>🌬️ Viento</h3>
-    <label class="small">Fuerza del viento</label>
-    <input id="windStrength" type="range" min="0.5" max="15" step="0.5" value="2.5">
-    <label class="small">Radio de influencia (u)</label>
-    <input id="windRadius" type="number" min="5" max="500" step="5" value="40">
-    <label class="small">Nombre</label>
-    <input id="windName" type="text" value="Viento" style="width:100%;background:#0f141b;border:1px solid #27303f;color:#e6e8ee;padding:6px 8px;border-radius:6px;box-sizing:border-box;">
-    <button class="ghost" id="clearWindsBtn" style="margin-top:6px;">🗑️ Borrar todos los vientos</button>
-    <div id="windList" class="small" style="max-height:120px;overflow-y:auto;background:#111522;border:1px solid #2a3145;padding:4px;margin-top:4px;"></div>
-  </div>
-
-  <div id="placeControls">
-    <h3>Paleta piezas</h3>
-    <div class="palette" id="piecePalette">
-      <button data-piece="house" class="active">Casa</button>
-      <button data-piece="cabin">Cabaña</button>
-      <button data-piece="tower">Torre</button>
-      <button data-piece="container">Contenedor</button>
-      <button data-piece="chest">Cofre</button>
-      <button data-piece="weapon_spawn">Spawn Arma+Munición</button>
-      <button data-piece="wall">Muro</button>
-      <button data-piece="wall_door">Pared con puerta</button>
-      <button data-piece="wall_window">Pared con ventana</button>
-      <button data-piece="wall_corner">Esquina</button>
-      <button data-piece="floor">Suelo</button>
-      <button data-piece="roof">Techo</button>
-      <button data-piece="stairs">Escalera</button>
-      <button data-piece="column">Columna</button>
-      <button data-piece="road">Carretera</button>
-      <button data-piece="path">Camino de tierra</button>
-      <button data-piece="tree_round">Árbol</button>
-      <button data-piece="tree_pine">Pino</button>
-      <button data-piece="tree_palm">Palmera</button>
-      <button data-piece="tree_tall">Árbol alto</button>
-      <button data-piece="tree_birch">Abedul</button>
-      <button data-piece="tree_dead">Árbol seco</button>
-      <button data-piece="tree_willow">Sauce</button>
-      <button data-piece="tree_autumn">Árbol otoño</button>
-      <button data-piece="rock">Roca</button>
-      <button data-piece="rock_big">Roca grande</button>
-      <button data-piece="rock_small">Piedras</button>
-    </div>
-    <label class="small">Material (piezas de EGD)</label>
-    <select id="egdMaterial"></select>
-    <label class="small">Rotación</label>
-    <select id="rotSelect">
-      <option value="0">0°</option>
-      <option value="1.5708">90°</option>
-      <option value="3.1416">180°</option>
-      <option value="4.7124">270°</option>
-    </select>
-    <label class="small">Plantas (casa/cabaña)</label>
-    <select id="floorsSelect">
-      <option value="1">1 planta</option>
-      <option value="2">2 plantas</option>
-      <option value="3">3 plantas</option>
-    </select>
-    <div id="objectModelConfig" style="display:none;margin-top:8px;padding-top:8px;border-top:1px solid #2a3145;">
-      <label class="small">Modelos del objeto (<span id="modelConfigType"></span>)</label>
-      <label class="small" style="display:flex;gap:6px;align-items:center;margin:4px 0;"><input type="checkbox" id="modelRandom"> Modelo aleatorio</label>
-      <div id="modelList" class="small" style="max-height:120px;overflow:auto;background:#111522;border:1px solid #2a3145;padding:4px;margin-bottom:4px;"></div>
-      <button id="modelAddBtn" class="mini" type="button">Cargar modelo</button>
-      <button id="modelClearBtn" class="mini" type="button">Quitar seleccionado</button>
-      <div id="modelEditBox" style="display:none;margin-top:6px;padding:6px;border:1px solid #2a3145;background:#101623;">
-        <div class="small" style="margin-bottom:4px;color:#bcd;">Modelo seleccionado</div>
-        <label class="small">Escala</label>
-        <input id="modelScale" type="number" min="0.01" max="50" step="0.01" value="1" style="width:100%">
-        <label class="small">Rotación X°</label>
-        <input id="modelRotX" type="number" min="-360" max="360" step="1" value="0" style="width:100%">
-        <label class="small">Rotación Y°</label>
-        <input id="modelRotY" type="number" min="-360" max="360" step="1" value="0" style="width:100%">
-        <label class="small">Rotación Z°</label>
-        <input id="modelRotZ" type="number" min="-360" max="360" step="1" value="0" style="width:100%">
+  <header id="topbar">
+    <div class="brand"><span class="logo">◆</span><span class="brand-name"> OpenNite · Editor</span></div>
+    <nav id="tabs">
+      <button data-tab="world" title="Map Editor: terreno, caminos y decorado">🗺️<span> Map Editor</span></button>
+      <button data-tab="scene" title="Scene Editor: objetos, viento, cofres y armas">🧊<span> Scene Editor</span></button>
+    </nav>
+    <div class="spacer"></div>
+    <input id="project-name" title="Nombre del mapa">
+    <div class="actions">
+      <button id="btn-undo" class="btn icon" title="Deshacer (Ctrl+Z)">↶</button>
+      <button id="btn-redo" class="btn icon" title="Rehacer (Ctrl+Y)">↷</button>
+      <div class="file-menu">
+        <button id="btn-new" class="btn" title="Mapa nuevo: plano y bajo el nivel del agua">Nuevo</button>
+        <button id="btn-open" class="btn" title="Abrir un mapa del juego o un archivo">Abrir</button>
+        <button id="btn-save" class="btn" title="Guardar en los mapas del juego (Ctrl+S)">Guardar</button>
+        <button id="btn-export" class="btn" title="Descargar el archivo egd-map (.json)">Exportar .json</button>
       </div>
-      <input id="modelFileInput" type="file" accept=".glb,.gltf,.fbx,.obj" multiple style="display:none" />
-      <div class="small" style="margin-top:4px;color:#9aa;">Los modelos se guardan en config/decor-models.json. Si random está activo y hay varios, se varía al colocar. Escala/rotación se aplican al colocar.</div>
+      <button id="btn-menu" class="btn icon mobile-only" title="Archivo">⋯</button>
+      <button id="btn-play" class="btn play" title="Volver al juego">◀ Juego</button>
     </div>
+  </header>
+  <main id="main">
+    <aside id="left-panel" class="panel"></aside>
+    <section id="viewport">
+      <div id="canvas-host"></div>
+      <div id="viewport-overlay"></div>
+      <div id="center-panel" class="hidden"></div>
+    </section>
+    <aside id="right-panel" class="panel"></aside>
+    <div id="drawer-backdrop"></div>
+  </main>
+  <nav id="mobile-bar">
+    <button id="mb-left" class="btn">☰ Herramientas</button>
+    <button id="mb-right" class="btn">⚙ Propiedades</button>
+  </nav>
+  <footer id="statusbar">
+    <span id="status-text">Listo</span>
+    <div class="spacer"></div>
+    <span id="file-text"></span>
+    <button id="btn-console" class="btn small">Consola (<span id="console-count">0</span>)</button>
+  </footer>
+  <div id="console" class="hidden">
+    <div class="console-head">Consola <div class="spacer"></div><button id="console-clear" class="btn small">Limpiar</button><button id="console-close" class="btn small">✕</button></div>
+    <div id="console-body"></div>
   </div>
-
-  <div id="terrainControls" style="display:none">
-    <h3 id="brushTitle">Pincel</h3>
-    <label class="small" id="brushSizeLabel">Tamaño pincel</label>
-    <input id="brushSize" type="range" min="1" max="18" value="4">
-    <label class="small" id="brushDensityLabel" style="display:none">Densidad</label>
-    <input id="brushDensity" type="range" min="1" max="10" step="1" value="5" style="display:none">
-    <div id="terrainOnlyControls">
-      <label class="small">Altura de la superficie del lago (m). Baja antes las teselas para hacer el vaso.</label>
-      <input id="targetHeight" type="number" value="1" step="0.5">
-      <label class="small" id="waterVegLabel">Vegetación submarina (%)</label>
-      <input id="waterVegetation" type="range" min="0" max="100" step="5" value="55">
-    </div>
-  </div>
-
-  <div id="selectControls" style="display:none">
-    <h3>Selección</h3>
-    <small class="hint">Clic: seleccionar. Shift+clic: añadir/quitar. Arrastra en vacío: caja de selección. Supr: borrar. G: mover.</small>
-    <div class="row">
-      <button id="selMoveBtn" class="ghost">Mover (G)</button>
-      <button id="selDeleteBtn" class="ghost">Borrar (Del)</button>
-    </div>
-    <div class="row">
-      <button id="selAllBtn" class="ghost">Todo</button>
-      <button id="selNoneBtn" class="ghost">Nada</button>
-    </div>
-  </div>
-
-  <div class="row" style="margin-top:12px">
-    <button class="primary" id="saveMap">Guardar mapa</button>
-    <button class="ghost" id="loadMap">Cargar mapa</button>
-  </div>
-  <div class="row">
-    <button class="ghost" id="clearMap">Limpiar piezas</button>
-    <button class="ghost" id="clearTerrain">Limpiar teselas y agua</button>
-  </div>
-  <textarea id="mapText" readonly style="height:74px; width:100%; margin-top:6px; background:#0f141b; border:1px solid #27303f; color:#e6e8ee; border-radius:6px; font-size:10px;"></textarea>
-  <small class="hint" id="status">Listo.</small>
-</div>
-<div class="back"><a href="/">← Volver al juego</a></div>
-<div id="marquee"></div>
-<div id="error-overlay"></div>
+  <div id="toast-host"></div>
 <script type="module" src="./map-editor.mjs"></script>
 </body>
 </html>

@@ -26,7 +26,7 @@
     {
       "id": "valle-terrazas",
       "name": "Valle de las Terrazas",
-      "description": "Mapa de prueba con terreno modular cartoon: terrazas con muros de piedra, acantilados de roca facetada, escaleras, empedrado y un pueblo en la meseta.",
+      "description": "Mapa de prueba convertido a teselas de Easy Game Developer (formato egd-map): valle con terrazas, acantilados, caminos y bosque.",
       "file": "valle-terrazas.json",
       "version": 1,
       "size": 200,
@@ -34,7 +34,7 @@
       "theme": "temperate",
       "gradient": "linear-gradient(135deg,#6fc0e0,#67bf45 50%,#cfcbdc)",
       "tags": [
-        "Modular",
+        "EGD",
         "Prueba",
         "Terrazas"
       ],

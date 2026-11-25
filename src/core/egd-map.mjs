@@ -188,7 +188,7 @@ export function egdMapToOpenNite(raw) {
   }
   const on = (file.opennite && typeof file.opennite === 'object') ? file.opennite : {};
   const sea = egdSeaLevel(world);
-  const id = String(on.id || file.id || (world.name || 'egd-map').toLowerCase().normalize('NFD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'egd-map');
+  const id = String(on.id || file.id || (world.name || 'egd-map').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'egd-map');
   return {
     ...on,
     id,

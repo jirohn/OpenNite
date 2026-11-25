@@ -1,2241 +1,535 @@
-window.__mapEditorModule = true;
+/**
+ * OpenNite - Editor de mapas.
+ *
+ * Es el editor de Easy Game Developer (EGD): las pestañas "Map Editor" y
+ * "Scene Editor" son las clases de EGD (editor de Mundo y editor de Escena)
+ * ejecutándose sobre el mismo motor (src/core/egd-engine.mjs). Los mapas se
+ * abren y se guardan en el formato de EGD ("egd-map"), el mismo que lee el juego.
+ *
+ * Lo propio de OpenNite:
+ *  - Scene Editor: solo objetos de la escena, viento, cofres, armas y el spawn
+ *    del modo entrenamiento (en partida se cae del cielo, no hay punto de inicio).
+ *  - Mapa nuevo: plano y por debajo del nivel del agua.
+ *  - Guardar escribe en los mapas del juego (public/maps) y en su índice.
+ */
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { World } from '../src/game/world.js';
-import { Settings } from '../src/core/settings.js';
-import { LootManager } from '../src/game/loot.js';
-import { applyCartoonStyle } from '../src/core/cartoon.mjs';
-import { createWindGizmo } from '../src/game/grass.mjs';
-
 import {
-  GRID_SIZE,
-  FLOOR_HEIGHT,
-  GRID_HEIGHT_STEP,
-  ROAD_CELL_SIZE,
-  snapToGrid,
-  snapHeight,
-  snapFloor,
-  normalizeMapData,
-  serializeMapData,
-  buildRoadNetwork,
-} from '../src/core/map-system.mjs';
-import { modularCellAt } from '../src/core/modular-terrain.mjs';
-import {
-  EGD_TILE_TYPES,
-  EGD_DIRS,
-  EGD_HEIGHT_STEP,
-  EGD_MIN_HEIGHT,
-  EGD_MAX_HEIGHT,
-  egdTile,
-  egdTileIndexAt,
-  egdTileCenter,
-  egdOrigin,
-  egdTileHeightAt,
-  egdMakeTile,
-  egdSetGrass,
-} from '../src/core/egd-terrain.mjs';
-import { egdNewWorld, openNiteToEgdMap, egdSeaLevel } from '../src/core/egd-map.mjs';
-import { egdGenerate, EGD_GENERATORS } from '../src/core/egd-generate.mjs';
-import { EGD_PROPS, EGD_BUILD_PIECES, EGD_BUILD_MATERIALS, EGD_PRESETS } from '../src/core/egd-objects.mjs';
+  EgdWorldEditor, EgdSceneEditor, EgdViewport, egdDispose,
+  egdNewEntity, egdEl, egdModal, egdButton, egdSection, egdHint, egdRow, egdNumber, egdText, egdClear,
+  Hr, M0, Hn, Kt, Ei, bo, qr, ii, S0, _n, gh,
+} from '../src/core/egd-engine.mjs';
+import { isEgdMap, EGD_MAP_FORMAT } from '../src/core/egd-map.mjs';
 
-const gltfLoader = new GLTFLoader();
-const fbxLoader = new FBXLoader();
-const customModelCache = new Map();
-const customModelPending = new Map();
+const $ = (s) => document.querySelector(s);
+const AUTOSAVE_KEY = 'opennite-editor-autosave-v1';
+const MAX_UNDO = 60;
+const WIND_DEFAULTS = { strength: 2.5, radius: 40 };
 
-function cloneCustomModel(src) {
-  const cached = customModelCache.get(src);
-  if (!cached) return null;
-  return cached.clone(true);
-}
-
-async function loadCustomModel(src) {
-  if (!src) return null;
-  if (customModelCache.has(src)) return customModelCache.get(src);
-  if (customModelPending.has(src)) return customModelPending.get(src);
-  const p = (async () => {
-    try {
-      const lower = String(src).toLowerCase();
-      const isFbx = lower.includes('.fbx') || lower.startsWith('data:application/octet-stream') || lower.startsWith('data:model/fbx');
-      let obj = null;
-      if (isFbx) obj = await fbxLoader.loadAsync(src);
-      else {
-        const gltf = await gltfLoader.loadAsync(src);
-        obj = gltf.scene || gltf.scenes?.[0] || null;
-      }
-      if (!obj) { customModelCache.set(src, null); return null; }
-      obj.traverse((o) => {
-        if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
-      });
-      // Normalize to roughly same size/grounding as game defaults: center on XZ, base at Y=0
-      const box = new THREE.Box3().setFromObject(obj);
-      if (!box.isEmpty()) {
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        obj.position.x -= center.x;
-        obj.position.z -= center.z;
-        obj.position.y -= box.min.y;
-        // Wrap in group so scaling is clean
-        const wrap = new THREE.Group();
-        wrap.add(obj);
-        customModelCache.set(src, wrap);
-        return wrap;
-      }
-      const wrap = new THREE.Group();
-      wrap.add(obj);
-      customModelCache.set(src, wrap);
-      return wrap;
-    } catch (e) {
-      console.warn('No se pudo cargar modelo custom en editor', src, e);
-      customModelCache.set(src, null);
-      return null;
-    } finally {
-      customModelPending.delete(src);
-    }
-  })();
-  customModelPending.set(src, p);
-  return p;
-}
-
-async function applyCustomModelToPiece(group, modelSrc, scale = 1, rot = null) {
-  if (!group || !modelSrc) return false;
-  const model = await loadCustomModel(modelSrc);
-  if (!model) return false;
-  // Only apply if group still attached (not deleted/replaced)
-  if (!group.parent) return false;
-  // Clear default procedural children
-  while (group.children.length) {
-    const c = group.children[0];
-    group.remove(c);
-    c.traverse?.((o) => { o.geometry?.dispose?.(); if (o.material) { (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose?.()); } });
-  }
-  const inst = model.clone(true);
-  inst.scale.setScalar(scale || 1);
-  if (rot) {
-    const toRad = (d) => (Number(d) || 0) * Math.PI / 180;
-    inst.rotation.set(toRad(rot.x ?? rot.rotX), toRad(rot.y ?? rot.rotY), toRad(rot.z ?? rot.rotZ));
-  }
-  inst.userData.__customModel = true;
-  group.add(inst);
-  return true;
-}
-
-const natureModelCache = new Map();
-const natureModelPending = new Map();
-const NATURE_BASE = '/models/quaternius/glTF/';
-const NATURE_VARIANTS = {
-  tree_pine: ['Pine_1','Pine_2','Pine_4'],
-  tree_round: ['CommonTree_1','CommonTree_2','CommonTree_3'],
-  tree_palm: ['CoconutPalm_1','CoconutPalm_2','CoconutPalm_3'],
-  tree_tall: ['Pine_1','CommonTree_1','Pine_2'],
-  tree_birch: ['CommonTree_2','CommonTree_1','CommonTree_3'],
-  tree_dead: ['CommonTree_3','CommonTree_1','Pine_4'],
-  tree_willow: ['CommonTree_1','CommonTree_2','CommonTree_3'],
-  tree_autumn: ['CommonTree_1','CommonTree_2','CommonTree_3'],
-  rock: ['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3'],
-  rock_big: ['Rock_Medium_1','Rock_Medium_2','Rock_Medium_3'],
-  rock_small: ['Pebble_Round_1','Pebble_Square_1','Rock_Medium_3'],
-  bush: ['Bush_Common','Bush_Common_Flowers','Fern_1'],
+// Objeto "recogible" de OpenNite: punto de arma + munición (el arma sale al azar).
+const WEAPON_ITEM = {
+  id: 'opennite_weapon',
+  name: 'Arma + munición (aleatoria)',
+  parts: [
+    { shape: 'box', color: '#3d4350', size: [0.9, 0.22, 0.2], pos: [0, 0.05, 0], rot: [0, 0, 0] },
+    { shape: 'box', color: '#2a2e36', size: [0.16, 0.3, 0.14], pos: [-0.22, -0.16, 0], rot: [0, 0, 14] },
+    { shape: 'box', color: '#ffb020', size: [0.22, 0.12, 0.12], pos: [0.18, -0.12, 0], rot: [0, 0, 0], glow: true },
+  ],
+  stats: {},
+  scriptParams: {},
 };
 
-async function loadNatureModel(name) {
-  if (!name) return null;
-  if (natureModelCache.has(name)) return natureModelCache.get(name);
-  if (natureModelPending.has(name)) return natureModelPending.get(name);
-  const p = (async () => {
-    try {
-      const gltf = await gltfLoader.loadAsync(`${NATURE_BASE}${name}.gltf`);
-      gltf.scene.updateMatrixWorld(true);
-      const wrap = new THREE.Group();
-      gltf.scene.traverse((o) => {
-        if (!o.isMesh) return;
-        const geom = o.geometry.clone();
-        geom.applyMatrix4(o.matrixWorld);
-        const m = new THREE.Mesh(geom, o.material);
-        m.castShadow = true; m.receiveShadow = true;
-        wrap.add(m);
-      });
-      natureModelCache.set(name, wrap);
-      return wrap;
-    } catch (e) {
-      natureModelCache.set(name, null);
-      return null;
-    } finally { natureModelPending.delete(name); }
-  })();
-  natureModelPending.set(name, p);
-  return p;
+// Tipos de entidad propios de OpenNite (nombre e icono en listas e inspector).
+qr.wind = { name: 'Viento', icon: '💨' };
+qr.spawn = { name: 'Spawn (entrenamiento)', icon: '⚑' };
+qr.pickup = { name: 'Arma + munición', icon: '✦' };
+
+// ------------------------------------------------------------------ mapa <-> proyecto
+function slug(s) {
+  return String(s || 'mapa').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'mapa';
 }
 
-function pickNatureName(type, x, z) {
-  const pool = NATURE_VARIANTS[type] || (type?.startsWith?.('tree_') ? NATURE_VARIANTS.tree_round : null);
-  if (!pool) return null;
-  return pool[Math.abs(((Math.round(x*10)*73856093) ^ (Math.round(z*10)*19349663)) | 0) % pool.length];
-}
-
-async function applyDefaultNatureModel(group, type, x, z, scale = 1) {
-  if (!group || !type) return false;
-  const name = pickNatureName(type, x, z);
-  if (!name) return false;
-  const model = await loadNatureModel(name);
-  if (!model || !group.parent) return false;
-  // Don't override if a custom model was applied
-  if (group.children.some(c => c.userData?.__customModel)) return false;
-  while (group.children.length) {
-    const c = group.children[0];
-    group.remove(c);
-    c.traverse?.((o) => { o.geometry?.dispose?.(); if (o.material) { (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>m.dispose?.()); } });
-  }
-  const inst = model.clone(true);
-  let s = scale || 1;
-  if (type === 'tree_tall') s *= 1.15;
-  if (type === 'tree_birch') s *= 0.95;
-  if (type === 'tree_dead') s *= 0.95;
-  if (type === 'tree_willow') s *= 1.1;
-  if (type === 'rock_big') s *= 1.8;
-  if (type === 'rock_small') s *= 0.45;
-  if (type === 'bush') s *= 0.9;
-  inst.scale.setScalar(s);
-  group.add(inst);
-  return true;
-}
-
-const canvas = document.querySelector('#map-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setClearColor(0x101a24, 1);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.NoToneMapping;
-renderer.toneMappingExposure = 1;
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.BasicShadowMap;
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x101a24); // fondo visible para no quedar en la pantalla negra.
-const ambientLight = new THREE.AmbientLight(0x404040, 2.2);
-scene.add(ambientLight);
-const editorDirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-editorDirLight.position.set(120, 160, 80);
-scene.add(editorDirLight);
-const camera = new THREE.PerspectiveCamera(60, canvas.clientWidth / canvas.clientHeight, 0.1, 8000);
-camera.position.set(0, 80, 120);
-camera.lookAt(0, 0, 0);
-
-const orbit = new OrbitControls(camera, canvas);
-orbit.target.set(0, 0, 0);
-orbit.enableDamping = true;
-orbit.maxPolarAngle = Math.PI * 0.48;
-orbit.minDistance = 10;
-orbit.maxDistance = 500;
-orbit.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
-orbit.enablePan = true;
-
-const tControls = new TransformControls(camera, canvas);
-tControls.addEventListener('dragging-changed', (e) => {
-  orbit.enabled = !e.value;
-  if (e.value) {
-    // drag start: store offsets
-    tControls.userData.start = selectProxy.position.clone();
-    tControls.userData.offsets = Array.from(selected).map((idx) => {
-      const o = placedGroup.children[idx];
-      return { idx, off: o ? o.position.clone().sub(selectProxy.position) : new THREE.Vector3() };
+/** Proyecto de editor (lo que usan las clases de EGD) a partir de un archivo egd-map. */
+function projectFromMap(raw) {
+  const file = raw.world ? raw : { world: raw, entities: [] };
+  const world = JSON.parse(JSON.stringify(file.world));
+  M0(world);
+  if (file.name) world.name = file.name;
+  const opennite = { ...(file.opennite || {}) };
+  const entities = (file.entities || []).map((e) => { const c = JSON.parse(JSON.stringify(e)); S0(c); return c; });
+  // Los vientos de OpenNite se editan como objetos de la escena.
+  for (const w of opennite.winds || []) {
+    const e = egdNewEntity('wind', {
+      id: w.id || undefined, name: w.name || 'Viento',
+      position: [+w.x || 0, +w.y || 0, +w.z || 0], rotation: [0, ((+w.rot || 0) * 180 / Math.PI), 0],
     });
-  } else {
-    // drag end: sync placed entries
-    syncPlacedFromSelection();
-  }
-});
-tControls.addEventListener('objectChange', () => {
-  const offsets = tControls.userData.offsets;
-  if (!offsets) return;
-  for (const { idx, off } of offsets) {
-    const o = placedGroup.children[idx];
-    if (!o) continue;
-    o.position.copy(selectProxy.position).add(off);
-  }
-  updateSelectionHelpers();
-});
-tControls.setMode('translate');
-tControls.visible = false;
-tControls.enabled = false;
-scene.add(tControls.getHelper());
-
-const settings = new Settings();
-// No bloqueamos el editor en un fetch: el mapa base se muestra inmediatamente
-// con el mapa procedural por defecto; `loadCustomMap()` actualiza datos si existen.
-const mapData = { type: 'island', theme: 'temperate', size: 360, seed: 20261119, waterLevel: 5, pois: [], islandFlat: true, base: 'island' };
-mapData.modelBase = '/models/quaternius/glTF/';
-mapData.propBase = '/models/quaternius/props/glTF/';
-// El editor no crea su propio terreno ni su propia agua: usa el World real.
-const world = new World(scene, mapData, settings);
-world.root.visible = true;
-window.debugWorld = () => ({
-  chunks: world.chunks.size,
-  rootChildren: world.root.children.length,
-  sceneChildren: scene.children.length,
-  camera: camera.position.toArray(),
-  lookAt: camera.getWorldDirection(new THREE.Vector3()).toArray(),
-  canvasSize: [canvas.clientWidth, canvas.clientHeight],
-  webgl2: !!canvas.getContext('webgl2'),
-  status: document.querySelector('#status')?.textContent,
-  worldChunks: Array.from(world.chunks.keys()).slice(0, 5),
-  procedural: world.procedural,
-  mapType: world.map?.type,
-  worldHalf: world.half,
-  worldSize: world.size,
-  terrainStyle: world.terrainStyle,
-  waterLevel: world.waterLevel,
-  waterLevelAuto: world.waterLevelAuto,
-  globalGrid: window.globalGrid ? {
-    visible: window.globalGrid.visible,
-    children: window.globalGrid.children.map(c => ({ name: c.name, type: c.type, count: c.count ?? c.children.length })),
-    position: window.globalGrid.position.toArray(),
-    worldHalf: world.half,
-  } : null,
-});
-window.world = world; window.scene = scene; window.renderer = renderer; window.camera = camera; window.orbit = orbit;
-world.playerState = { speed: 1.2 };
-world.detailDistance = 5000;
-world.renderDistance = 5000;
-const terrainStyleEl = document.querySelector('#terrainStyle');
-world.terrainStyle = terrainStyleEl?.value || world.terrainStyle || 'blocky';
-if (terrainStyleEl) {
-  terrainStyleEl.value = world.terrainStyle;
-  terrainStyleEl.addEventListener('change', () => {
-    world.terrainStyle = terrainStyleEl.value;
-    scheduleRebuild();
-  });
-}
-const GRID_H = GRID_HEIGHT_STEP; // 0.5u - paso vertical de elevación
-const waterLevelInput = document.querySelector('#waterLevelInput');
-const setWaterLevelBtn = document.querySelector('#setWaterLevelBtn');
-const tideToggleBtn = document.querySelector('#tideToggleBtn');
-const tideMinEl = document.querySelector('#tideMin');
-const tideMaxEl = document.querySelector('#tideMax');
-const tideDurationEl = document.querySelector('#tideDuration');
-if (waterLevelInput) {
-  waterLevelInput.value = snapH(world.waterLevel ?? 0);
-  setWaterLevelBtn?.addEventListener('click', () => {
-    world.setWaterLevel(snapH(+waterLevelInput.value || 0));
-    const statusEl = document.querySelector('#status');
-    if (statusEl) statusEl.textContent = `Nivel de agua: ${world.waterLevel.toFixed(2)}`;
-    scheduleRebuild();
-  });
-}
-if (tideToggleBtn) {
-  const updateTideBtn = () => { tideToggleBtn.textContent = world.waterLevelAuto ? 'Pausar tides' : 'Activar tides'; };
-  updateTideBtn();
-  tideToggleBtn.addEventListener('click', () => {
-    const on = !world.waterLevelAuto;
-    world.setWaterLevelAuto(on, {
-      min: snapH(+tideMinEl?.value || 0),
-      max: snapH(+tideMaxEl?.value || 0),
-      duration: Math.max(0.5, +tideDurationEl?.value || 6),
-    });
-    updateTideBtn();
-    const tideStatusEl = document.querySelector('#status');
-    if (tideStatusEl) tideStatusEl.textContent = world.waterLevelAuto ? 'Mareas activas (lerp por rangos)' : 'Mareas pausadas';
-    scheduleRebuild();
-  });
-  ['tideMin','tideMax','tideDuration'].forEach((id) => document.querySelector(`#${id}`)?.addEventListener('change', () => {
-    if (!world.waterLevelAuto) return;
-    world.setWaterLevelAuto(true, { min: snapH(+tideMinEl?.value || 0), max: snapH(+tideMaxEl?.value || 0), duration: Math.max(0.5, +tideDurationEl?.value || 6) });
-    scheduleRebuild();
-  }));
-}
-const loot = new LootManager(scene, world, null);
-// No bloqueamos el editor si el modelo de cofre tarda/falta: el mapa base ya
-// debe verse; el loot puede rellenarse cuando termine en segundo plano.
-loot.load(mapData.propBase || '/models/quaternius/props/glTF/').catch((e) => console.warn('[map-editor] loot load:', e));
-const cartoonCache = new Map();
-
-// Estado del editor: son los mismos mapas que usa el juego (Libro de la Verdad Absoluta).
-const TERRAIN_CELL = GRID_SIZE; // 2.0u - celda modular única para terreno, carreteras y piezas
-const FLOOR_H = FLOOR_HEIGHT; // 2.5u - altura de planta modular
-const heightOverrides = world.heightOverrides;
-const cellSmooth = world.heightSmooths;
-const waterCells = world.waterCells;
-const waterVegCells = world.waterVegCells;
-let baseCustomData = {};
-let placedGroup = new THREE.Group(); // se sustituye por el grupo real de piezas
-scene.add(placedGroup);
-const placed = [];
-
-// ===========================================================================
-// GRID 3D — snap modular al grid de piezas (2u base, 4u carretera, 8u edificio)
-// ===========================================================================
-
-// Tamaño activo del grid de snap: el usuario puede cambiarlo desde los botones 2u/4u/8u.
-let activeGridSize = GRID_SIZE; // 2u por defecto (módulo base)
-
-/** Actualiza el helper visual del grid global según el tamaño elegido. */
-function rebuildGlobalGrid() {
-  if (globalGrid.parent) globalGrid.parent.remove(globalGrid);
-  const totalSize = world.half * 2 + 20;
-  const cells = Math.ceil(totalSize / activeGridSize);
-  globalGrid.geometry?.dispose?.();
-  // Three.js GridHelper: (size, divisions, colorCenter, colorGrid)
-  // Creamos un nuevo helper con el tamaño correcto
-  const newHelper = new THREE.GridHelper(totalSize, cells, 0x00f0ff, activeGridSize === GRID_SIZE ? 0x0a3050 : activeGridSize === ROAD_CELL_SIZE ? 0x0d4020 : 0x3b2200);
-  newHelper.name = 'global-grid';
-  newHelper.material.opacity = 0.65;
-  newHelper.material.transparent = true;
-  newHelper.material.depthWrite = false;
-  newHelper.visible = globalGrid.visible;
-  newHelper.position.y = 0.08; // ligeramente sobre el suelo
-  scene.add(newHelper);
-  Object.assign(globalGrid, newHelper);
-  // Reemplazar la referencia interna
-  _globalGridRef.current = newHelper;
-}
-// Referencia mutable al grid para poder removerlo y recrearlo
-const _globalGridRef = { current: null };
-
-// Grid visual principal del mapa
-const _initialGridSize = world.half * 2 + 20;
-const _initialCells = Math.ceil(_initialGridSize / GRID_SIZE);
-// Grid cubicular visible en todo el mapa: líneas + puntos blancos en cada vértice.
-const globalGrid = new THREE.Group();
-globalGrid.name = 'global-grid';
-const worldGridLine = new THREE.GridHelper(_initialGridSize, Math.max(2, Math.ceil(_initialGridSize / 2)), 0x00f0ff, 0x0a3050);
-worldGridLine.name = 'global-grid-lines';
-worldGridLine.position.y = 0.1;
-globalGrid.add(worldGridLine);
-const worldGridDotsGeo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-const worldGridDotsMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x00ddff, roughness: 0.4, metalness: 0 });
-const worldGridMaxCount = Math.ceil((world.half * 2 + 20) / 2) ** 2;
-const worldGridDots = new THREE.InstancedMesh(worldGridDotsGeo, worldGridDotsMat, worldGridMaxCount);
-worldGridDots.name = 'global-grid-dots';
-worldGridDots.visible = true;
-worldGridDots.frustumCulled = false;
-let worldGridDotsCount = 0;
-const worldGridDotsMatT = new THREE.Matrix4();
-for (let gx = -Math.floor(world.half); gx <= Math.floor(world.half); gx += 2) {
-  for (let gz = -Math.floor(world.half); gz <= Math.floor(world.half); gz += 2) {
-    worldGridDotsMatT.makeTranslation(gx, 0.1, gz);
-    worldGridDots.setMatrixAt(worldGridDotsCount++, worldGridDotsMatT);
-  }
-}
-worldGridDots.count = worldGridDotsCount;
-worldGridDots.instanceMatrix.needsUpdate = true;
-globalGrid.add(worldGridDots);
-// La rejilla antigua de 2u queda oculta: la sustituye la rejilla 3D de teselas.
-globalGrid.visible = false;
-scene.add(globalGrid);
-window.globalGrid = globalGrid;
-_globalGridRef.current = globalGrid;
-
-// Botones de tamaño de grid
-document.querySelector('#gridSm')?.addEventListener('click', () => { activeGridSize = GRID_SIZE; updateGridSizeUI(); });
-document.querySelector('#gridMd')?.addEventListener('click', () => { activeGridSize = ROAD_CELL_SIZE; updateGridSizeUI(); });
-document.querySelector('#gridLg')?.addEventListener('click', () => { activeGridSize = 8.0; updateGridSizeUI(); });
-
-function updateGridSizeUI() {
-  const lbl = document.querySelector('#gridSizeLabel');
-  if (lbl) lbl.innerHTML = `Tamaño celda grid: <strong>${activeGridSize === GRID_SIZE ? '2u (módulo base)' : activeGridSize === ROAD_CELL_SIZE ? '4u (carretera)' : '8u (edificio)'}</strong>`;
-  ['#gridSm','#gridMd','#gridLg'].forEach((s, i) => {
-    document.querySelector(s)?.classList.toggle('active', [GRID_SIZE, ROAD_CELL_SIZE, 8][i] === activeGridSize);
-  });
-}
-updateGridSizeUI();
-
-const gridVisibilityEl = document.querySelector('#gridVisibility');
-gridVisibilityEl?.addEventListener('change', () => { tileGrid.visible = gridVisibilityEl.checked; brushGhostGrid.visible = gridVisibilityEl.checked && mode !== 'select'; });
-
-// Ghost del cursor: una celda de grid resaltada donde caerá la pieza, del tamaño exacto de activeGridSize
-const brushGhostGrid = (() => {
-  const g = new THREE.Group();
-  g.name = 'brush-ghost-grid';
-  g.visible = false;
-  // Contorno del bloque activo
-  const edges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 0.05, 1));
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.9 });
-  const edgesLine = new THREE.LineSegments(edges, lineMat);
-  edgesLine.name = 'ghost-edges';
-  g.add(edgesLine);
-  // Relleno del bloque activo
-  const fillGeo = new THREE.PlaneGeometry(1, 1);
-  fillGeo.rotateX(-Math.PI / 2);
-  const fillMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.09, depthWrite: false });
-  const fill = new THREE.Mesh(fillGeo, fillMat);
-  fill.name = 'ghost-fill';
-  g.add(fill);
-  scene.add(g);
-  return g;
-})();
-
-/** Actualiza el ghost del cursor al tamaño de grid activo. */
-function updateBrushGhost(wx, wz, heightY) {
-  if (mode === 'tiles') {
-    if (!egdWorld) return;
-    const r = tileRadius();
-    const t = egdWorld.tileSize;
-    const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
-    const [cx, cz] = egdTileCenter(egdWorld, ix, iz);
-    brushGhostGrid.position.set(cx, heightY + 0.08, cz);
-    brushGhostGrid.scale.set(t * (2 * r + 1), 1, t * (2 * r + 1));
-    brushGhostGrid.visible = true;
-    return;
-  }
-  const gs = (['place','select'].includes(mode) && (selectedPiece === 'road' || selectedPiece === 'path')) ? ROAD_CELL_SIZE :
-             mode === 'road' || mode === 'path' ? ROAD_CELL_SIZE :
-             mode === 'wind' ? GRID_SIZE : activeGridSize;
-  const sx = snapToGrid(wx, gs);
-  const sz = snapToGrid(wz, gs);
-  brushGhostGrid.position.set(sx, heightY + 0.06, sz);
-  brushGhostGrid.scale.set(gs, 1, gs);
-  brushGhostGrid.visible = !!gridVisibilityEl?.checked && mode !== 'select';
-}
-
-// Brush preview heredado (lo mantenemos para herramientas de terreno)
-const brushRing = new THREE.GridHelper(GRID_SIZE, 2, 0x7fd0ff);
-brushRing.visible = false;
-brushRing.material.transparent = true; brushRing.material.opacity = 0.8;
-scene.add(brushRing);
-
-// Terreno tipo bloque: redondeo de bordes expuestos (porcentaje configurable).
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-function syncWorldRounding() {
-  const pct = clamp(+document.querySelector('#roundPercent')?.value || 50, 0, 100);
-  world.pieceRounding = pct / 100;
-}
-document.querySelector('#roundPercent')?.addEventListener('change', syncWorldRounding);
-document.querySelector('#roundPercent')?.addEventListener('input', syncWorldRounding);
-syncWorldRounding();
-
-function key(gx, gz) { return gx + ',' + gz; }
-function snap(v, g = GRID_SIZE) { return snapToGrid(v, g); }
-
-// La altura que ve el editor es exactamente la del juego.
-function editorHeightAt(x, z) { return world.heightAt(x, z); }
-
-// ===========================================================================
-// SISTEMA DE VIENTOS — objetos de viento colocables en el mapa
-// ===========================================================================
-const winds = []; // Array de { id, type:'wind', x,y,z,rot, strength, radius, name }
-const windGizmos = new Map(); // id -> THREE.Group (gizmo 3D)
-const windGizmoGroup = new THREE.Group();
-windGizmoGroup.name = 'wind-gizmos';
-scene.add(windGizmoGroup);
-
-let selectedWindId = null;
-
-function addWindGizmo(wind, selected = false) {
-  removeWindGizmo(wind.id);
-  const gizmo = createWindGizmo(wind, selected);
-  windGizmos.set(wind.id, gizmo);
-  windGizmoGroup.add(gizmo);
-  return gizmo;
-}
-
-function removeWindGizmo(windId) {
-  const existing = windGizmos.get(windId);
-  if (existing) {
-    windGizmoGroup.remove(existing);
-    existing.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
-    windGizmos.delete(windId);
-  }
-}
-
-function refreshWindGizmos() {
-  for (const w of winds) addWindGizmo(w, w.id === selectedWindId);
-  refreshWindList();
-}
-
-function refreshWindList() {
-  const listEl = document.querySelector('#windList');
-  if (!listEl) return;
-  listEl.innerHTML = '';
-  if (!winds.length) { listEl.innerHTML = '<div style="color:#778;padding:4px;">Sin fuentes de viento</div>'; return; }
-  for (const w of winds) {
-    const row = document.createElement('div');
-    row.style.cssText = 'padding:3px 6px;cursor:pointer;border-bottom:1px solid #1a2235;display:flex;justify-content:space-between;align-items:center;';
-    row.style.background = w.id === selectedWindId ? '#1e3a60' : '';
-    const info = document.createElement('span');
-    info.textContent = `🌬️ ${w.name} (${w.strength}N, r${w.radius}u)`;
-    info.style.flex = '1';
-    info.addEventListener('click', () => { selectedWindId = w.id; refreshWindGizmos(); });
-    const del = document.createElement('button');
-    del.textContent = '🗑️';
-    del.style.cssText = 'background:none;border:none;color:#e55;cursor:pointer;padding:0 4px;font-size:13px;';
-    del.addEventListener('click', (e) => { e.stopPropagation(); removeWind(w.id); });
-    row.append(info, del);
-    listEl.appendChild(row);
-  }
-}
-
-function placeWindAt(wx, wz) {
-  const strength = +document.querySelector('#windStrength')?.value || 2.5;
-  const radius = +document.querySelector('#windRadius')?.value || 40;
-  const name = document.querySelector('#windName')?.value || 'Viento';
-  const y = snapHeight(editorHeightAt(wx, wz), GRID_H);
-  const wind = {
-    id: 'wind_' + Date.now().toString(36),
-    type: 'wind',
-    x: snapToGrid(wx, GRID_SIZE),
-    y,
-    z: snapToGrid(wz, GRID_SIZE),
-    rot: rotY || 0,
-    strength: clamp(strength, 0.2, 20),
-    radius: clamp(radius, 5, 500),
-    name,
-  };
-  winds.push(wind);
-  placed.push({ ...wind });
-  selectedWindId = wind.id;
-  refreshWindGizmos();
-  document.querySelector('#status').textContent = `Viento "${name}" colocado (fuerza ${strength}, radio ${radius}u)`;
-  scheduleRebuild();
-}
-
-function removeWind(windId) {
-  const idx = winds.findIndex(w => w.id === windId);
-  if (idx >= 0) winds.splice(idx, 1);
-  const pidx = placed.findIndex(p => p.id === windId && p.type === 'wind');
-  if (pidx >= 0) placed.splice(pidx, 1);
-  if (selectedWindId === windId) selectedWindId = null;
-  removeWindGizmo(windId);
-  refreshWindList();
-  scheduleRebuild();
-}
-
-document.querySelector('#clearWindsBtn')?.addEventListener('click', () => {
-  winds.length = 0;
-  for (const id of windGizmos.keys()) removeWindGizmo(id);
-  for (let i = placed.length - 1; i >= 0; i--) if (placed[i].type === 'wind') placed.splice(i, 1);
-  selectedWindId = null;
-  refreshWindList();
-  scheduleRebuild();
-  document.querySelector('#status').textContent = 'Todos los vientos eliminados';
-});
-
-// ===========================================================================
-// BORRADOR DE AGUA — clic derecho en modo agua, o botón "Borrar agua"
-// ===========================================================================
-function eraseWaterAt(wx, wz) {
-  const radius = Math.max(1, +document.querySelector('#brushSize')?.value || 4);
-  const cellR = Math.ceil(radius / TERRAIN_CELL) + 1;
-  const cgx = Math.round(wx / TERRAIN_CELL);
-  const cgz = Math.round(wz / TERRAIN_CELL);
-  let erased = 0;
-  for (let dz = -cellR; dz <= cellR; dz++) {
-    for (let dx = -cellR; dx <= cellR; dx++) {
-      const gx = cgx + dx, gz = cgz + dz;
-      const k = key(gx, gz);
-      if (waterCells.has(k)) {
-        waterCells.delete(k);
-        waterVegCells.delete(k);
-        erased++;
-      }
-    }
-  }
-  if (erased > 0) scheduleRebuild();
-  document.querySelector('#status').textContent = `Agua borrada: ${erased} celdas`;
-}
-
-// ===========================================================================
-// TERRENO DE EASY GAME DEVELOPER — el editor edita el mundo egd-map tal cual:
-// mismas teselas, alturas, rampas y estilos que EGD (y que el juego).
-// ===========================================================================
-let egdWorld = null; // { size, tileSize, tiles, style, round, fade, paths, grass?, ... }
-let egdExtra = []; // entidades de EGD que OpenNite no dibuja: se guardan sin tocarlas
-const tileStroke = new Set(); // teselas ya tocadas en el trazo actual (subir/bajar una vez)
-let tileStrokeActive = false;
-const tileVal = (id, d) => document.querySelector(id)?.value ?? d;
-function tileRadius() { return Math.max(0, Math.min(8, Math.round(+tileVal('#tileRadius', 0) || 0))); }
-const tileHeight = () => Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, Math.round(+tileVal('#tileLevel', 2) || 0)));
-
-/** Bloque `egd` del mapa que se manda al World (igual que el archivo guardado). */
-function egdPayload() {
-  return egdWorld ? { world: egdWorld, extraEntities: egdExtra } : undefined;
-}
-
-/** Dirección automática de rampa: hacia la vecina más alta (0 = +Z, 1 = +X, 2 = -Z, 3 = -X). */
-function autoRampDir(ix, iz, h) {
-  const sel = tileVal('#tileDir', 'auto');
-  if (sel !== 'auto') return +sel;
-  let best = 0, bestH = -Infinity;
-  for (let d = 0; d < 4; d++) {
-    const [dx, dz] = EGD_DIRS[d];
-    const n = egdTile(egdWorld, ix + dx, iz + dz);
-    if (n && n.h > bestH && n.h > h) { bestH = n.h; best = d; }
-  }
-  return best;
-}
-
-function pickTileAt(wx, wz) {
-  if (!egdWorld) return;
-  const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
-  const t = egdTile(egdWorld, ix, iz);
-  if (!t) { document.querySelector('#status').textContent = 'No hay tesela ahí'; return; }
-  const set = (id, v) => { const el = document.querySelector(id); if (el) el.value = String(v); };
-  set('#tileLevel', t.h);
-  set('#tileSurface', t.t);
-  set('#tileShape', t.m === 'ramp' ? 'ramp' : 'block');
-  set('#tileDir', t.m === 'ramp' ? (t.d || 0) : 'auto');
-  set('#tileRise', t.r || 2);
-  syncTileLabels();
-  document.querySelector('#status').textContent = `Tesela ${ix},${iz}: ${EGD_TILE_TYPES[t.t]?.name || t.t}, altura ${t.h} (${(t.h * EGD_HEIGHT_STEP).toFixed(1)} m)${t.m === 'ramp' ? ', rampa' : ''}`;
-}
-
-function applyTiles(wx, wz) {
-  if (!egdWorld) return;
-  const tool = tileVal('#tileTool', 'paint');
-  const { ix: cix, iz: ciz } = egdTileIndexAt(egdWorld, wx, wz);
-  const r = tileRadius();
-  const h = tileHeight();
-  const type = tileVal('#tileSurface', 'grass');
-  const shape = tileVal('#tileShape', 'block');
-  const rise = Math.max(1, Math.min(8, Math.round(+tileVal('#tileRise', 2) || 2)));
-  const N = egdWorld.size;
-  let changed = 0;
-  for (let iz = ciz - r; iz <= ciz + r; iz++) {
-    for (let ix = cix - r; ix <= cix + r; ix++) {
-      if (ix < 0 || iz < 0 || ix >= N || iz >= N) continue;
-      const idx = iz * N + ix;
-      const cur = egdWorld.tiles[idx];
-      if ((tool === 'raise' || tool === 'lower') && tileStroke.has(idx)) continue;
-      tileStroke.add(idx);
-      if (tool === 'erase') { if (cur) { egdWorld.tiles[idx] = null; changed++; } continue; }
-      if (tool === 'grass') { egdSetGrass(egdWorld, idx, Math.max(0, Math.min(3, +tileVal('#tileGrass', 2) || 0))); changed++; continue; }
-      if (tool === 'paint') {
-        const t = egdMakeTile(type, h);
-        if (shape === 'ramp' && r === 0) { t.m = 'ramp'; t.r = rise; t.d = autoRampDir(ix, iz, h); }
-        egdWorld.tiles[idx] = t;
-        changed++;
-        continue;
-      }
-      if (tool === 'raise' || tool === 'lower') {
-        const base = cur || egdMakeTile(type, tool === 'raise' ? -1 : 1);
-        egdWorld.tiles[idx] = { ...base, h: Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, base.h + (tool === 'raise' ? 1 : -1))) };
-        changed++;
-        continue;
-      }
-      if (!cur) continue;
-      if (tool === 'flat') cur.h = h;
-      else if (tool === 'surface') cur.t = type;
-      else if (tool === 'shape') {
-        if (shape === 'ramp') { cur.m = 'ramp'; cur.r = rise; cur.d = autoRampDir(ix, iz, cur.h); }
-        else cur.m = 'block';
-      }
-      changed++;
-    }
-  }
-  if (!changed) return;
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Teselas: ${N}×${N} de ${egdWorld.tileSize} m`;
-}
-
-document.querySelector('#clearTilesBtn')?.addEventListener('click', () => {
-  if (!egdWorld) return;
-  egdWorld.tiles = egdWorld.tiles.map(() => egdMakeTile(tileVal('#tileSurface', 'grass'), 0));
-  delete egdWorld.grass;
-  scheduleRebuild();
-  document.querySelector('#status').textContent = 'Terreno reiniciado (llano)';
-});
-
-
-// Abrir cualquier mapa del juego (mismo catálogo que el menú MAPAS).
-(async () => {
-  const sel = document.querySelector('#gameMapSelect');
-  if (!sel) return;
-  try {
-    const res = await fetch('/maps/index.json?t=' + Date.now());
-    const idx = await res.json();
-    const opts = [{ id: 'custom-map', name: 'Mapa personalizado (custom-map)', file: 'custom-map.json' }, ...(idx.maps || [])];
-    for (const m of opts) {
-      const o = document.createElement('option');
-      o.value = m.file || `${m.id}.json`;
-      o.textContent = m.name || m.id;
-      sel.appendChild(o);
-    }
-  } catch (e) { console.warn('[map-editor] index de mapas:', e); }
-  document.querySelector('#openGameMapBtn')?.addEventListener('click', async () => {
-    try {
-      const res = await fetch('/maps/' + sel.value + '?t=' + Date.now());
-      const data = await res.json();
-      if (!data.id) data.id = sel.value.replace(/\.json$/, '');
-      await loadCustomMap(data);
-    } catch (e) {
-      document.querySelector('#status').textContent = 'No se pudo abrir: ' + e.message;
-    }
-  });
-})();
-
-// ---------------------------------------------------------------------------
-// Rejilla 3D de teselas: plano de rejilla que cubre todo el mundo de EGD a la
-// altura activa, contorno de cada tesela sobre su cara superior y columna de
-// guía en la tesela bajo el cursor.
-// ---------------------------------------------------------------------------
-const tileGrid = new THREE.Group();
-tileGrid.name = 'tile-grid-3d';
-scene.add(tileGrid);
-let tileGridPlane = null;
-let tileGridOutlines = null;
-const tileGridColumn = new THREE.LineSegments(
-  new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-  new THREE.LineBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.85, depthTest: false })
-);
-tileGridColumn.renderOrder = 10;
-tileGrid.add(tileGridColumn);
-
-function rebuildTileGridPlane() {
-  if (tileGridPlane) { tileGridPlane.geometry.dispose(); tileGridPlane.material.dispose(); tileGrid.remove(tileGridPlane); tileGridPlane = null; }
-  if (!egdWorld) return;
-  const N = egdWorld.size, ts = egdWorld.tileSize;
-  // Mismo origen que EGD: las líneas caen en los bordes de las teselas.
-  tileGridPlane = new THREE.GridHelper(N * ts, N, 0x4fd2ff, 0x2a6f9a);
-  tileGridPlane.material.transparent = true;
-  tileGridPlane.material.opacity = 0.35;
-  tileGridPlane.material.depthWrite = false;
-  tileGrid.add(tileGridPlane);
-}
-
-function rebuildTileOutlines() {
-  if (tileGridOutlines) { tileGridOutlines.geometry.dispose(); tileGridOutlines.material.dispose(); tileGrid.remove(tileGridOutlines); tileGridOutlines = null; }
-  if (!egdWorld) return;
-  const N = egdWorld.size, ts = egdWorld.tileSize, o = egdOrigin(egdWorld);
-  const pos = [];
-  for (let iz = 0; iz < N; iz++) {
-    for (let ix = 0; ix < N; ix++) {
-      const t = egdWorld.tiles[iz * N + ix];
-      if (!t || !EGD_TILE_TYPES[t.t]) continue;
-      const y = egdTileHeightAt(egdWorld, o + (ix + 0.5) * ts, o + (iz + 0.5) * ts) + 0.04;
-      const x0 = o + ix * ts, x1 = x0 + ts, z0 = o + iz * ts, z1 = z0 + ts;
-      pos.push(x0, y, z0, x1, y, z0, x1, y, z0, x1, y, z1, x1, y, z1, x0, y, z1, x0, y, z1, x0, y, z0);
-    }
-  }
-  if (!pos.length) return;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  tileGridOutlines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x0b2233, transparent: true, opacity: 0.3, depthWrite: false }));
-  tileGrid.add(tileGridOutlines);
-}
-
-/** Coloca el plano de rejilla y la columna guía en la tesela bajo el cursor. */
-function updateTileGridCursor(wx, wz) {
-  if (!egdWorld) { tileGridColumn.visible = false; return; }
-  const ts = egdWorld.tileSize;
-  const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
-  const t = egdTile(egdWorld, ix, iz);
-  const tool = tileVal('#tileTool', 'paint');
-  const h = mode === 'tiles' && (tool === 'paint' || tool === 'flat') ? tileHeight() : (t ? t.h : 0);
-  const topY = h * EGD_HEIGHT_STEP;
-  if (tileGridPlane) tileGridPlane.position.y = topY + 0.03;
-  const bottom = Math.min(-1, topY);
-  const hgt = Math.max(0.05, topY - bottom);
-  const [cx, cz] = egdTileCenter(egdWorld, ix, iz);
-  tileGridColumn.visible = mode === 'tiles';
-  tileGridColumn.scale.set(ts * (2 * tileRadius() + 1), hgt, ts * (2 * tileRadius() + 1));
-  tileGridColumn.position.set(cx, bottom + hgt / 2, cz);
-}
-
-
-// ---------------------------------------------------------------------------
-// Render final: sin él, el agua es un plano plano sin efectos (más rápido y
-// legible para editar). Con él, se ve exactamente como en el juego.
-// ---------------------------------------------------------------------------
-const finalRenderEl = document.querySelector('#finalRender');
-const flatWaterMat = new THREE.MeshBasicMaterial({ color: 0x3aa9d6, transparent: true, opacity: 0.45, depthWrite: false });
-let flatWater = null;
-function applyRenderMode() {
-  const final = !!finalRenderEl?.checked;
-  world.setWaterVisible?.(final);
-  for (const m of [world.waterfallMesh, world.waterfallFoamMesh, world.waterfallParticles, world.seaweedMesh]) if (m) m.visible = final;
-  renderer.shadowMap.enabled = final;
-  if (world.sun) world.sun.castShadow = final;
-  if (flatWater) { flatWater.geometry.dispose(); scene.remove(flatWater); flatWater = null; }
-  if (final) return;
-  // Mar + lagos (celdas de agua) como superficies planas.
-  const geos = [];
-  if (Number.isFinite(world.waterLevel) && world.waterLevel > -20) {
-    const g = new THREE.PlaneGeometry(world.half * 2 + 400, world.half * 2 + 400);
-    g.rotateX(-Math.PI / 2);
-    g.translate(0, world.waterLevel, 0);
-    geos.push(g);
-  }
-  for (const [k, wy] of world.waterCells.entries()) {
-    const [gx, gz] = k.split(',').map(Number);
-    const g = new THREE.PlaneGeometry(TERRAIN_CELL, TERRAIN_CELL);
-    g.rotateX(-Math.PI / 2);
-    g.translate(gx * TERRAIN_CELL, wy, gz * TERRAIN_CELL);
-    geos.push(g);
-  }
-  if (!geos.length) return;
-  const merged = new THREE.BufferGeometry();
-  const arrays = geos.map((g) => g.toNonIndexed().attributes.position.array);
-  const total = arrays.reduce((a, b) => a + b.length, 0);
-  const pos = new Float32Array(total);
-  let o = 0;
-  for (const a of arrays) { pos.set(a, o); o += a.length; }
-  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  for (const g of geos) g.dispose();
-  flatWater = new THREE.Mesh(merged, flatWaterMat);
-  flatWater.renderOrder = 2;
-  scene.add(flatWater);
-}
-finalRenderEl?.addEventListener('change', applyRenderMode);
-
-// ---------------------------------------------------------------------------
-// Ajustes del mundo de EGD: estilo (suave/bloques), redondeo, fundido de
-// colores, hierba, tamaño/resolución y generador (los mismos que en EGD).
-// ---------------------------------------------------------------------------
-function syncTileLabels() {
-  const rr = document.querySelector('#tileRadiusLabel');
-  if (rr) rr.textContent = String(tileRadius());
-  const lv = document.querySelector('#tileLevelLabel');
-  if (lv) lv.textContent = `${(tileHeight() * EGD_HEIGHT_STEP).toFixed(1)} m`;
-  if (!egdWorld) return;
-  const info = document.querySelector('#tileInfo');
-  if (info) info.textContent = `Mundo de ${egdWorld.size}×${egdWorld.size} teselas de ${egdWorld.tileSize} m (${egdWorld.size * egdWorld.tileSize} m). Altura en pasos de 0,5 m. Shift+clic: coger tesela.`;
-  const set = (id, v) => { const el = document.querySelector(id); if (el) { if (el.type === 'checkbox') el.checked = !!v; else el.value = String(v); } };
-  set('#egdStyle', egdWorld.style || 'smooth');
-  set('#egdRound', egdWorld.round ?? 0.8);
-  set('#egdFade', egdWorld.fade ?? 1.2);
-  set('#egdGrassOn', egdWorld.grassOn !== false);
-  set('#worldTile', egdWorld.tileSize);
-  set('#worldSize', egdWorld.size);
-  const rl = document.querySelector('#egdRoundLabel'); if (rl) rl.textContent = `${(+egdWorld.round || 0).toFixed(1)} m`;
-  const fl = document.querySelector('#egdFadeLabel'); if (fl) fl.textContent = `${(+egdWorld.fade || 0).toFixed(1)} m`;
-}
-for (const id of ['#tileRadius', '#tileLevel']) document.querySelector(id)?.addEventListener('input', syncTileLabels);
-document.querySelector('#egdStyle')?.addEventListener('change', (e) => { if (!egdWorld) return; egdWorld.style = e.target.value === 'blocks' ? 'blocks' : 'smooth'; scheduleRebuild(); });
-document.querySelector('#egdRound')?.addEventListener('input', (e) => { if (!egdWorld) return; egdWorld.round = +e.target.value; syncTileLabels(); scheduleRebuild(); });
-document.querySelector('#egdFade')?.addEventListener('input', (e) => { if (!egdWorld) return; egdWorld.fade = +e.target.value; syncTileLabels(); scheduleRebuild(); });
-document.querySelector('#egdGrassOn')?.addEventListener('change', (e) => { if (!egdWorld) return; egdWorld.grassOn = !!e.target.checked; scheduleRebuild(); });
-
-/** Cambia tamaño/resolución conservando el relieve (muestrea el mundo anterior). */
-function resampleEgdWorld(src, size, tileSize) {
-  const dst = egdNewWorld(size, tileSize);
-  for (const k of Object.keys(src)) if (!['size', 'tileSize', 'tiles', 'grass'].includes(k)) dst[k] = src[k];
-  const step = EGD_HEIGHT_STEP;
-  for (let iz = 0; iz < size; iz++) {
-    for (let ix = 0; ix < size; ix++) {
-      const [x, z] = egdTileCenter(dst, ix, iz);
-      const { ix: sx, iz: sz } = egdTileIndexAt(src, x, z);
-      const t = egdTile(src, sx, sz);
-      if (!t) { dst.tiles[iz * size + ix] = egdMakeTile('water', -1); continue; }
-      const copy = { ...t };
-      if (tileSize !== src.tileSize && t.m === 'ramp') {
-        // La rampa se convierte en escalón a la altura real de ese punto.
-        copy.m = 'block';
-        copy.h = Math.round(egdTileHeightAt(src, x, z) / step);
-      }
-      dst.tiles[iz * size + ix] = copy;
-    }
-  }
-  return dst;
-}
-document.querySelector('#applyResolutionBtn')?.addEventListener('click', () => {
-  if (!egdWorld) return;
-  const tileSize = Math.max(1, +tileVal('#worldTile', egdWorld.tileSize) || 2);
-  const size = Math.max(8, Math.min(320, Math.round(+tileVal('#worldSize', egdWorld.size) || 32)));
-  egdWorld = resampleEgdWorld(egdWorld, size, tileSize);
-  rebuildTileGridPlane();
-  scheduleRebuild();
-  syncTileLabels();
-  document.querySelector('#status').textContent = `Mundo: ${size}×${size} teselas de ${tileSize} m`;
-});
-document.querySelector('#egdGenerateBtn')?.addEventListener('click', () => {
-  if (!egdWorld) return;
-  const kind = tileVal('#egdGenKind', 'island');
-  const seed = Math.round(+tileVal('#egdGenSeed', 1) || 1);
-  egdGenerate(egdWorld, kind, seed);
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Terreno generado: ${EGD_GENERATORS[kind] || kind} (semilla ${seed})`;
-});
-
-// ---------------------------------------------------------------------------
-// Importar mapas de OpenNite anteriores (procedurales o de teselas) a egd-map
-// ---------------------------------------------------------------------------
-const MODULAR_TO_EGD = { grass: 'grass', path: 'dirt', cobble: 'stone', sand: 'sand', stone: 'stone', rock: 'stone' };
-function convertToEgd(norm) {
-  const ts = norm.modular ? Math.max(1, Math.round(norm.modular.tile / 2) * 2 || 2) : 2;
-  const size = Math.max(16, Math.min(320, Math.round((norm.size || 360) / ts)));
-  const w = egdNewWorld(size, ts);
-  w.name = norm.name;
-  // El World del editor tiene ahora el terreno del mapa antiguo: se muestrea.
-  world._setEgdWorld(null);
-  world._applyCustomTerrainData(norm);
-  world._hCache = new Map();
-  const wl = Number.isFinite(norm.waterLevel) && norm.waterLevel > -20 ? norm.waterLevel : null;
-  const step = EGD_HEIGHT_STEP;
-  for (let iz = 0; iz < size; iz++) {
-    for (let ix = 0; ix < size; ix++) {
-      const [x, z] = egdTileCenter(w, ix, iz);
-      const y = world.heightAt(x, z);
-      const cell = norm.modular ? modularCellAt(norm.modular, x, z) : null;
-      let t;
-      if (wl !== null && y < wl - 0.2) t = egdMakeTile('water', Math.round((wl + 0.15) / step));
-      else {
-        const h = Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, Math.round(y / step)));
-        let type = cell ? (MODULAR_TO_EGD[cell.surface] || cell.surface) : null;
-        if (!EGD_TILE_TYPES[type]) type = (wl !== null && y < wl + 1.2) ? 'sand' : (h >= 28 ? 'stone' : 'grass');
-        t = egdMakeTile(type, h);
-      }
-      w.tiles[iz * size + ix] = t;
-    }
-  }
-  world._applyCustomTerrainData({});
-  return w;
-}
-
-/** Mundo nuevo: isla generada como en EGD. */
-function makeStarterWorld() {
-  const w = egdNewWorld(48, 2);
-  w.name = 'Mapa nuevo';
-  egdGenerate(w, 'island', 7);
-  return w;
-}
-
-
-let rebuildTimer = null;
-let rebuildChain = Promise.resolve();
-async function rebuildNow() {
-  const result = await world.rebuildCustomMap(buildSavePayload());
-  placedGroup = result.root;
-  refreshLootPreview();
-  applyCartoonStyle(world.root, cartoonCache);
-  applyCartoonStyle(loot.root, cartoonCache);
-  updateSelectionHelpers();
-  refreshWindGizmos();
-  rebuildTileOutlines();
-  applyRenderMode();
-}
-function scheduleRebuild() {
-  clearTimeout(rebuildTimer);
-  rebuildTimer = setTimeout(() => {
-    rebuildChain = rebuildChain.then(rebuildNow).catch((err) => console.error('[map-editor] rebuild:', err));
-  }, 90);
-}
-
-function refreshLootPreview() {
-  if (!loot) return;
-  loot.spawn();
-  // En el editor el loot es parte decorativa del mapa: no caduca.
-  for (const entity of loot.items) entity.life = Infinity;
-}
-
-function repositionPlacedToTerrain() {
-  for (const p of placed) {
-    const ny = editorHeightAt(p.x, p.z);
-    if (Math.abs((p.y || 0) - ny) > 0.001) p.y = ny;
-  }
-}
-
-function rebuildTerrainMesh() {
-  for (const [k, wy] of waterCells.entries()) {
-    const [gx, gz] = k.split(',').map(Number);
-    if (editorHeightAt(gx * TERRAIN_CELL, gz * TERRAIN_CELL) >= wy - 0.01) {
-      waterCells.delete(k);
-      waterVegCells.delete(k);
-    }
-  }
-  repositionPlacedToTerrain();
-  scheduleRebuild();
-}
-
-function setOverride(gx, gz, y) { heightOverrides.set(key(gx, gz), y); }
-function clearOverrides() { heightOverrides.clear(); rebuildTerrainMesh(); }
-
-function snapH(v) { return snapHeight(v, GRID_H); }
-
-function applyBrush(cx, cz, mode) {
-  const radius = +document.querySelector('#brushSize').value || 4;
-  const strength = Math.max(1, Math.round(+document.querySelector('#brushStrength').value || 1));
-  const falloff = document.querySelector('#falloffMode').value || 'smooth';
-  const target = snapH(+document.querySelector('#targetHeight').value);
-  const waterDepth = Math.max(GRID_H, snapH(+document.querySelector('#waterDepth')?.value || 2));
-  const isWater = mode === 'terrain-water' || mode === 'water';
-  const rim = isWater ? 3 : 0;
-  // Minecraft: pintar un bloque (celdas cuadradas), con radio configurable.
-  const br = isWater ? null : Math.max(1, Math.min(8, Math.round(+document.querySelector('#blockRadius')?.value || 1)));
-  const brushCx = Math.round(cx / TERRAIN_CELL) * TERRAIN_CELL;
-  const brushCz = Math.round(cz / TERRAIN_CELL) * TERRAIN_CELL;
-  const cellR = Math.ceil((isWater ? radius : br) + rim) + 1;
-  const cgx = Math.round(brushCx / TERRAIN_CELL);
-  const cgz = Math.round(brushCz / TERRAIN_CELL);
-  for (let dz = -cellR; dz <= cellR; dz++) {
-    for (let dx = -cellR; dx <= cellR; dx++) {
-      const gx = cgx + dx, gz = cgz + dz;
-      const wx = gx * TERRAIN_CELL, wz = gz * TERRAIN_CELL;
-      const d = Math.max(Math.abs(wx - brushCx), Math.abs(wz - brushCz));
-      const cur = editorHeightAt(wx, wz);
-      let ny = cur;
-      if (isWater) {
-        if (d <= radius) {
-          ny = Math.min(cur, snapH(target - waterDepth));
-        } else if (d <= radius + rim) {
-          // raise banks so water doesn't float
-          if (cur < target + GRID_H) ny = Math.max(cur, snapH(target + GRID_H));
-        } else continue;
-      } else {
-        if (d > br) continue;
-        if (mode === 'terrain-up') ny = cur + GRID_H * strength;
-        else if (mode === 'terrain-down') ny = cur - GRID_H * strength;
-        else if (mode === 'terrain-flat') ny = target;
-        else continue;
-      }
-      ny = snapH(Math.max(-20, Math.min(80, ny)));
-      if (ny !== cur) setOverride(gx, gz, ny);
-    }
-  }
-  rebuildTerrainMesh();
-}
-
-// El agua (mar, lagos, cascadas y algas) la genera World con los mismos
-// materiales y shaders que el juego; aquí solo se pide una reconstrucción.
-function rebuildWaterMesh() { scheduleRebuild(); }
-function rebuildWaterMeshes() { scheduleRebuild(); }
-function clearWaterPatches() {
-  waterCells.clear();
-  waterVegCells.clear();
-  scheduleRebuild();
-}
-
-function addWaterPatch(x, z) {
-  // Lagos sobre teselas: se pinta la superficie del agua donde las teselas
-  // quedan por debajo de la altura elegida. El vaso se hace bajando teselas.
-  const radius = Math.max(2, (+document.querySelector('#brushSize').value || 6));
-  const y = snapH(Number.isFinite(+document.querySelector('#targetHeight').value) ? +document.querySelector('#targetHeight').value : (world.waterLevel ?? 0));
-  const veg = clamp((+document.querySelector('#waterVegetation')?.value || 0) / 100, 0, 1);
-  const cellR = Math.ceil(radius / TERRAIN_CELL) + 1;
-  const cgx = Math.round(x / TERRAIN_CELL), cgz = Math.round(z / TERRAIN_CELL);
-  let added = 0;
-  for (let dz = -cellR; dz <= cellR; dz++) for (let dx = -cellR; dx <= cellR; dx++) {
-    const gx = cgx + dx, gz = cgz + dz;
-    const wx = gx * TERRAIN_CELL, wz = gz * TERRAIN_CELL;
-    if (Math.hypot(wx - x, wz - z) > radius) continue;
-    if (editorHeightAt(wx, wz) >= y - 0.05) continue;
-    waterCells.set(key(gx, gz), y);
-    waterVegCells.set(key(gx, gz), veg);
-    added++;
-  }
-  document.querySelector('#status').textContent = added ? `Agua: ${added} celdas a ${y} m` : 'Ahí las teselas están por encima del agua: bájalas primero';
-  // remove/sink decorations inside water
-  for (let i = placed.length - 1; i >= 0; i--) {
-    const p = placed[i];
-    const gx = Math.round(p.x / TERRAIN_CELL), gz = Math.round(p.z / TERRAIN_CELL);
-    const wy = waterCells.get(key(gx, gz));
-    if (wy !== undefined) {
-      const ty = editorHeightAt(p.x, p.z);
-      if (ty < wy - 0.02) {
-        const isRock = /rock|pebble|boulder/i.test(p.type || '');
-        if (isRock) {
-          p.y = ty;
-        } else if (/tree|grass|bush|fern|flower|plant|shrub/i.test(p.type || '')) {
-          placed.splice(i, 1);
-        }
-      }
-    }
-  }
-  rebuildTerrainMesh();
-  rebuildWaterMesh();
-}
-
-// --------------- Pieces ---------------
-let selectedPiece = 'house';
-let rotY = 0;
-let mode = 'tiles';
-let painting = false;
-let lastPaintAt = 0;
-
-// Selection
-const selected = new Set(); // indices in placed/placedGroup
-const selectionHelpers = new THREE.Group();
-scene.add(selectionHelpers);
-const selectProxy = new THREE.Group();
-scene.add(selectProxy);
-let marquee = { active: false, startX: 0, startY: 0, moved: false };
-const marqueeEl = document.querySelector('#marquee');
-let moveMode = false;
-
-const DECOR_MODEL_TYPES = new Set(['tree_round','tree_pine','tree_palm','tree_tall','tree_birch','tree_dead','tree_willow','tree_autumn','rock','rock_big','rock_small','grass']);
-let decorModelConfig = {};
-const modelConfigEl = document.querySelector('#objectModelConfig');
-const modelConfigTypeEl = document.querySelector('#modelConfigType');
-const modelRandomEl = document.querySelector('#modelRandom');
-const modelListEl = document.querySelector('#modelList');
-const modelAddBtn = document.querySelector('#modelAddBtn');
-const modelClearBtn = document.querySelector('#modelClearBtn');
-const modelFileInput = document.querySelector('#modelFileInput');
-const modelEditBox = document.querySelector('#modelEditBox');
-const modelScaleEl = document.querySelector('#modelScale');
-const modelRotXEl = document.querySelector('#modelRotX');
-const modelRotYEl = document.querySelector('#modelRotY');
-const modelRotZEl = document.querySelector('#modelRotZ');
-
-function getDecorConfig(type) {
-  if (!decorModelConfig[type]) decorModelConfig[type] = { random: true, models: [] };
-  return decorModelConfig[type];
-}
-function isDecorType(type) {
-  if (!type) return false;
-  if (type.startsWith('egd:') || type === 'egd_object') return false;
-  const structures = new Set(['house','cabin','tower','container','wall','wall_corner','column','wall_door','wall_window','floor','roof','stairs','road','path','chest','weapon_spawn','spawn','loot_spawn']);
-  if (structures.has(type)) return false;
-  return DECOR_MODEL_TYPES.has(type) || /^(tree_|rock|grass|bush|plant|flower|prop|crate|barrel|lamp|bench|fence|debris|rubble)/.test(type) || true;
-}
-async function loadDecorModelConfig() {
-  try {
-    const r = await fetch('/config/decor-models.json', { cache: 'no-store' });
-    if (r.ok) { const d = await r.json(); if (d && typeof d === 'object') decorModelConfig = d; }
-  } catch {}
-  updateObjectModelUI();
-}
-async function saveDecorModelConfig() {
-  try {
-    const payload = JSON.stringify(decorModelConfig, null, 2);
-    await window.opennite?.app?.writeFile?.('config/decor-models.json', payload);
-  } catch (e) { console.warn('No se pudo guardar decor-models.json', e); }
-}
-function selectedModelEntry() {
-  const cfg = getDecorConfig(selectedPiece);
-  const idx = parseInt(modelListEl?.dataset?.selected ?? '-1', 10);
-  if (idx >= 0 && idx < (cfg.models || []).length) return { cfg, idx, m: cfg.models[idx] };
-  return null;
-}
-function syncModelEditBox() {
-  const sel = selectedModelEntry();
-  if (!modelEditBox) return;
-  if (!sel) { modelEditBox.style.display = 'none'; return; }
-  modelEditBox.style.display = '';
-  if (modelScaleEl) modelScaleEl.value = String(sel.m.scale ?? 1);
-  if (modelRotXEl) modelRotXEl.value = String(sel.m.rotX ?? 0);
-  if (modelRotYEl) modelRotYEl.value = String(sel.m.rotY ?? 0);
-  if (modelRotZEl) modelRotZEl.value = String(sel.m.rotZ ?? 0);
-}
-function updateObjectModelUI() {
-  const show = isDecorType(selectedPiece) && mode === 'place';
-  if (modelConfigEl) modelConfigEl.style.display = show ? '' : 'none';
-  if (!show) return;
-  const cfg = getDecorConfig(selectedPiece);
-  if (modelConfigTypeEl) modelConfigTypeEl.textContent = selectedPiece;
-  if (modelRandomEl) modelRandomEl.checked = !!cfg.random;
-  if (modelListEl) {
-    const prevSel = parseInt(modelListEl.dataset?.selected ?? '-1', 10);
-    modelListEl.innerHTML = '';
-    (cfg.models || []).forEach((m, i) => {
-      const row = document.createElement('div');
-      row.style.cssText = 'padding:2px 4px;cursor:pointer;border-bottom:1px solid #222;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-      const extra = (m.scale && m.scale !== 1) || m.rotX || m.rotY || m.rotZ ? ` [s:${m.scale ?? 1} r:${m.rotX||0},${m.rotY||0},${m.rotZ||0}]` : '';
-      row.textContent = (m.name || m.src || `Modelo ${i+1}`) + extra;
-      row.dataset.idx = String(i);
-      row.addEventListener('click', () => {
-        modelListEl.querySelectorAll('div').forEach(d => d.style.background = '');
-        row.style.background = '#2a3555';
-        modelListEl.dataset.selected = String(i);
-        syncModelEditBox();
-      });
-      modelListEl.appendChild(row);
-    });
-    if (!(cfg.models || []).length) {
-      modelListEl.innerHTML = '<div style="color:#778">Sin modelos personalizados (usa default)</div>';
-      modelListEl.dataset.selected = '-1';
-    } else if (prevSel >= 0 && prevSel < cfg.models.length) {
-      modelListEl.dataset.selected = String(prevSel);
-      const row = modelListEl.querySelector(`div[data-idx="${prevSel}"]`);
-      if (row) row.style.background = '#2a3555';
-    } else {
-      modelListEl.dataset.selected = '-1';
-    }
-  }
-  syncModelEditBox();
-}
-modelRandomEl?.addEventListener('change', async () => { getDecorConfig(selectedPiece).random = !!modelRandomEl.checked; await saveDecorModelConfig(); });
-modelAddBtn?.addEventListener('click', () => modelFileInput?.click());
-modelClearBtn?.addEventListener('click', async () => {
-  const cfg = getDecorConfig(selectedPiece);
-  const idx = parseInt(modelListEl?.dataset?.selected ?? '-1', 10);
-  if (idx >= 0 && idx < cfg.models.length) { cfg.models.splice(idx, 1); modelListEl.dataset.selected = '-1'; updateObjectModelUI(); await saveDecorModelConfig(); }
-});
-async function onModelEditChange() {
-  const sel = selectedModelEntry();
-  if (!sel) return;
-  sel.m.scale = Math.max(0.01, parseFloat(modelScaleEl?.value || '1') || 1);
-  sel.m.rotX = parseFloat(modelRotXEl?.value || '0') || 0;
-  sel.m.rotY = parseFloat(modelRotYEl?.value || '0') || 0;
-  sel.m.rotZ = parseFloat(modelRotZEl?.value || '0') || 0;
-  updateObjectModelUI();
-  await saveDecorModelConfig();
-}
-modelScaleEl?.addEventListener('change', onModelEditChange);
-modelRotXEl?.addEventListener('change', onModelEditChange);
-modelRotYEl?.addEventListener('change', onModelEditChange);
-modelRotZEl?.addEventListener('change', onModelEditChange);
-modelFileInput?.addEventListener('change', async (e) => {
-  const files = [...(e.target.files || [])];
-  if (!files.length) return;
-  const cfg = getDecorConfig(selectedPiece);
-  for (const f of files) {
-    const dataUrl = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(f); });
-    cfg.models.push({ name: f.name, src: dataUrl });
-  }
-  e.target.value = '';
-  updateObjectModelUI();
-  await saveDecorModelConfig();
-});
-
-// Paleta de Easy Game Developer: sus decorados, piezas modulares y conjuntos.
-// Las piezas de OpenNite que EGD no conoce se ocultan (cofres y armas siguen).
-(() => {
-  const pal = document.querySelector('#piecePalette');
-  if (!pal) return;
-  for (const b of pal.querySelectorAll('button')) {
-    b.classList.remove('active');
-    if (!['chest', 'weapon_spawn'].includes(b.dataset.piece)) b.style.display = 'none';
-  }
-  const add = (piece, label) => {
-    const b = document.createElement('button');
-    b.dataset.piece = piece;
-    b.textContent = label;
-    pal.appendChild(b);
-    return b;
-  };
-  const first = add('egd:preset:house', EGD_PRESETS.house.name);
-  first.classList.add('active');
-  add('egd:preset:house2', EGD_PRESETS.house2.name);
-  add('egd:preset:tower', EGD_PRESETS.tower.name);
-  for (const [k, v] of Object.entries(EGD_BUILD_PIECES)) add('egd:build:' + k, v.name);
-  for (const [k, v] of Object.entries(EGD_PROPS)) if (k !== 'chest') add('egd:prop:' + k, v.name);
-  selectedPiece = 'egd:preset:house';
-  const mat = document.querySelector('#egdMaterial');
-  if (mat) for (const [k, v] of Object.entries(EGD_BUILD_MATERIALS)) {
-    const o = document.createElement('option'); o.value = k; o.textContent = v.name; mat.appendChild(o);
-  }
-  if (mat) mat.value = 'plaster';
-})();
-const palette = document.querySelectorAll('#piecePalette button');
-palette.forEach(b => b.addEventListener('click', () => {
-  palette.forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  selectedPiece = b.dataset.piece;
-  syncBrushUI();
-  updateObjectModelUI();
-}));
-document.querySelector('#rotSelect').addEventListener('change', (e) => { rotY = parseFloat(e.target.value); });
-
-function isDecorBrushMode() {
-  return mode === 'grass' || (mode === 'place' && isDecorType(selectedPiece));
-}
-function syncBrushUI() {
-  const isWind = mode === 'wind';
-  const terrain = mode.startsWith('terrain') || mode === 'water' || mode === 'erase-water' || mode === 'pick-height' || mode === 'grass';
-  const decorBrush = isDecorBrushMode();
-  const showBrush = terrain || decorBrush;
-  document.querySelector('#terrainControls').style.display = showBrush ? '' : 'none';
-  document.querySelector('#terrainOnlyControls').style.display = (terrain && !decorBrush && mode !== 'erase-water') ? '' : 'none';
-  const densLabel = document.querySelector('#brushDensityLabel');
-  const dens = document.querySelector('#brushDensity');
-  if (densLabel) densLabel.style.display = decorBrush ? '' : 'none';
-  if (dens) dens.style.display = decorBrush ? '' : 'none';
-  const title = document.querySelector('#brushTitle');
-  if (title) title.textContent = decorBrush ? 'Pincel decoración' : (isWind ? 'Viento' : 'Terreno');
-  brushRing.visible = showBrush;
-  // Viento: mostrar panel de configuración de viento
-  const windCtl = document.querySelector('#windControls');
-  if (windCtl) windCtl.style.display = isWind ? '' : 'none';
-  const tileCtl = document.querySelector('#tileControls');
-  if (tileCtl) tileCtl.style.display = mode === 'tiles' ? '' : 'none';
-}
-const modeButtons = document.querySelectorAll('#modePalette button');
-modeButtons.forEach(b => b.addEventListener('click', () => {
-  modeButtons.forEach(x => x.classList.remove('active'));
-  b.classList.add('active');
-  mode = b.dataset.mode;
-  const place = mode === 'place';
-  const select = mode === 'select';
-  document.querySelector('#placeControls').style.display = place ? '' : 'none';
-  const selCtl = document.querySelector('#selectControls');
-  if (selCtl) selCtl.style.display = select ? '' : 'none';
-  if (!select) { moveMode = false; syncSelectionControls(); }
-  syncBrushUI();
-  updateObjectModelUI();
-  document.querySelector('#status').textContent = `Modo: ${b.textContent.trim()}`;
-}));
-
-function addM(parent, geo, mat, px, py, pz, rx=0, ry=0, rz=0) {
-  const m = new THREE.Mesh(geo, mat);
-  m.position.set(px, py, pz);
-  m.rotation.set(rx, ry, rz);
-  m.castShadow = true; m.receiveShadow = true;
-  parent.add(m);
-  return m;
-}
-
-const KIT = { module: 2, wallH: 3.24, slab: 0.1, floorH: 3.34 };
-
-function buildHouseVisual(g, floors = 1) {
-  floors = Math.max(1, Math.min(3, Math.round(floors || 1)));
-  const W = 8, D = 6;
-  const matWall = new THREE.MeshStandardMaterial({ color: 0xe8dcc6, roughness: 0.85 });
-  const matWall2 = new THREE.MeshStandardMaterial({ color: 0xd8ccb3, roughness: 0.85 });
-  const matFloor = new THREE.MeshStandardMaterial({ color: 0x9a8a70, roughness: 0.9 });
-  const matRoof = new THREE.MeshStandardMaterial({ color: 0x5b7fa6, roughness: 0.8 });
-  const matWood = new THREE.MeshStandardMaterial({ color: 0x7b5738, roughness: 0.8 });
-  const matGlass = new THREE.MeshStandardMaterial({ color: 0xbfe5ff, roughness: 0.1, transparent: true, opacity: 0.28, side: THREE.DoubleSide });
-  addM(g, new THREE.BoxGeometry(W + 0.4, 0.4, D + 0.4), matWall2, 0, -0.2, 0);
-  addM(g, new THREE.BoxGeometry(W, KIT.slab, D), matFloor, 0, KIT.slab / 2, 0);
-  const addWallSeg = (cx, cz, len, dir, yBase, mat, isDoor = false, isWindow = false) => {
-    const thick = 0.12;
-    const w = dir === 'x' ? len : thick;
-    const d = dir === 'z' ? len : thick;
-    if (isDoor) {
-      const doorW = 1.2, doorH = 2.5;
-      const side = (len - doorW) / 2;
-      if (dir === 'x') {
-        addM(g, new THREE.BoxGeometry(side, KIT.wallH, thick), mat, cx - doorW / 2 - side / 2, yBase + KIT.wallH / 2, cz);
-        addM(g, new THREE.BoxGeometry(side, KIT.wallH, thick), mat, cx + doorW / 2 + side / 2, yBase + KIT.wallH / 2, cz);
-        addM(g, new THREE.BoxGeometry(doorW, KIT.wallH - doorH, thick), mat, cx, yBase + doorH + (KIT.wallH - doorH) / 2, cz);
-      } else {
-        addM(g, new THREE.BoxGeometry(thick, KIT.wallH, side), mat, cx, yBase + KIT.wallH / 2, cz - doorW / 2 - side / 2);
-        addM(g, new THREE.BoxGeometry(thick, KIT.wallH, side), mat, cx, yBase + KIT.wallH / 2, cz + doorW / 2 + side / 2);
-        addM(g, new THREE.BoxGeometry(thick, KIT.wallH - doorH, doorW), mat, cx, yBase + doorH + (KIT.wallH - doorH) / 2, cz);
-      }
-      return;
-    }
-    addM(g, new THREE.BoxGeometry(w, KIT.wallH, d), mat, cx, yBase + KIT.wallH / 2, cz);
-    if (isWindow) {
-      const ww = 1.0, wh = 1.1;
-      if (dir === 'x') addM(g, new THREE.BoxGeometry(ww, wh, 0.06), matGlass, cx, yBase + 1.8, cz);
-      else addM(g, new THREE.BoxGeometry(0.06, wh, ww), matGlass, cx, yBase + 1.8, cz);
-    }
-  };
-  for (let f = 0; f < floors; f++) {
-    const by = f * KIT.floorH + KIT.slab;
-    addWallSeg(-3, 3, 2, 'x', by, matWall, false, true);
-    addWallSeg(-1, 3, 2, 'x', by, matWall, false, true);
-    addWallSeg(1, 3, 2, 'x', by, matWall, false, true);
-    addWallSeg(3, 3, 2, 'x', by, matWall, false, true);
-    if (f === 0) {
-      addWallSeg(-3, -3, 2, 'x', by, matWall, false, true);
-      addWallSeg(-1, -3, 2, 'x', by, matWall, true, false);
-      addWallSeg(1, -3, 2, 'x', by, matWall, false, false);
-      addWallSeg(3, -3, 2, 'x', by, matWall, false, true);
-    } else {
-      for (const sx of [-3,-1,1,3]) addWallSeg(sx, -3, 2, 'x', by, matWall, false, true);
-    }
-    for (const sz of [-2,0,2]) { addWallSeg(-4, sz, 2, 'z', by, matWall2, false, sz!==0); addWallSeg(4, sz, 2, 'z', by, matWall2, false, sz!==0); }
-    const topY = by + KIT.wallH;
-    addM(g, new THREE.BoxGeometry(W, KIT.slab, D), f < floors - 1 ? matFloor : matRoof, 0, topY + KIT.slab / 2, 0);
-  }
-  if (floors >= 2) addM(g, new THREE.BoxGeometry(1.2, 2.6, 4), matWood, 3, KIT.slab + 1.3, 0);
-}
-
-function buildCabinVisual(g, floors = 1) {
-  floors = Math.max(1, Math.min(3, Math.round(floors || 1)));
-  const W = 4, D = 4;
-  const matWall = new THREE.MeshStandardMaterial({ color: 0xc2a06a, roughness: 0.85 });
-  const matDark = new THREE.MeshStandardMaterial({ color: 0x8a6336, roughness: 0.9 });
-  const matRoof = new THREE.MeshStandardMaterial({ color: 0x7a4a2a, roughness: 0.85 });
-  const matGlass = new THREE.MeshStandardMaterial({ color: 0xbfe5ff, roughness: 0.1, transparent: true, opacity: 0.28, side: THREE.DoubleSide });
-  addM(g, new THREE.BoxGeometry(W + 0.4, 0.3, D + 0.4), matDark, 0, -0.15, 0);
-  addM(g, new THREE.BoxGeometry(W, KIT.slab, D), matDark, 0, KIT.slab / 2, 0);
-  for (let f = 0; f < floors; f++) {
-    const by = f * KIT.floorH + KIT.slab;
-    for (const sx of [-1,1]) { addM(g, new THREE.BoxGeometry(2, KIT.wallH, 0.12), matWall, sx, by + KIT.wallH / 2, -2); addM(g, new THREE.BoxGeometry(2, KIT.wallH, 0.12), matWall, sx, by + KIT.wallH / 2, 2); }
-    for (const sz of [-1,1]) { addM(g, new THREE.BoxGeometry(0.12, KIT.wallH, 2), matWall, -2, by + KIT.wallH / 2, sz); addM(g, new THREE.BoxGeometry(0.12, KIT.wallH, 2), matWall, 2, by + KIT.wallH / 2, sz); }
-    addM(g, new THREE.BoxGeometry(0.9, 1.9, 0.06), new THREE.MeshStandardMaterial({ color: 0x5c3d22 }), 1, by + 0.95, -2.02);
-    addM(g, new THREE.BoxGeometry(0.7, 0.7, 0.05), matGlass, -1, by + 1.4, -2.02);
-    addM(g, new THREE.BoxGeometry(0.7, 0.7, 0.05), matGlass, -1, by + 1.4, 2.02);
-    const topY = by + KIT.wallH;
-    addM(g, new THREE.BoxGeometry(W, KIT.slab, D), f === floors - 1 ? matRoof : matDark, 0, topY + KIT.slab / 2, 0);
-  }
-}
-
-function makePiece(type, x, z, floors = 1) {
-  const y = editorHeightAt(x, z);
-  const g = new THREE.Group();
-  g.position.set(x, y, z);
-  g.rotation.y = rotY;
-  if (type === 'house') buildHouseVisual(g, floors);
-  else if (type === 'cabin') buildCabinVisual(g, floors);
-  else if (type === 'tower') {
-    const mat = new THREE.MeshStandardMaterial({ color: 0xd4c4a8, roughness: 0.85 });
-    addM(g, new THREE.CylinderGeometry(2.6, 2.8, 2, 8), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, 1, 0);
-    addM(g, new THREE.CylinderGeometry(2, 2.5, 12, 8), mat, 0, 8, 0);
-    addM(g, new THREE.CylinderGeometry(2.6, 2.6, 0.4, 8), new THREE.MeshStandardMaterial({ color: 0x8c4f3c }), 0, 14.2, 0);
-  } else if (type === 'container') {
-    addM(g, new THREE.BoxGeometry(6.2, 0.3, 2.6), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, 0.15, 0);
-    addM(g, new THREE.BoxGeometry(6, 2.4, 2.4), new THREE.MeshStandardMaterial({ color: 0xe2843c, roughness: 0.6, metalness: 0.3 }), 0, 1.5, 0);
-  } else if (type === 'wall' || type === 'wall_door' || type === 'wall_window') {
-    addM(g, new THREE.BoxGeometry(0.12, KIT.wallH, 2), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, KIT.wallH / 2, 0);
-  } else if (type === 'wall_corner') {
-    addM(g, new THREE.BoxGeometry(2, KIT.wallH, 2), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, KIT.wallH / 2, 0);
-  } else if (type === 'floor' || type === 'roof') {
-    addM(g, new THREE.BoxGeometry(2, KIT.slab, 2), new THREE.MeshStandardMaterial({ color: 0x8a7a5e, roughness: 0.9 }), 0, KIT.slab / 2, 0);
-  } else if (type === 'stairs') {
-    addM(g, new THREE.BoxGeometry(2, KIT.floorH, 2), new THREE.MeshStandardMaterial({ color: 0x7b5738, roughness: 0.8 }), 0, KIT.floorH / 2, 0);
-  } else if (type === 'column') {
-    addM(g, new THREE.CylinderGeometry(0.2, 0.2, KIT.wallH, 8), new THREE.MeshStandardMaterial({ color: 0xc2b08a, roughness: 0.85 }), 0, KIT.wallH / 2, 0);
-  } else if (type === 'tree' || type.startsWith('tree_')) {
-    const trunk = new THREE.MeshStandardMaterial({ color: 0x7b5738, roughness: 0.9 });
-    const leaf = new THREE.MeshStandardMaterial({ color: 0x2f6b3e, roughness: 0.9 });
-    if (type === 'tree_pine') {
-      addM(g, new THREE.CylinderGeometry(0.2, 0.3, 3.2, 8), trunk, 0, 1.6, 0);
-      addM(g, new THREE.ConeGeometry(1.8, 3.2, 8), new THREE.MeshStandardMaterial({ color: 0x245a32, roughness: 0.9 }), 0, 3.8, 0);
-      addM(g, new THREE.ConeGeometry(1.4, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0x2f6b3e, roughness: 0.9 }), 0, 5.2, 0);
-    } else if (type === 'tree_palm') {
-      addM(g, new THREE.CylinderGeometry(0.18, 0.28, 4.8, 8), new THREE.MeshStandardMaterial({ color: 0x9b7653, roughness: 0.9 }), 0, 2.4, 0);
-      for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; addM(g, new THREE.BoxGeometry(0.5, 0.08, 2.2), new THREE.MeshStandardMaterial({ color: 0x4f9a45, roughness: 0.9 }), Math.cos(a)*0.8, 5.0, Math.sin(a)*0.8, 0.5, a, 0); }
-    } else if (type === 'tree_tall') {
-      addM(g, new THREE.CylinderGeometry(0.22, 0.35, 5.0, 8), trunk, 0, 2.5, 0);
-      addM(g, new THREE.SphereGeometry(2.2, 8, 8), leaf, 0, 6.2, 0);
-    } else if (type === 'tree_birch') {
-      addM(g, new THREE.CylinderGeometry(0.16, 0.22, 4.2, 8), new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.85 }), 0, 2.1, 0);
-      addM(g, new THREE.SphereGeometry(1.5, 8, 8), new THREE.MeshStandardMaterial({ color: 0x6fa84d, roughness: 0.9 }), 0, 4.6, 0);
-      addM(g, new THREE.SphereGeometry(1.1, 8, 8), new THREE.MeshStandardMaterial({ color: 0x7fb85a, roughness: 0.9 }), 0.5, 5.4, -0.3);
-    } else if (type === 'tree_dead') {
-      addM(g, new THREE.CylinderGeometry(0.14, 0.28, 4.0, 7), new THREE.MeshStandardMaterial({ color: 0x6b5a48, roughness: 0.95 }), 0, 2.0, 0);
-      addM(g, new THREE.CylinderGeometry(0.05, 0.08, 1.4, 6), new THREE.MeshStandardMaterial({ color: 0x6b5a48, roughness: 0.95 }), 0.5, 3.2, 0, 0, 0, 0.7);
-      addM(g, new THREE.CylinderGeometry(0.05, 0.07, 1.2, 6), new THREE.MeshStandardMaterial({ color: 0x6b5a48, roughness: 0.95 }), -0.45, 3.6, 0.2, 0.2, 0, -0.8);
-    } else if (type === 'tree_willow') {
-      addM(g, new THREE.CylinderGeometry(0.26, 0.38, 3.8, 8), trunk, 0, 1.9, 0);
-      addM(g, new THREE.SphereGeometry(2.4, 8, 7, 0, Math.PI * 2, 0, Math.PI * 0.75), new THREE.MeshStandardMaterial({ color: 0x5f8f4a, roughness: 0.95 }), 0, 4.8, 0);
-      addM(g, new THREE.CylinderGeometry(2.1, 2.4, 1.8, 10, 1, true), new THREE.MeshStandardMaterial({ color: 0x4f7f3d, roughness: 1, side: THREE.DoubleSide }), 0, 3.9, 0);
-    } else if (type === 'tree_autumn') {
-      addM(g, new THREE.CylinderGeometry(0.24, 0.34, 3.8, 8), trunk, 0, 1.9, 0);
-      addM(g, new THREE.SphereGeometry(2.1, 8, 8), new THREE.MeshStandardMaterial({ color: 0xc96b2c, roughness: 0.9 }), 0, 5.0, 0);
-      addM(g, new THREE.SphereGeometry(1.4, 8, 8), new THREE.MeshStandardMaterial({ color: 0xd98b2f, roughness: 0.9 }), 0.6, 5.8, -0.3);
-    } else {
-      addM(g, new THREE.CylinderGeometry(0.25, 0.35, 3.6, 8), trunk, 0, 1.8, 0);
-      addM(g, new THREE.SphereGeometry(2.0, 8, 8), leaf, 0, 4.8, 0);
-    }
-  } else if (type === 'rock' || type === 'rock_big' || type === 'rock_small') {
-    if (type === 'rock_big') {
-      addM(g, new THREE.DodecahedronGeometry(2.2, 0), new THREE.MeshStandardMaterial({ color: 0x6f736d, roughness: 0.96 }), 0, 1.2, 0);
-      addM(g, new THREE.DodecahedronGeometry(1.2, 0), new THREE.MeshStandardMaterial({ color: 0x82867f, roughness: 0.96 }), 1.4, 0.7, 0.8);
-    } else if (type === 'rock_small') {
-      const rm = new THREE.MeshStandardMaterial({ color: 0x7b7f78, roughness: 0.96 });
-      addM(g, new THREE.DodecahedronGeometry(0.45, 0), rm, 0, 0.22, 0);
-      addM(g, new THREE.DodecahedronGeometry(0.32, 0), rm, 0.45, 0.16, 0.25);
-      addM(g, new THREE.DodecahedronGeometry(0.28, 0), rm, -0.35, 0.14, 0.3);
-      addM(g, new THREE.DodecahedronGeometry(0.22, 0), rm, 0.1, 0.11, -0.38);
-    } else {
-      addM(g, new THREE.DodecahedronGeometry(1.2), new THREE.MeshStandardMaterial({ color: 0x777b74, roughness: 0.95 }), 0, 0.7, 0);
-    }
-  } else if (type === 'grass') {
-    const gm = new THREE.MeshStandardMaterial({ color: 0x4f8a3e, roughness: 1 });
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2 + Math.random() * 0.4;
-      const r = 0.08 + Math.random() * 0.12;
-      const h = 0.25 + Math.random() * 0.25;
-      addM(g, new THREE.ConeGeometry(r, h, 5), gm, Math.cos(a) * 0.15, h / 2, Math.sin(a) * 0.15, 0, a, 0);
-    }
-  } else if (type === 'chest') {
-    addM(g, new THREE.BoxGeometry(1.25, 0.75, 0.85), new THREE.MeshStandardMaterial({ color: 0xc98a3a, roughness: 0.8, metalness: 0.05 }), 0, 0.42, 0);
-    addM(g, new THREE.BoxGeometry(1.28, 0.08, 0.88), new THREE.MeshStandardMaterial({ color: 0x8a5a1f, roughness: 0.7 }), 0, 0.82, 0);
-    addM(g, new THREE.BoxGeometry(0.18, 0.12, 0.06), new THREE.MeshStandardMaterial({ color: 0xffd36a, roughness: 0.4, metalness: 0.6 }), 0, 0.5, 0.46);
-  } else if (type === 'weapon_spawn') {
-    const base = new THREE.MeshStandardMaterial({ color: 0x2b6cb0, roughness: 0.5, metalness: 0.2, emissive: 0x1a365d, emissiveIntensity: 0.35 });
-    addM(g, new THREE.CylinderGeometry(0.55, 0.65, 0.12, 16), base, 0, 0.06, 0);
-    addM(g, new THREE.BoxGeometry(0.9, 0.18, 0.28), new THREE.MeshStandardMaterial({ color: 0x4a5568, roughness: 0.6, metalness: 0.4 }), 0, 0.35, 0, 0, 0.2, 0);
-    addM(g, new THREE.BoxGeometry(0.35, 0.22, 0.18), new THREE.MeshStandardMaterial({ color: 0x2f855a, roughness: 0.7 }), 0.55, 0.32, 0.22, 0, -0.3, 0);
-    addM(g, new THREE.SphereGeometry(0.12, 10, 10), new THREE.MeshStandardMaterial({ color: 0x63b3ed, emissive: 0x63b3ed, emissiveIntensity: 0.8 }), 0, 0.75, 0);
-  } else if (type === 'road' || type === 'path') {
-    const isRoad = type === 'road';
-    const baseC = isRoad ? 0x44484d : 0x7a6a52;
-    const markC = isRoad ? 0xd8d0b8 : 0x9a8662;
-    addM(g, new THREE.BoxGeometry(4, 0.12, 4), new THREE.MeshStandardMaterial({ color: baseC, roughness: 0.95 }), 0, 0.06, 0);
-    const conn = g.userData.conn || { n:false,s:false,e:false,w:false };
-    const arms = [];
-    if (conn.n) arms.push([0,0,-1]);
-    if (conn.s) arms.push([0,0,1]);
-    if (conn.e) arms.push([1,0,0]);
-    if (conn.w) arms.push([-1,0,0]);
-    if (!arms.length) arms.push([0,0,-1],[0,0,1]);
-    for (const [ax,ay,az] of arms) {
-      const len = 2;
-      const cx2 = ax*1, cz2 = az*1;
-      const w = ax!==0 ? 2 : (isRoad?1.2:1.6);
-      const d = az!==0 ? 2 : (isRoad?1.2:1.6);
-      addM(g, new THREE.BoxGeometry(w, 0.125, d), new THREE.MeshStandardMaterial({ color: baseC, roughness: 0.95 }), cx2, 0.065, cz2);
-      if (isRoad) {
-        if (ax!==0) addM(g, new THREE.BoxGeometry(1.8,0.13,0.14), new THREE.MeshStandardMaterial({color:markC,roughness:0.8}), cx2,0.072,cz2);
-        if (az!==0) addM(g, new THREE.BoxGeometry(0.14,0.13,1.8), new THREE.MeshStandardMaterial({color:markC,roughness:0.8}), cx2,0.072,cz2);
-      }
-    }
-    addM(g, new THREE.CylinderGeometry(isRoad?0.45:0.55, isRoad?0.45:0.55, 0.126, 12), new THREE.MeshStandardMaterial({ color: baseC, roughness: 0.95 }), 0, 0.065, 0);
-  }
-  return g;
-}
-
-function roadKey(x,z){ return Math.round(x/4)+','+Math.round(z/4); }
-function isRoadLike(type){ return type==='road' || type==='path'; }
-function getRoadConn(x,z,type){
-  const g=4, k=roadKey(x,z);
-  const has = (dx,dz)=> placed.some(p=>isRoadLike(p.type) && p.type===type && Math.round(p.x/g)===Math.round(x/g)+dx && Math.round(p.z/g)===Math.round(z/g)+dz);
-  return { n:has(0,-1), s:has(0,1), e:has(1,0), w:has(-1,0) };
-}
-// Las carreteras las reconstruye World con sus modelos reales.
-function rebuildRoadAt() {}
-function refreshRoadNeighbors() { scheduleRebuild(); }
-
-function snapWallPlacement(x, z, type, rot) {
-  const wallTypes = ['wall','wall_door','wall_window'];
-  if (!wallTypes.includes(type)) return { x, z, rot };
-  // snap to grid 2u but also snap to adjacent wall edges
-  let best = { x, z, rot, d: 1.6 };
-  const candidates = [];
-  for (const p of placed) {
-    if (!wallTypes.includes(p.type)) continue;
-    const dx = x - p.x, dz = z - p.z;
-    if (Math.hypot(dx, dz) > 6) continue;
-    // same rotation: snap adjacent along wall length
-    const sameRot = Math.abs(((rot - p.rot) % Math.PI + Math.PI) % Math.PI) < 0.2 || Math.abs(((rot - p.rot) % Math.PI + Math.PI) % Math.PI - Math.PI) < 0.2;
-    if (sameRot) {
-      const k = ((Math.round(rot / (Math.PI / 2)) % 4) + 4) % 4;
-      if (k % 2 === 0) { // runs along Z
-        candidates.push({ x: p.x, z: p.z + 2, rot: p.rot });
-        candidates.push({ x: p.x, z: p.z - 2, rot: p.rot });
-      } else { // runs along X
-        candidates.push({ x: p.x + 2, z: p.z, rot: p.rot });
-        candidates.push({ x: p.x - 2, z: p.z, rot: p.rot });
-      }
-    } else {
-      // corner: snap to end of other wall, rotate perpendicular
-      const pk = ((Math.round(p.rot / (Math.PI / 2)) % 4) + 4) % 4;
-      if (pk % 2 === 0) {
-        candidates.push({ x: p.x + 1, z: p.z + 1, rot: Math.PI / 2 });
-        candidates.push({ x: p.x - 1, z: p.z + 1, rot: Math.PI / 2 });
-        candidates.push({ x: p.x + 1, z: p.z - 1, rot: Math.PI / 2 });
-        candidates.push({ x: p.x - 1, z: p.z - 1, rot: Math.PI / 2 });
-      } else {
-        candidates.push({ x: p.x + 1, z: p.z + 1, rot: 0 });
-        candidates.push({ x: p.x + 1, z: p.z - 1, rot: 0 });
-        candidates.push({ x: p.x - 1, z: p.z + 1, rot: 0 });
-        candidates.push({ x: p.x - 1, z: p.z - 1, rot: 0 });
-      }
-    }
-  }
-  for (const c of candidates) {
-    const d = Math.hypot(x - c.x, z - c.z);
-    if (d < best.d) best = { ...c, d };
-  }
-  return { x: snap(best.x, 1), z: snap(best.z, 1), rot: best.rot };
-}
-
-/** Coloca objetos de EGD con la misma rejilla de construcción que el motor (celdas de 4 m). */
-function placeEgdAt(x, z) {
-  const [, kind, name] = selectedPiece.split(':');
-  const deg = Math.round(((rotY * 180 / Math.PI) % 360 + 360) % 360);
-  const material = tileVal('#egdMaterial', 'plaster');
-  const newEnt = (e) => ({ id: 'ent_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3), scripts: [], props: { health: 0 }, color: '#c8c8c8', scale: [1, 1, 1], ...e });
-  const push = (e) => {
-    const ent = newEnt(e);
-    placed.push({ type: 'egd_object', x: ent.position[0], y: ent.position[1], z: ent.position[2], rot: (ent.rotation?.[1] || 0) * Math.PI / 180, egd: ent });
-  };
-  const cell = (v) => Math.floor(v / 4) * 4 + 2;
-  let n = 0;
-  if (kind === 'preset') {
-    const cx = cell(x), cz = cell(z);
-    const list = EGD_PRESETS[name].build(cx, editorHeightAt(cx, cz), cz, { rot: deg, wall: material, roof: 'tile' });
-    for (const e of list) { push(e); n++; }
-  } else if (kind === 'build') {
-    let px = cell(x), pz = cell(z), rot = deg;
-    if (/^(wall|wallDoor|wallWindow|halfWall)$/.test(name)) {
-      // Muros en el borde de celda más cercano al cursor.
-      const dx = x - px, dz = z - pz;
-      if (Math.abs(dx) > Math.abs(dz)) { px += Math.sign(dx) * 2; rot = 90; } else { pz += Math.sign(dz) * 2; rot = 0; }
-    } else if (name === 'pillar') { px = Math.round(x / 4) * 4; pz = Math.round(z / 4) * 4; }
-    push({ type: 'build', piece: name, material, breakable: true, name: EGD_BUILD_PIECES[name]?.name || name, position: [px, editorHeightAt(px, pz), pz], rotation: [0, rot, 0] });
-    n = 1;
-  } else {
-    const px = Math.round(x * 2) / 2, pz = Math.round(z * 2) / 2;
-    push({ type: 'prop', prop: name, name: EGD_PROPS[name]?.name || name, position: [px, editorHeightAt(px, pz), pz], rotation: [0, deg, 0] });
-    n = 1;
-  }
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Colocado: ${name} (${n} pieza${n > 1 ? 's' : ''})`;
-}
-
-function placePieceAt(x, z) {
-  if (selectedPiece.startsWith('egd:')) return placeEgdAt(x, z);
-  const isRoad = selectedPiece === 'road' || selectedPiece === 'path';
-  const gs = isRoad ? ROAD_CELL_SIZE : GRID_SIZE;
-  const preX = x, preZ = z;
-  x = snapToGrid(x, gs); z = snapToGrid(z, gs);
-  const isWall = ['wall','wall_corner','wall_door','wall_window'].includes(selectedPiece);
-  if (isWall) {
-    const ws = snapWallPlacement(x, z, selectedPiece, rotY);
-    x = ws.x; z = ws.z; rotY = ws.rot;
-    // Muros siempre orientados a 0/90/180/270 según la línea 3D que se tocó.
-    const angle = Math.atan2(preZ - z, preX - x);
-    rotY = Math.round(angle / (Math.PI / 2)) * (Math.PI / 2);
-  }
-  const floors = ((selectedPiece === 'house' || selectedPiece === 'cabin') && document.querySelector('#floorsSelect')) ? parseInt(document.querySelector('#floorsSelect').value, 10) || 1 : 1;
-  rotY = isRoad ? 0 : rotY;
-  const rawY = editorHeightAt(x, z);
-  const y = snapHeight(rawY, GRID_H);
-  const entry = { type: selectedPiece, x, y, z, rot: rotY };
-  if ((selectedPiece === 'house' || selectedPiece === 'cabin') && floors > 1) entry.floors = floors;
-  if (isDecorType(selectedPiece)) {
-    const cfg = getDecorConfig(selectedPiece);
-    const models = cfg.models || [];
-    if (models.length) {
-      const pick = cfg.random ? models[Math.floor(Math.random() * models.length)] : models[0];
-      if (pick?.src) entry.modelSrc = pick.src;
-      if (pick?.name) entry.modelName = pick.name;
-      if (pick?.scale != null) entry.modelScale = +pick.scale || 1;
-      if (pick?.rotX != null) entry.modelRotX = +pick.rotX || 0;
-      if (pick?.rotY != null) entry.modelRotY = +pick.rotY || 0;
-      if (pick?.rotZ != null) entry.modelRotZ = +pick.rotZ || 0;
-    }
-  }
-  const dupIdx = placed.findIndex(p => Math.abs(p.x-x)<0.1 && Math.abs(p.z-z)<0.1 && p.type===selectedPiece);
-  if (dupIdx >= 0) placed.splice(dupIdx,1);
-  placed.push(entry);
-  refreshRoadNeighbors();
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Colocado: ${selectedPiece} (${x.toFixed(1)}, ${z.toFixed(1)})`;
-}
-
-function erasePieceAtRay() {
-  let best = null, bestD = 3;
-  for (const p of placedGroup.children) {
-    const d = raycaster.ray.distanceToPoint(p.position);
-    if (d < bestD) { bestD = d; best = p; }
-  }
-  if (best) {
-    const i = placedGroup.children.indexOf(best);
-    const removed = placed[i];
-    if (i >= 0) placed.splice(i, 1);
-    if (removed && isRoadLike(removed.type)) refreshRoadNeighbors();
-    scheduleRebuild();
-    document.querySelector('#status').textContent = 'Pieza eliminada';
-  }
-}
-
-function clearSelection() {
-  selected.clear();
-  updateSelectionHelpers();
-  syncSelectionControls();
-}
-function updateSelectionHelpers() {
-  while (selectionHelpers.children.length) {
-    const c = selectionHelpers.children[0];
-    selectionHelpers.remove(c);
-    c.geometry?.dispose?.();
-    c.material?.dispose?.();
-  }
-  for (const idx of selected) {
-    const obj = placedGroup.children[idx];
-    if (!obj) continue;
-    const box = new THREE.Box3().setFromObject(obj);
-    if (box.isEmpty()) continue;
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const h = new THREE.BoxHelper(obj, 0x7fd0ff);
-    h.material.depthTest = false;
-    h.material.transparent = true;
-    h.material.opacity = 0.9;
-    selectionHelpers.add(h);
-  }
-  syncProxyToSelection();
-  document.querySelector('#status').textContent = selected.size ? `${selected.size} objeto(s) seleccionados` : 'Sin selección';
-}
-function syncSelectionControls() {
-  const showMove = selected.size > 0 && moveMode;
-  tControls.visible = showMove;
-  tControls.enabled = showMove;
-  if (showMove) tControls.attach(selectProxy);
-  else tControls.detach();
-}
-function syncProxyToSelection() {
-  if (!selected.size) { selectProxy.position.set(0,0,0); syncSelectionControls(); return; }
-  const c = new THREE.Vector3();
-  let n = 0;
-  for (const idx of selected) { const o = placedGroup.children[idx]; if (!o) continue; c.add(o.position); n++; }
-  if (n) c.divideScalar(n);
-  selectProxy.position.copy(c);
-  selectProxy.rotation.set(0,0,0);
-  selectProxy.scale.set(1,1,1);
-  syncSelectionControls();
-}
-function selectByIndex(idx, additive = false) {
-  if (!additive) selected.clear();
-  if (idx >= 0 && idx < placedGroup.children.length) {
-    if (additive && selected.has(idx)) selected.delete(idx);
-    else selected.add(idx);
-  }
-  updateSelectionHelpers();
-}
-function getPieceIndexFromRay() {
-  const hits = raycaster.intersectObjects(placedGroup.children, true);
-  if (!hits.length) return -1;
-  let obj = hits[0].object;
-  while (obj && obj.parent !== placedGroup) obj = obj.parent;
-  if (!obj) return -1;
-  return placedGroup.children.indexOf(obj);
-}
-function syncPlacedFromSelection() {
-  const movedRoads = [];
-  for (const idx of selected) {
-    const o = placedGroup.children[idx];
-    const p = placed[idx];
-    if (!o || !p) continue;
-    const oldX = p.x, oldZ = p.z, oldType = p.type;
-    p.x = o.position.x; p.y = o.position.y; p.z = o.position.z;
-    if (isRoadLike(oldType)) movedRoads.push({ x: oldX, z: oldZ, type: oldType, nx: p.x, nz: p.z });
-  }
-  for (const m of movedRoads) {
-    refreshRoadNeighbors(m.x, m.z, m.type);
-    refreshRoadNeighbors(m.nx, m.nz, m.type);
-  }
-  scheduleRebuild();
-}
-
-function deleteSelected() {
-  if (!selected.size) return;
-  const indices = Array.from(selected).sort((a,b)=>b-a);
-  for (const idx of indices) {
-    const removed = placed[idx];
-    if (idx >= 0) placed.splice(idx,1);
-    if (removed && isRoadLike(removed.type)) refreshRoadNeighbors(removed.x, removed.z, removed.type);
-  }
-  selected.clear();
-  scheduleRebuild();
-  updateSelectionHelpers();
-  document.querySelector('#status').textContent = `Eliminados ${indices.length} objeto(s)`;
-}
-function marqueeSelectRect(x1,y1,x2,y2, additive=false) {
-  if (!additive) selected.clear();
-  const left = Math.min(x1,x2), right = Math.max(x1,x2);
-  const top = Math.min(y1,y2), bottom = Math.max(y1,y2);
-  const rect = canvas.getBoundingClientRect();
-  for (let i=0; i<placedGroup.children.length; i++) {
-    const o = placedGroup.children[i];
-    const p = o.position.clone().project(camera);
-    if (p.z < -1 || p.z > 1) continue;
-    const sx = (p.x * 0.5 + 0.5) * rect.width + rect.left;
-    const sy = (-p.y * 0.5 + 0.5) * rect.height + rect.top;
-    if (sx >= left && sx <= right && sy >= top && sy <= bottom) selected.add(i);
-  }
-  updateSelectionHelpers();
-}
-
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-function getGroundHit(e) {
-  const rect = canvas.getBoundingClientRect();
-  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
-  const hit = world.raycast(raycaster.ray.origin, raycaster.ray.direction, 5000);
-  if (hit?.type === 'terrain') return hit.point;
-  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(world.waterLevel || 0));
-  return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
-}
-
-canvas.addEventListener('pointerdown', (e) => {
-  if (e.button === 2) {
-    // Clic derecho: borrar pieza, o borrar agua si estamos en modo agua/erase-water
-    if (mode === 'water' || mode === 'erase-water') {
-      const hit = getGroundHit(e);
-      if (hit) eraseWaterAt(snapToGrid(hit.x, TERRAIN_CELL), snapToGrid(hit.z, TERRAIN_CELL));
-      return;
-    }
-    if (mode==='place'||mode==='erase'||mode==='path'||mode==='road') erasePieceAtRay();
-    return;
-  }
-  if (e.button !== 0) return;
-  if (tControls.dragging || (moveMode && tControls.axis)) return;
-
-  if (mode === 'select') {
-    // check if clicking an object
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(mouse, camera);
-    const idx = getPieceIndexFromRay();
-    if (idx >= 0) {
-      selectByIndex(idx, e.shiftKey);
-      painting = false;
-      marquee.active = false;
-      return;
-    }
-    // start marquee
-    marquee.active = true;
-    marquee.moved = false;
-    marquee.startX = e.clientX;
-    marquee.startY = e.clientY;
-    marquee.additive = e.shiftKey;
-    if (marqueeEl) { marqueeEl.style.display = 'none'; }
-    return;
-  }
-
-  const hit = getGroundHit(e); if (!hit) return;
-  painting = true;
-  tileStroke.clear();
-  tileStrokeActive = true;
-  applyAt(hit, e.shiftKey);
-});
-canvas.addEventListener('pointermove', (e) => {
-  const hit = getGroundHit(e);
-  if (hit) {
-    const hy = editorHeightAt(hit.x, hit.z);
-    // Brush ring (terreno)
-    brushRing.visible = mode.startsWith('terrain') || mode === 'water' || mode === 'erase-water' || mode === 'grass' || isDecorBrushMode();
-    if (brushRing.visible) {
-      brushRing.position.set(hit.x, hy + 0.15, hit.z);
-      brushRing.scale.setScalar(+document.querySelector('#brushSize').value || 4);
-    }
-    // Ghost grid (snap cel para piezas/viento)
-    updateBrushGhost(hit.x, hit.z, hy);
-    updateTileGridCursor(hit.x, hit.z);
-  } else {
-    brushRing.visible = false;
-    brushGhostGrid.visible = false;
-  }
-
-  if (mode === 'select' && marquee.active) {
-    const dx = e.clientX - marquee.startX;
-    const dy = e.clientY - marquee.startY;
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) marquee.moved = true;
-    if (marquee.moved && marqueeEl) {
-      const left = Math.min(marquee.startX, e.clientX);
-      const top = Math.min(marquee.startY, e.clientY);
-      const w = Math.abs(dx), h = Math.abs(dy);
-      marqueeEl.style.display = 'block';
-      marqueeEl.style.left = left + 'px';
-      marqueeEl.style.top = top + 'px';
-      marqueeEl.style.width = w + 'px';
-      marqueeEl.style.height = h + 'px';
-    }
-    return;
-  }
-
-  if (painting && hit) {
-    const now = performance.now();
-    if (now - lastPaintAt > 40) { lastPaintAt = now; applyAt(hit, e.shiftKey); }
-  }
-});
-window.addEventListener('pointerup', (e) => {
-  if (mode === 'select' && marquee.active) {
-    if (marquee.moved) {
-      marqueeSelectRect(marquee.startX, marquee.startY, e.clientX, e.clientY, marquee.additive);
-    } else if (!marquee.additive) {
-      // click on empty space clears selection
-      clearSelection();
-    }
-    marquee.active = false;
-    if (marqueeEl) marqueeEl.style.display = 'none';
-  }
-  painting = false;
-  // Al soltar, aplica el pincel definitivo (preview sostenido sobre grid).
-  // Solo las teselas terminan el trazo al soltar; colocar piezas ya ocurre al pulsar
-  // (si no, cada clic colocaba la pieza dos veces).
-  const upHit = (mode === 'tiles' && tileStrokeActive) ? getGroundHit(e) : null;
-  if (upHit) applyAt(upHit, e.shiftKey);
-  tileStrokeActive = false;
-});
-
-function placeGrassAt(cx, cz) {
-  const radius = Math.max(1.5, (+document.querySelector('#brushSize').value || 4) * 0.5);
-  const density = Math.max(1, +document.querySelector('#brushDensity')?.value || 5);
-  const count = Math.max(1, Math.round(radius * 0.8 * (density / 5)));
-  for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.random() * radius;
-    const x = snap(cx + Math.cos(a) * r, 1);
-    const z = snap(cz + Math.sin(a) * r, 1);
-    if (placed.some(p => p.type === 'grass' && Math.hypot(p.x - x, p.z - z) < 0.8)) continue;
-    const entry = { type: 'grass', x, y: editorHeightAt(x, z), z, rot: Math.random() * Math.PI * 2, scale: +(0.7 + Math.random() * 0.8).toFixed(2) };
-    placed.push(entry);
-  }
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Césped colocado (${placed.filter(p=>p.type==='grass').length})`;
-}
-
-function placeDecorAt(cx, cz) {
-  const radius = Math.max(1, (+document.querySelector('#brushSize').value || 4));
-  const density = Math.max(1, +document.querySelector('#brushDensity')?.value || 5);
-  const count = Math.max(1, Math.round((radius * radius * 0.12) * (density / 5)));
-  const type = selectedPiece;
-  for (let i = 0; i < count; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const r = Math.sqrt(Math.random()) * radius;
-    const x = snap(cx + Math.cos(a) * r, 1);
-    const z = snap(cz + Math.sin(a) * r, 1);
-    const minDist = type.startsWith('tree') ? 1.8 : (type.startsWith('rock') ? 1.2 : 0.9);
-    if (placed.some(p => p.type === type && Math.hypot(p.x - x, p.z - z) < minDist)) continue;
-    const entry = { type, x, y: editorHeightAt(x, z), z, rot: Math.random() * Math.PI * 2, scale: +(0.75 + Math.random() * 0.7).toFixed(2) };
-    if (isDecorType(type)) {
-      const cfg = getDecorConfig(type);
-      const models = cfg.models || [];
-      if (models.length) {
-        const pick = cfg.random ? models[Math.floor(Math.random() * models.length)] : models[0];
-        if (pick?.src) entry.modelSrc = pick.src;
-        if (pick?.name) entry.modelName = pick.name;
-        if (pick?.scale != null) entry.modelScale = +pick.scale || 1;
-        if (pick?.rotX != null) entry.modelRotX = +pick.rotX || 0;
-        if (pick?.rotY != null) entry.modelRotY = +pick.rotY || 0;
-        if (pick?.rotZ != null) entry.modelRotZ = +pick.rotZ || 0;
-      }
-    }
-    placed.push(entry);
-  }
-  scheduleRebuild();
-  document.querySelector('#status').textContent = `Decoración: ${type} (${placed.filter(p=>p.type===type).length})`;
-}
-
-function applyAt(hit, shift) {
-  if (mode === 'tiles') {
-    if (!tileStrokeActive) return;
-    if (shift) { pickTileAt(hit.x, hit.z); painting = false; tileStrokeActive = false; return; }
-    applyTiles(hit.x, hit.z);
-    return;
-  }
-  if (mode === 'place') {
-    if (isDecorType(selectedPiece)) { placeDecorAt(hit.x, hit.z); }
-    else { placePieceAt(hit.x, hit.z); painting = false; }
-  }
-  else if (mode === 'path' || mode === 'road') { selectedPiece = mode; placePieceAt(hit.x, hit.z); }
-  else if (mode === 'erase') { erasePieceAtRay(); painting = false; }
-  else if (mode === 'water') {
-    addWaterPatch(snap(hit.x, 2), snap(hit.z, 2));
-  }
-  else if (mode === 'erase-water') {
-    eraseWaterAt(snapToGrid(hit.x, TERRAIN_CELL), snapToGrid(hit.z, TERRAIN_CELL));
-  }
-  else if (mode === 'wind') {
-    placeWindAt(snapToGrid(hit.x, GRID_SIZE), snapToGrid(hit.z, GRID_SIZE));
-    painting = false;
-  }
-  else if (mode === 'grass') { placeGrassAt(hit.x, hit.z); }
-  // El terreno antiguo (subir/bajar/aplanar por celdas) ya no existe: solo teselas.
-}
-
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
-async function loadCustomMap(dataOverride = null) {
-  let data = dataOverride || null;
-  if (!data) {
-    for (const url of ['/maps/custom-map.json', './maps/custom-map.json', '/maps/san-borondon.json']) {
-      try { const res = await fetch(url + '?t=' + Date.now()); if (res.ok) { data = await res.json(); break; } } catch {}
-    }
-  }
-  if (!data) {
-    baseCustomData = {};
-    placed.length = 0;
-    selected.clear();
-    egdWorld = makeStarterWorld();
-    egdExtra = [];
-    rebuildTileGridPlane();
-    syncTileLabels();
-    await rebuildNow();
-    document.querySelector('#status').textContent = 'Mundo nuevo: isla de teselas inicial';
-    return;
-  }
-  const norm = normalizeMapData(data);
-  baseCustomData = { ...norm.raw, id: norm.id, name: norm.name, theme: norm.theme, size: norm.size };
-  const globalVeg = norm.waterVegetation;
-  const vegInput = document.querySelector('#waterVegetation');
-  if (vegInput) vegInput.value = Math.round(globalVeg * 100);
-
-  // El editor y el juego se basan en el mismo modelo canónico (Libro de la Verdad Absoluta)
-  placed.length = 0;
-  selected.clear();
-  for (const p of norm.pieces) {
-    placed.push({ ...p });
-  }
-  rotY = 0;
-  document.querySelector('#rotSelect').value = '0';
-
-  heightOverrides.clear();
-  cellSmooth.clear();
-  for (const [k, y] of norm.terrain.heights.entries()) {
-    heightOverrides.set(k, y);
-  }
-  for (const [k, s] of norm.terrain.smooths.entries()) {
-    cellSmooth.set(k, s);
-  }
-
-  waterCells.clear();
-  waterVegCells.clear();
-  for (const [k, w] of norm.waterCells.entries()) {
-    waterCells.set(k, w.y);
-    waterVegCells.set(k, w.veg);
-  }
-
-  // Terreno: el mundo de Easy Game Developer (egd-map). Los mapas anteriores
-  // de OpenNite se importan a ese formato al abrirlos.
-  let converted = false;
-  if (norm.egd) {
-    egdWorld = JSON.parse(JSON.stringify(norm.egd.world));
-    egdExtra = norm.egd.extraEntities || [];
-  } else if (data && (norm.modular || norm.terrain.heights.size || norm.pieces.length || norm.raw?.biome)) {
-    if (Number.isFinite(norm.waterLevel)) world.setWaterLevelNow?.(norm.waterLevel);
-    egdWorld = convertToEgd(norm);
-    egdExtra = [];
-    // Carreteras y caminos de teselas pasan a ser el tipo de la tesela.
-    for (let i = placed.length - 1; i >= 0; i--) {
-      const p = placed[i];
-      if (p.type !== 'road' && p.type !== 'path') continue;
-      const { ix, iz } = egdTileIndexAt(egdWorld, p.x, p.z);
-      const t = egdTile(egdWorld, ix, iz);
-      if (t && !['water', 'lava'].includes(t.t)) t.t = p.type === 'road' ? 'stone' : 'dirt';
-      placed.splice(i, 1);
-    }
-    heightOverrides.clear();
-    cellSmooth.clear();
-    converted = true;
-  } else {
-    egdWorld = makeStarterWorld();
-    egdExtra = [];
-  }
-  waterCells.clear();
-  waterVegCells.clear();
-  rebuildTileGridPlane();
-  syncTileLabels();
-  if (Number.isFinite(norm.waterLevel)) {
-    world.setWaterLevelNow?.(norm.waterLevel);
-    if (waterLevelInput) waterLevelInput.value = snapH(norm.waterLevel);
-  }
-
-  // Cargar vientos del mapa guardado
-  winds.length = 0;
-  for (const id of windGizmos.keys()) removeWindGizmo(id);
-  if (Array.isArray(norm.winds)) {
-    for (const w of norm.winds) {
-      winds.push({ ...w });
-      placed.push({ ...w });
-    }
-  }
-
-  await rebuildNow();
-  refreshWindGizmos();
-  document.querySelector('#status').textContent = converted
-    ? `Mapa anterior importado a egd-map: ${egdWorld.size}×${egdWorld.size} teselas (guárdalo para conservar la conversión)`
-    : `Cargado: ${egdWorld.size}×${egdWorld.size} teselas, ${placed.length} objetos, ${egdExtra.length} entidades solo de EGD`;
-}
-document.querySelector('#waterVegetation')?.addEventListener('change', scheduleRebuild);
-// Arranca en modo Teselas con su panel visible.
-document.querySelector('#modePalette button[data-mode="tiles"]')?.click();
-loadCustomMap();
-loadDecorModelConfig();
-
-function buildSavePayload() {
-  const heights = [];
-  for (const [k, y] of heightOverrides.entries()) {
-    const [gx, gz] = k.split(',').map(Number);
-    heights.push([gx, gz, +y.toFixed(2)]);
-  }
-  const smooths = [];
-  for (const [k, s] of cellSmooth.entries()) {
-    if (s > 0.001) {
-      const [gx, gz] = k.split(',').map(Number);
-      smooths.push([gx, gz, +(+s).toFixed(2)]);
-    }
-  }
-  const globalVeg = clamp((+document.querySelector('#waterVegetation')?.value || 0) / 100, 0, 1);
-  const waterCellsArr = [];
-  for (const [k, y] of waterCells.entries()) {
-    const [gx, gz] = k.split(',').map(Number);
-    const veg = clamp(waterVegCells.get(k) ?? globalVeg, 0, 1);
-    waterCellsArr.push([gx, gz, +(+y).toFixed(2), +veg.toFixed(2)]);
-  }
+    e.wind = { strength: +w.strength || WIND_DEFAULTS.strength, radius: +w.radius || WIND_DEFAULTS.radius };
+    e.collidable = false;
+    entities.push(e);
+  }
+  delete opennite.winds;
+  for (const e of entities) if (e.type === 'pickup' && !e.itemId) e.itemId = WEAPON_ITEM.id;
   return {
-    ...baseCustomData,
-    base: baseCustomData.base || baseCustomData.id || 'san-borondon',
-    theme: baseCustomData.theme || 'temperate',
-    size: baseCustomData.size || 360,
-    seed: baseCustomData.seed || 20261119,
-    pieces: placed.map(p => ({ ...p })),
-    // El terreno antiguo por celdas ya no se edita ni se guarda: solo teselas.
-    terrain: { cell: TERRAIN_CELL, heights: [] },
-    waterVegetation: +globalVeg.toFixed(2),
-    // Con terreno de EGD el agua sale de sus teselas (World la calcula igual que el juego).
-    waterCells: egdWorld ? [] : waterCellsArr,
-    winds: winds.map(w => ({ ...w })),
-    // Mismo nivel de agua que el juego: en egd-map, el del mar de su borde.
-    waterLevel: egdWorld ? (egdSeaLevel(egdWorld) ?? -100) : snapH(Number.isFinite(world.waterLevelTarget) ? world.waterLevelTarget : (world.waterLevel ?? 0)),
-    // Terreno de Easy Game Developer: el agua sale de sus teselas de agua.
-    egd: egdPayload(),
+    format: 'egd-project', version: 1, name: world.name || 'Mapa',
+    world, entities, characters: [_n('Héroe')], items: [JSON.parse(JSON.stringify(WEAPON_ITEM))],
+    scripts: [], models: [], opennite,
   };
 }
 
-document.querySelector('#saveMap').onclick = async () => {
-  // Se guarda en formato egd-map: el mismo archivo que abre Easy Game Developer.
-  const payload = JSON.stringify(openNiteToEgdMap(buildSavePayload()), null, 2);
-  document.querySelector('#mapText').value = payload;
-  const mapId = (baseCustomData.id && baseCustomData.id !== 'custom-map') ? String(baseCustomData.id).replace(/[^a-z0-9_-]/gi, '') : 'custom-map';
-  const fileName = `${mapId || 'custom-map'}.json`;
-  const paths = [`public/maps/${fileName}`, `dist/maps/${fileName}`, `maps/${fileName}`];
-  let ok = 0;
-  for (const p of paths) {
-    try { await window.opennite?.app?.writeFile?.(p, payload); ok++; } catch {}
+/** Archivo egd-map (el de EGD, con el bloque `opennite` que EGD ignora). */
+function mapFromProject(p) {
+  const winds = [];
+  const entities = [];
+  for (const e of p.entities) {
+    if (e.type === 'wind') {
+      winds.push({
+        id: e.id, type: 'wind', name: e.name || 'Viento',
+        x: e.position[0], y: e.position[1], z: e.position[2],
+        rot: (e.rotation[1] || 0) * Math.PI / 180,
+        strength: e.wind?.strength ?? WIND_DEFAULTS.strength, radius: e.wind?.radius ?? WIND_DEFAULTS.radius,
+      });
+    } else entities.push(e);
   }
-  if (!ok) {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
-    a.download = fileName;
-    a.click();
-  }
-  document.querySelector('#status').textContent = `Guardado ${fileName} (egd-map): ${egdWorld?.size}×${egdWorld?.size} teselas, ${placed.length} objetos`;
-};
-
-document.querySelector('#loadMap').onclick = async () => {
-  let raw = null;
-  try { raw = await window.opennite?.app?.openMapFile?.(); } catch {}
-  if (typeof raw !== 'string' || !raw.trim()) return;
-  try {
-    const data = JSON.parse(raw);
-    await loadCustomMap(data);
-    document.querySelector('#status').textContent = `Mapa cargado: ${data.pieces?.length ?? 0} piezas`;
-  } catch (e) {
-    document.querySelector('#status').textContent = 'JSON inválido: ' + e.message;
-  }
-};
-
-document.querySelector('#clearMap').onclick = () => {
-  placed.length = 0;
-  selected.clear();
-  scheduleRebuild();
-  document.querySelector('#status').textContent = 'Piezas limpiadas';
-};
-document.querySelector('#clearTerrain').onclick = () => {
-  if (egdWorld) { egdWorld.tiles = egdWorld.tiles.map(() => egdMakeTile('grass', 0)); delete egdWorld.grass; }
-  heightOverrides.clear();
-  clearWaterPatches();
-  repositionPlacedToTerrain();
-  scheduleRebuild();
-  document.querySelector('#status').textContent = 'Teselas y agua borradas';
-};
-
-document.querySelector('#selDeleteBtn')?.addEventListener('click', deleteSelected);
-document.querySelector('#selAllBtn')?.addEventListener('click', () => { selected.clear(); for (let i=0;i<placedGroup.children.length;i++) selected.add(i); updateSelectionHelpers(); });
-document.querySelector('#selNoneBtn')?.addEventListener('click', clearSelection);
-document.querySelector('#selMoveBtn')?.addEventListener('click', () => {
-  moveMode = !moveMode;
-  document.querySelector('#selMoveBtn').classList.toggle('active', moveMode);
-  syncSelectionControls();
-  document.querySelector('#status').textContent = moveMode ? 'Modo mover: arrastra el gizmo' : 'Modo selección';
-});
-
-window.addEventListener('keydown', (e) => {
-  const tag = (e.target?.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-  if (e.key === 'Delete' || e.key === 'Backspace') { if (mode === 'select' && selected.size) { e.preventDefault(); deleteSelected(); } }
-  if (e.key === 'g' || e.key === 'G') { if (mode === 'select') { e.preventDefault(); moveMode = !moveMode; document.querySelector('#selMoveBtn')?.classList.toggle('active', moveMode); syncSelectionControls(); } }
-  if (e.key === 'Escape') { if (moveMode) { moveMode = false; syncSelectionControls(); } else clearSelection(); }
-});
-
-const clock = new THREE.Clock();
-function tick() {
-  requestAnimationFrame(tick);
-  const dt = Math.min(0.05, clock.getDelta());
-  orbit.update();
-  world.update(camera.position);
-  world.tick(dt);
-  loot.update(dt, world._waterTime || 0);
-  for (const h of selectionHelpers.children) h.update?.();
-  renderer.render(scene, camera);
+  const name = p.world.name || p.name || 'Mapa';
+  const opennite = { ...(p.opennite || {}), id: p.opennite?.id || slug(name), winds };
+  return { format: EGD_MAP_FORMAT, version: 1, name, world: p.world, entities, opennite };
 }
-tick();
-window.addEventListener('resize', () => {
-  camera.aspect = canvas.clientWidth / canvas.clientHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
-});
-renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
+
+/** Mapa nuevo de OpenNite: plano y por debajo del nivel del agua (todo mar). */
+function newProject() {
+  const world = Hr(48, 2, 'water');
+  world.name = 'Mapa nuevo';
+  return projectFromMap({ format: EGD_MAP_FORMAT, version: 1, name: world.name, world, entities: [] });
+}
+
+// ------------------------------------------------------------------ viento (gizmo)
+function windObject(e) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color: '#7fd4ff', transparent: true, opacity: 0.85 });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 2.2, 10), mat);
+  shaft.rotation.x = Math.PI / 2; shaft.position.set(0, 1.2, 0);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 14), mat);
+  head.rotation.x = Math.PI / 2; head.position.set(0, 1.2, 1.5);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 20), mat);
+  base.position.y = 0.04;
+  g.add(shaft, head, base);
+  const r = e.wind?.radius ?? WIND_DEFAULTS.radius;
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(Math.max(0.5, r - 0.25), r, 64),
+    new THREE.MeshBasicMaterial({ color: '#7fd4ff', transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
+  );
+  ring.rotation.x = -Math.PI / 2; ring.position.y = 0.1;
+  ring.raycast = () => {}; // el aro no se selecciona: solo la flecha
+  g.add(ring);
+  g.position.fromArray(e.position);
+  g.rotation.set(0, (e.rotation[1] || 0) * Math.PI / 180, 0);
+  g.name = e.name;
+  g.userData.entityId = e.id;
+  return g;
+}
+
+// ------------------------------------------------------------------ Map Editor
+/**
+ * Editor de Mundo de EGD. Único cambio: como un mapa nuevo de OpenNite empieza
+ * bajo el agua, "Elevar" sobre el agua saca tierra del material elegido.
+ */
+class OpenNiteWorldEditor extends EgdWorldEditor {
+  applyTool(tile, idx) {
+    const liquid = (t) => t === 'water' || t === 'lava';
+    if (this.tool === 'raise' && liquid(tile.t) && !liquid(this.paintType)) tile.t = this.paintType;
+    return super.applyTool(tile, idx);
+  }
+}
+
+// ------------------------------------------------------------------ Scene Editor
+/** Editor de Escena de EGD, con los elementos que usa OpenNite. */
+class OpenNiteSceneEditor extends EgdSceneEditor {
+  addObject(e) {
+    if (e.type !== 'wind') return super.addObject(e);
+    const g = windObject(e);
+    this.content.add(g);
+    this.objects.set(e.id, g);
+    return g;
+  }
+
+  addWind() {
+    const p = this.placementPoint();
+    const e = egdNewEntity('wind', { name: 'Viento', position: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)] });
+    e.wind = { ...WIND_DEFAULTS };
+    e.collidable = false;
+    this.project.entities.push(e);
+    this.addObject(e);
+    this.app.commit('Añadir viento');
+    this.select(e.id);
+  }
+
+  // En OpenNite se puede borrar cualquier objeto (no hace falta punto de inicio).
+  deleteSelected() {
+    const e = this.entity();
+    if (!e) return;
+    this.project.entities = this.project.entities.filter((n) => n.id !== e.id);
+    const o = this.objects.get(e.id);
+    this.tc.detach();
+    if (o) { this.content.remove(o); egdDispose(o); this.objects.delete(e.id); }
+    this.selectedId = null;
+    this.app.commit('Borrar ' + e.name);
+    this.renderPanels();
+  }
+
+  renderLeft() {
+    const el = egdClear(this.app.left);
+    const add = (label, type, opts) => egdButton(label, () => this.addEntity(type, opts));
+    const decor = document.createElement('select');
+    for (const [k, v] of Object.entries(Hn)) decor.append(new Option(v.name, k));
+    decor.value = 'tree';
+    const matSel = document.createElement('select');
+    for (const [k, v] of Object.entries(Kt)) matSel.append(new Option(v.name, k));
+    matSel.value = this.buildMat;
+    matSel.onchange = () => { this.buildMat = matSel.value; };
+    const prefabSel = document.createElement('select');
+    for (const [k, v] of Object.entries(ii)) prefabSel.append(new Option(v.name, k));
+    prefabSel.value = this.prefabKey;
+    prefabSel.onchange = () => { this.prefabKey = prefabSel.value; };
+    const rotSel = document.createElement('select');
+    for (const r of [0, 90, 180, 270]) rotSel.append(new Option(r + '°', r));
+    rotSel.value = this.prefabRot;
+    rotSel.onchange = () => { this.prefabRot = +rotSel.value; };
+    const breakable = egdEl('input', { type: 'checkbox' });
+    breakable.checked = !!this.buildBreakable;
+    breakable.onchange = () => { this.buildBreakable = breakable.checked; };
+
+    el.append(
+      egdSection('🎯 OpenNite',
+        egdEl('div', { class: 'grid-buttons' },
+          add('📦 Cofre', 'prop', { prop: 'chest', name: 'Cofre' }),
+          add('✦ Arma + munición', 'pickup', { name: 'Arma + munición', itemId: WEAPON_ITEM.id }),
+          egdButton('💨 Viento', () => this.addWind()),
+          add('⚑ Spawn (entrenamiento)', 'spawn', { name: 'Spawn (entrenamiento)' }),
+        ),
+        egdHint('En partida se cae del cielo: el spawn solo se usa en el modo entrenamiento. Los cofres y armas son el botín del mapa.'),
+      ),
+      egdSection('Añadir primitiva',
+        egdEl('div', { class: 'grid-buttons' }, Object.entries(bo).map(([k, v]) => add(v, 'primitive', { shape: k, name: v }))),
+      ),
+      egdSection('🧱 Construcción modular',
+        egdEl('div', { class: 'grid-buttons' }, Object.entries(Ei).map(([k, v]) => egdButton(v.icon + ' ' + v.name, () => this.addBuild(k), '', v.hint))),
+        egdRow('Material', matSel),
+        egdRow('', egdEl('label', { class: 'check' }, breakable, 'Rompible')),
+        egdRow('Prefabricado', prefabSel, rotSel),
+        egdButton('Colocar prefabricado', () => this.addPrefab(this.prefabKey), 'primary block'),
+        egdHint('Medidas estándar: celdas de 4 m y plantas de 3 m. Las piezas se mueven de 1 en 1 m y giran 90°.'),
+      ),
+      egdSection('🌲 Decorado',
+        egdRow('Decorado', decor, egdButton('Añadir', () => this.addEntity('prop', { prop: decor.value, name: Hn[decor.value].name }))),
+      ),
+    );
+    this.outliner = egdEl('div', { class: 'list' });
+    const search = egdText(this.filter, (v) => { this.filter = v; this.renderOutliner(); }, { placeholder: 'Buscar...', live: true });
+    el.append(egdSection(`Objetos de la escena (${this.project.entities.length})`, search, egdEl('div', { style: { height: '6px' } }), this.outliner));
+    this.renderOutliner();
+  }
+
+  renderInspector() {
+    super.renderInspector();
+    const t = this.entity();
+    if (t?.type !== 'wind') return;
+    t.wind ??= { ...WIND_DEFAULTS };
+    const change = (label) => { this.app.commit(label); this.rebuildObject(t); };
+    // Fuerza y radio en la misma sección del viento; sin la sección "Juego" (no es sólido).
+    const [main, , game] = this.app.right.children;
+    main?.append(
+      egdRow('Fuerza', egdNumber(t.wind.strength, (v) => { t.wind.strength = Math.min(20, Math.max(0.2, v)); change('Fuerza del viento'); }, { step: 0.5, min: 0.2, max: 20 })),
+      egdRow('Radio', egdNumber(t.wind.radius, (v) => { t.wind.radius = Math.min(500, Math.max(5, v)); change('Radio del viento'); }, { step: 5, min: 5, max: 500 })),
+      egdHint('Empuja a los jugadores en la dirección de la flecha (rótala con E). El aro marca su alcance.'),
+    );
+    game?.remove();
+  }
+
+  // OpenNite no usa micro-códigos de EGD.
+  scriptsSection() { return egdEl('div'); }
+}
+
+// ------------------------------------------------------------------ aplicación
+class EditorApp {
+  constructor() {
+    this.left = $('#left-panel');
+    this.right = $('#right-panel');
+    this.overlay = $('#viewport-overlay');
+    this.center = $('#center-panel');
+    this.rev = 0;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.dirty = false;
+    this.consoleCount = 0;
+    this.mapIndex = null;
+    this.project = this.loadAutosave() || newProject();
+    this.snapshot = JSON.stringify(this.project);
+    this.engine = new EgdViewport($('#canvas-host'));
+    this.editors = { world: new OpenNiteWorldEditor(this), scene: new OpenNiteSceneEditor(this) };
+    this.current = null;
+    this.bindUI();
+    this.updateTitle();
+    this.setDirty(false);
+    this.switchTab('world');
+    this.log('Editor de mapas de OpenNite listo (motor de Easy Game Developer).');
+  }
+
+  switchTab(name) {
+    if (this.current === this.editors[name]) return;
+    this.current?.deactivate();
+    for (const el of [this.left, this.right, this.overlay]) egdClear(el);
+    this.closeDrawers();
+    this.current = this.editors[name];
+    this.currentName = name;
+    document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+    this.current.activate();
+  }
+
+  openScript() {}
+
+  // ---- historial
+  commit(label = 'Cambio') {
+    this.undoStack.push(this.snapshot);
+    if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+    this.redoStack = [];
+    this.snapshot = JSON.stringify(this.project);
+    this.rev++;
+    if (this.current && 'lastRev' in this.current) this.current.lastRev = this.rev;
+    this.setDirty(true);
+    this.status(label);
+    clearTimeout(this._autosave);
+    this._autosave = setTimeout(() => this.autosave(), 800);
+  }
+  undo() { this.restore(this.undoStack, this.redoStack, 'Deshacer'); }
+  redo() { this.restore(this.redoStack, this.undoStack, 'Rehacer'); }
+  restore(from, to, label) {
+    if (!from.length) return this.status('Nada que ' + label.toLowerCase());
+    to.push(this.snapshot);
+    this.snapshot = from.pop();
+    this.project = JSON.parse(this.snapshot);
+    this.rev++;
+    this.setDirty(true);
+    this.reloadCurrent();
+    this.status(label);
+    this.autosave();
+  }
+  reloadCurrent() {
+    this.updateTitle();
+    const c = this.current;
+    if (c) { c.refresh?.(); c.renderPanels?.(); }
+  }
+  replaceProject(p) {
+    this.project = p;
+    this.snapshot = JSON.stringify(p);
+    this.undoStack = [];
+    this.redoStack = [];
+    this.rev++;
+    this.setDirty(false);
+    this.reloadCurrent();
+    this.autosave();
+  }
+
+  // ---- archivo
+  autosave() { try { localStorage.setItem(AUTOSAVE_KEY, this.snapshot); } catch {} }
+  loadAutosave() {
+    try {
+      const s = localStorage.getItem(AUTOSAVE_KEY);
+      if (!s) return null;
+      const p = JSON.parse(s);
+      if (!p?.world?.tiles) return null;
+      M0(p.world);
+      p.entities ??= []; p.entities.forEach(S0);
+      p.items = [JSON.parse(JSON.stringify(WEAPON_ITEM))];
+      p.characters ??= [_n('Héroe')]; p.scripts ??= []; p.models ??= []; p.opennite ??= {};
+      return p;
+    } catch { return null; }
+  }
+  mapFile() { return mapFromProject(this.project); }
+  mapJSON() { return JSON.stringify(this.mapFile(), null, 2); }
+
+  async newMap() {
+    if (this.dirty && !confirm('Hay cambios sin guardar. ¿Crear un mapa nuevo?')) return;
+    this.replaceProject(newProject());
+    this.toast('Mapa nuevo: plano y bajo el nivel del agua');
+  }
+
+  openMapData(raw, label) {
+    if (!isEgdMap(raw)) {
+      alert('Este mapa es del sistema antiguo de OpenNite (terreno procedural) y no tiene teselas. Abre un mapa egd-map o crea uno nuevo.');
+      return false;
+    }
+    this.replaceProject(projectFromMap(raw));
+    this.toast('Mapa abierto: ' + (label || this.project.world.name));
+    return true;
+  }
+
+  async loadIndex() {
+    try {
+      const res = await fetch('/maps/index.json?t=' + Date.now());
+      this.mapIndex = res.ok ? await res.json() : { maps: [] };
+    } catch { this.mapIndex = { maps: [] }; }
+    return this.mapIndex;
+  }
+
+  async openDialog() {
+    const idx = await this.loadIndex();
+    const list = egdEl('div', { class: 'map-list' });
+    let modal;
+    for (const m of idx.maps || []) {
+      list.append(egdEl('div', {
+        class: 'list-item',
+        onclick: async () => {
+          if (this.dirty && !confirm('Hay cambios sin guardar. ¿Abrir otro mapa?')) return;
+          try {
+            const res = await fetch('/maps/' + m.file + '?t=' + Date.now());
+            const raw = await res.json();
+            if (this.openMapData(raw, m.name)) modal?.remove();
+          } catch (e) { alert('No se pudo abrir: ' + e.message); }
+        },
+      }, egdEl('span', { class: 'li-label' }, m.name || m.id), egdEl('small', {}, m.file)));
+    }
+    const fromFile = egdButton('📂 Desde un archivo (.json)…', async () => {
+      const raw = await this.pickFile();
+      if (raw && this.openMapData(raw)) modal?.remove();
+    }, 'block');
+    modal = egdModal('Abrir mapa', egdHint('Mapas del juego:'), list, fromFile);
+  }
+
+  async pickFile() {
+    try {
+      const txt = window.opennite?.app?.openMapFile ? await window.opennite.app.openMapFile() : await new Promise((resolve) => {
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = '.json,application/json';
+        inp.onchange = () => { const f = inp.files?.[0]; if (!f) return resolve(null); f.text().then(resolve); };
+        inp.click();
+      });
+      return txt ? JSON.parse(txt) : null;
+    } catch (e) { alert('Archivo no válido: ' + e.message); return null; }
+  }
+
+  /** Guarda en los mapas del juego (public/maps y dist/maps) y lo añade al índice. */
+  async save() {
+    const file = this.mapFile();
+    const id = file.opennite.id;
+    this.project.opennite = { ...(this.project.opennite || {}), id };
+    const json = JSON.stringify(file, null, 2);
+    const fileName = `${id}.json`;
+    const write = window.opennite?.app?.writeFile;
+    if (!write) { this.download(fileName, json); this.setDirty(false); return; }
+    let ok = 0;
+    for (const dir of ['public/maps', 'dist/maps']) {
+      try { await write(`${dir}/${fileName}`, json); ok++; } catch {}
+    }
+    // Índice de mapas del juego: se añade si no estaba.
+    try {
+      const idxTxt = await window.opennite.app.readFile('public/maps/index.json');
+      const idx = idxTxt ? JSON.parse(idxTxt) : { schema: 1, maps: [] };
+      idx.maps ??= [];
+      const N = file.world.size * file.world.tileSize;
+      const entry = idx.maps.find((m) => m.id === id || m.file === fileName);
+      if (entry) { entry.name = file.name; entry.size = N; }
+      else idx.maps.push({ id, name: file.name, description: 'Mapa creado con el editor (formato egd-map).', file: fileName, version: 1, size: N, type: 'island', theme: 'temperate', gradient: 'linear-gradient(135deg,#2e6f82,#67a86d 45%,#e3d19a)', tags: ['EGD'] });
+      const out = JSON.stringify(idx, null, 2);
+      for (const dir of ['public/maps', 'dist/maps']) { try { await write(`${dir}/index.json`, out); } catch {} }
+    } catch (e) { this.log('No se pudo actualizar el índice de mapas: ' + e.message, 'warn'); }
+    if (!ok) { this.download(fileName, json); return; }
+    this.setDirty(false);
+    this.toast('Mapa guardado: ' + fileName);
+    this.log(`Guardado ${fileName}: ${file.world.size}×${file.world.size} teselas, ${file.entities.length} objetos, ${file.opennite.winds.length} vientos`);
+  }
+
+  download(name, text) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  // Botones "Guardar mapa / Cargar mapa" del panel del Map Editor.
+  async saveMap() { this.download(`${this.mapFile().opennite.id}.json`, this.mapJSON()); }
+  async loadMap() {
+    if (!confirm('Cargar un mapa reemplaza el terreno y los objetos actuales. ¿Continuar?')) return;
+    const raw = await this.pickFile();
+    if (raw) this.openMapData(raw);
+  }
+
+  // ---- interfaz
+  setDirty(d) {
+    this.dirty = d;
+    $('#file-text').textContent = (this.project.opennite?.id ? this.project.opennite.id + '.json' : 'Sin guardar') + (d ? ' •' : '');
+  }
+  updateTitle() {
+    $('#project-name').value = this.project.world.name || 'Mapa';
+    document.title = (this.project.world.name || 'Mapa') + ' — OpenNite · Editor de mapas';
+  }
+  status(t) { $('#status-text').textContent = t; }
+  toast(t) {
+    const d = document.createElement('div');
+    d.className = 'toast'; d.textContent = t;
+    $('#toast-host').appendChild(d);
+    setTimeout(() => d.remove(), 2600);
+  }
+  log(msg, kind = 'log') {
+    const d = document.createElement('div');
+    d.className = kind;
+    d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    const body = $('#console-body');
+    body.appendChild(d); body.scrollTop = body.scrollHeight;
+    $('#console-count').textContent = ++this.consoleCount;
+    if (kind === 'error') this.status('⚠ ' + msg);
+  }
+  toggleDrawer(side) {
+    const a = side === 'left' ? this.left : this.right, b = side === 'left' ? this.right : this.left;
+    const open = !a.classList.contains('open');
+    b.classList.remove('open'); a.classList.toggle('open', open);
+    $('#drawer-backdrop').classList.toggle('show', open);
+  }
+  closeDrawers() {
+    this.left.classList.remove('open'); this.right.classList.remove('open');
+    $('#drawer-backdrop')?.classList.remove('show');
+  }
+
+  bindUI() {
+    $('#btn-undo').onclick = () => this.undo();
+    $('#btn-redo').onclick = () => this.redo();
+    $('#btn-new').onclick = () => this.newMap();
+    $('#btn-open').onclick = () => this.openDialog();
+    $('#btn-save').onclick = () => this.save();
+    $('#btn-export').onclick = () => this.saveMap();
+    $('#btn-play').onclick = () => {
+      if (this.dirty && !confirm('Hay cambios sin guardar. ¿Volver al juego igualmente?')) return;
+      location.href = '/';
+    };
+    $('#btn-menu').onclick = (e) => { e.stopPropagation(); $('#topbar').classList.toggle('menu-open'); };
+    document.addEventListener('click', (e) => { if (!e.target.closest('.file-menu, #btn-menu')) $('#topbar').classList.remove('menu-open'); });
+    $('#mb-left').onclick = () => this.toggleDrawer('left');
+    $('#mb-right').onclick = () => this.toggleDrawer('right');
+    $('#drawer-backdrop').addEventListener('click', () => this.closeDrawers());
+    document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => this.switchTab(b.dataset.tab)));
+    $('#project-name').addEventListener('change', (e) => {
+      const v = e.target.value || 'Mapa';
+      this.project.world.name = v; this.project.name = v;
+      this.commit('Nombre del mapa');
+      this.updateTitle();
+      this.current?.renderPanels?.();
+    });
+    $('#btn-console').onclick = () => $('#console').classList.toggle('hidden');
+    $('#console-close').onclick = () => $('#console').classList.add('hidden');
+    $('#console-clear').onclick = () => { $('#console-body').innerHTML = ''; this.consoleCount = 0; $('#console-count').textContent = '0'; };
+    window.addEventListener('keydown', (e) => {
+      const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
+      if (e.ctrlKey && e.code === 'KeyS') { e.preventDefault(); this.save(); return; }
+      if (typing) return;
+      if (e.ctrlKey && e.code === 'KeyZ') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); return; }
+      if (e.ctrlKey && e.code === 'KeyY') { e.preventDefault(); this.redo(); return; }
+      this.current?.onKey?.(e);
+    });
+    window.addEventListener('beforeunload', () => this.autosave());
+    window.addEventListener('error', (e) => this.log('Error: ' + e.message, 'error'));
+  }
+}
+
+const app = new EditorApp();
+window.editorApp = app;
+export { app, projectFromMap, mapFromProject, newProject };
