@@ -143,10 +143,9 @@ const fragmentShader = /* glsl */`
     float frame = hx.b;                       // 1 en el marco, bisel hacia dentro
     vec2 tilt = hx.rg * 2.0 - 1.0;            // inclinación propia de cada cristal
     // Gradiente del bisel para que el borde de cada hexágono curve la luz.
-    vec2 du = vec2(0.004, 0.0);
-    vec2 dv = vec2(0.0, 0.004);
-    vec2 bevel = vec2(texture2D(uHex, vUv + du).b - texture2D(uHex, vUv - du).b,
-                      texture2D(uHex, vUv + dv).b - texture2D(uHex, vUv - dv).b);
+    // (diferencias hacia delante: 2 lecturas en vez de 4, va bien en GPUs modestas)
+    vec2 bevel = vec2(texture2D(uHex, vUv + vec2(0.006, 0.0)).b - frame,
+                      texture2D(uHex, vUv + vec2(0.0, 0.006)).b - frame) * 1.4;
 
     vec3 nT = normalize(vec3(tilt * 0.22 + bevel * 2.6, 1.0));
     vec3 N = normalize(vNormalW);
@@ -168,11 +167,7 @@ const fragmentShader = /* glsl */`
     vec2 offs = nV.xy * uRefract * near;
     vec3 behind;
     if (uHasScene > 0.5) {
-      // Ligera dispersión cromática en los biseles.
-      float ca = 0.004 * frame * near;
-      behind.r = texture2D(uScene, screenUv + offs + nV.xy * ca).r;
-      behind.g = texture2D(uScene, screenUv + offs).g;
-      behind.b = texture2D(uScene, screenUv + offs - nV.xy * ca).b;
+      behind = texture2D(uScene, screenUv + offs).rgb;
     } else {
       behind = mix(uSkyHorizon, uColor, 0.35);
     }

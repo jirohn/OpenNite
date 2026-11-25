@@ -818,12 +818,12 @@ export class BotBrain {
           this.useTime = 0;
           moveX = dx; moveZ = dz;
           // Justo encima o debajo (otro piso, tejado) y no sube: no es alcanzable.
-          if (d < 2.5 && Math.abs(dy) >= 2.2 && b.grounded) this._giveUpItem(g.entity);
+          if (g.entity && d < 2.5 && Math.abs(dy) >= 2.2 && b.grounded) this._giveUpItem(g.entity);
         }
         // Demasiado tiempo yendo hacia el mismo objeto: probablemente no hay camino.
-        if (this.time - g.since > 14) this._giveUpItem(g.entity);
-        // El objeto ya no existe (otro lo cogió).
-        if (!g.entity.group?.parent) { g.type = 'roam'; this.thinkTimer = 0; }
+        if (g.entity && this.time - g.since > 14) this._giveUpItem(g.entity);
+        // El objeto ya no existe (otro lo cogió) o lo acabamos de descartar.
+        if (!g.entity?.group?.parent) { g.type = 'roam'; this.thinkTimer = 0; }
       } else if (g.type === 'cover') {
         if (d < 0.9) {
           crouch = true;
