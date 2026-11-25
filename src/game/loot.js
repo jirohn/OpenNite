@@ -314,10 +314,10 @@ export class LootManager {
     entity.group.removeFromParent();
   }
 
-  interact(entity, player) {
+  interact(entity, player, opts = {}) {
     if (!entity || !entity.group.parent) return null;
     if (entity.isChest) {
-      this.game.audio.play('chest');
+      if (!opts.silent) this.game.audio.play('chest');
       this.game.effects.burst(entity.pos.clone().add(new THREE.Vector3(0, 1, 0)), 22, [0xffd166, 0xffa23a], { speed: 4, life: 0.7 });
       this.remove(entity);
       const lootCount = 2 + Math.floor(this.rnd() * 2);
@@ -357,7 +357,7 @@ export class LootManager {
       text = `+${item.amount} munición`;
       color = '#e6c05c';
     }
-    this.game.audio.play('pickup');
+    if (!opts.silent) this.game.audio.play('pickup');
     this.game.effects.burst(entity.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 14, [color, 0xffffff], { speed: 3, life: 0.5, gravity: 4 });
     this.remove(entity);
     return { text, color };

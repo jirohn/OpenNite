@@ -110,7 +110,14 @@ export class Player {
     return out;
   }
 
-  placeOnBus() {
+  /**
+   * Sube al jugador al autobús. Si se pasa una ruta (ver Game.createBusRoute),
+   * el autobús cruza el mapa siguiéndola; si no, ruta clásica norte-sur.
+   * Los bots usan exactamente esta misma función.
+   */
+  placeOnBus(route = null) {
+    this.busRoute = route;
+    if (route) this.busSpeed = route.speed;
     this.inBus = true;
     this.gliding = false;
     this.swimming = false;
@@ -118,8 +125,13 @@ export class Player {
     this.grounded = false;
     this.fallPeakY = 220;
     this.busTime = 0;
-    this.position.set(0, 220, this.world.half + 120);
-    this.yaw = Math.PI;
+    if (route) {
+      route.positionAt(0, this.position);
+      this.yaw = route.yaw;
+    } else {
+      this.position.set(0, 220, this.world.half + 120);
+      this.yaw = Math.PI;
+    }
     this.pitch = -0.55;
     this.character.group.visible = false; // oculto dentro del bus hasta saltar
   }
@@ -138,7 +150,9 @@ export class Player {
     this._diveBoostTimer = 0;
     this._waterDiveActive = false;
     this._waterDiveHeight = 0;
-    this.velocity.set(0, -3, -this.busSpeed * 0.45);
+    const bdx = this.busRoute ? this.busRoute.dir.x : 0;
+    const bdz = this.busRoute ? this.busRoute.dir.z : -1;
+    this.velocity.set(bdx * this.busSpeed * 0.45, -3, bdz * this.busSpeed * 0.45);
     this.character.group.visible = true;
   }
 
@@ -399,15 +413,23 @@ export class Player {
 
     if (this.inBus) {
       this.busTime = (this.busTime || 0) + dt;
-      this.position.z -= this.busSpeed * dt;
-      this.position.y = 220 + Math.sin(this.time * 0.8) * 1.2;
+      if (this.busRoute) {
+        this.busRoute.positionAt(this.busTime, this.position);
+        this.position.y += Math.sin(this.time * 0.8) * 1.2;
+      } else {
+        this.position.z -= this.busSpeed * dt;
+        this.position.y = 220 + Math.sin(this.time * 0.8) * 1.2;
+      }
       this.character.group.position.copy(this.position);
       this.character.grounded = this.grounded;
       this.character.group.rotation.y = this.yaw + Math.PI;
       this.character.play('idle');
       this.character.update(dt);
       this.updateCamera(dt);
-      if (this.busTime > 7 || this.position.z < -this.world.half * 0.2) {
+      const busOver = this.busRoute
+        ? this.busTime >= this.busRoute.duration
+        : (this.busTime > 7 || this.position.z < -this.world.half * 0.2);
+      if (busOver) {
         this.jumpFromBus();
       }
       return;
@@ -797,13 +819,18 @@ export class Player {
       diveProgress,
     };
     this.character.setLocomotion(planarSpeed, this.grounded, pose);
-    this.character.update(dt);
+    this.updateAnimation(dt);
     if (this.grounded && planarSpeed > 0.8 && !this.sliding) this.audio.footstep(this.sprinting);
     if (planarSpeed > 0.5) this.bob += dt * (this.sprinting ? 13 : this.sliding ? 4 : 9);
 
     this.recoil = Math.max(0, this.recoil - dt * 0.22);
     this.recoilYaw *= 0.9;
     this.updateCamera(dt);
+  }
+
+  /** Avanza la animación del personaje (los bots lejanos la abaratan). */
+  updateAnimation(dt) {
+    this.character.update(dt);
   }
 
   updateCamera(dt) {
