@@ -1315,6 +1315,9 @@ transformed.y *= rise;`);
 
   /** Oculta todas las superficies de agua para el pase de refracción. */
   setWaterVisible(visible) {
+    // Se recuerda para que el agua creada después (reconstrucciones del editor,
+    // mareas) nazca ya oculta en vez de aparecer un instante.
+    this._waterHidden = !visible;
     for (const m of this.waterMeshes || []) m.visible = visible;
   }
 
@@ -1666,6 +1669,7 @@ transformed.y *= rise;`);
     }));
     if (fallEdges.length) this._buildWaterfallSheets(fallEdges);
     if (waterfalls.length) this._buildWaterfallFoam(waterfalls);
+    if (this._waterHidden) for (const m of this.waterMeshes) m.visible = false;
   }
 
   /** Un shape lateral por arista: de la línea superior al borde del nivel inferior. */
@@ -3383,6 +3387,7 @@ transformed.y *= rise;`);
     this.waterMeshes.push(this.water);
     this.disposables.push(geo, mat);
     this.waterMaterials.push(mat);
+    if (this._waterHidden) this.water.visible = false;
   }
 
   setupClouds() {

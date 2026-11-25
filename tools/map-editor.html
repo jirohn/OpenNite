@@ -53,77 +53,87 @@
     <button data-mode="tiles" class="active">🧱 Teselas</button>
     <button data-mode="select">Seleccionar</button>
     <button data-mode="place">Colocar pieza</button>
-    <button data-mode="water">🌊 Agua/Lago</button>
-    <button data-mode="erase-water">🗑️ Borrar agua</button>
-    <button data-mode="grass">🌿 Césped</button>
-    <button data-mode="path">🪨 Camino</button>
-    <button data-mode="road">🛣️ Carretera</button>
+    <button data-mode="water" style="display:none">🌊 Agua/Lago</button>
+    <button data-mode="erase-water" style="display:none">🗑️ Borrar agua</button>
+    <button data-mode="grass" style="display:none">🌿 Césped</button>
+    <button data-mode="path" style="display:none">🪨 Camino</button>
+    <button data-mode="road" style="display:none">🛣️ Carretera</button>
     <button data-mode="wind">🌬️ Viento</button>
     <button data-mode="erase">❌ Borrar pieza</button>
   </div>
 
   <div id="tileControls" style="display:none">
-    <h3>🧱 Teselas</h3>
-    <small class="hint" id="tileInfo">Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo de una tesela.</small>
+    <h3>🧱 Teselas (Easy Game Developer)</h3>
+    <small class="hint" id="tileInfo">Clic/arrastrar: aplicar. Shift+clic: coger tesela.</small>
     <label class="small">Herramienta</label>
     <select id="tileTool">
-      <option value="paint">Pintar tesela (nivel + estilo)</option>
-      <option value="raise">Subir 1 nivel</option>
-      <option value="lower">Bajar 1 nivel</option>
-      <option value="surface">Solo superficie</option>
-      <option value="shape">Solo forma (rampa/escalera)</option>
-      <option value="edge">Solo borde</option>
-      <option value="round">Redondear bordes (pincel)</option>
-      <option value="erase">Borrar tesela</option>
+      <option value="paint">Pintar tesela (tipo + altura)</option>
+      <option value="raise">⬆ Subir</option>
+      <option value="lower">⬇ Bajar</option>
+      <option value="flat">▬ Aplanar a la altura</option>
+      <option value="surface">🖌️ Pintar terreno (solo tipo)</option>
+      <option value="shape">◢ Rampa / bloque</option>
+      <option value="grass">🌿 Hierba</option>
+      <option value="erase">Borrar tesela (hueco)</option>
     </select>
-    <label class="small">Nivel</label>
-    <input id="tileLevel" type="number" min="-4" max="40" step="1" value="1">
-    <label class="small">Superficie</label>
+    <label class="small">Tipo de terreno</label>
     <select id="tileSurface">
-      <option value="grass">Hierba</option>
-      <option value="path">Camino de tierra</option>
-      <option value="cobble">Empedrado</option>
+      <option value="grass">Césped</option>
+      <option value="dirt">Tierra</option>
       <option value="sand">Arena</option>
-      <option value="stone">Losas</option>
+      <option value="stone">Piedra</option>
+      <option value="brick">Ladrillo</option>
+      <option value="wood">Madera</option>
+      <option value="snow">Nieve</option>
+      <option value="volcanic">Roca volcánica</option>
+      <option value="picon">Picón (lapilli)</option>
+      <option value="blacksand">Arena negra</option>
+      <option value="water">Agua</option>
+      <option value="lava">Lava</option>
     </select>
+    <label class="small">Altura (pasos de 0,5 m): <strong id="tileLevelLabel">1.0 m</strong></label>
+    <input id="tileLevel" type="number" min="-4" max="40" step="1" value="2">
     <label class="small">Forma</label>
     <select id="tileShape">
-      <option value="flat">Plana</option>
-      <option value="ramp">Rampa (sube 1 nivel)</option>
-      <option value="stairs">Escalera (sube 1 nivel)</option>
+      <option value="block">Bloque</option>
+      <option value="ramp">Rampa</option>
     </select>
-    <label class="small">Sube hacia</label>
+    <label class="small">Rampa sube hacia</label>
     <select id="tileDir">
       <option value="auto">Automático (vecina más alta)</option>
-      <option value="0">Norte (-Z)</option>
+      <option value="0">Norte (+Z)</option>
       <option value="1">Este (+X)</option>
-      <option value="2">Sur (+Z)</option>
+      <option value="2">Sur (-Z)</option>
       <option value="3">Oeste (-X)</option>
     </select>
-    <label class="small">Borde cuando queda por encima</label>
-    <select id="tileEdge">
-      <option value="cliff">Acantilado de roca</option>
-      <option value="wall">Muro de terraza</option>
-    </select>
-    <label class="small">Redondeo de esquinas: <strong id="tileRoundLabel">0%</strong></label>
-    <input id="tileRound" type="range" min="0" max="100" step="5" value="0">
+    <label class="small">Subida de la rampa (pasos de 0,5 m)</label>
+    <input id="tileRise" type="number" min="1" max="8" step="1" value="2">
+    <label class="small">Hierba</label>
+    <select id="tileGrass"><option value="0">Sin hierba</option><option value="1">Rala</option><option value="2" selected>Normal</option><option value="3">Densa</option></select>
     <label class="small">Radio del pincel: <strong id="tileRadiusLabel">0</strong> teselas</label>
-    <input id="tileRadius" type="range" min="0" max="6" step="1" value="0">
-    <label class="small">Fuera de las teselas</label>
-    <select id="tileOutside">
-      <option value="sea">Mar</option>
-      <option value="terrain">Terreno normal</option>
-    </select>
-    <button class="ghost" id="clearTilesBtn">🗑️ Borrar todas las teselas</button>
+    <input id="tileRadius" type="range" min="0" max="8" step="1" value="0">
+    <button class="ghost" id="clearTilesBtn">🗑️ Reiniciar terreno (llano)</button>
 
-    <h3>Resolución del mundo</h3>
+    <h3>Mundo</h3>
+    <label class="small">Estilo</label>
+    <select id="egdStyle"><option value="smooth">Suave (bordes redondeados)</option><option value="blocks">Bloques</option></select>
+    <label class="small">Redondeo: <strong id="egdRoundLabel">0.8 m</strong></label>
+    <input id="egdRound" type="range" min="0" max="3" step="0.1" value="0.8">
+    <label class="small">Fundido de colores: <strong id="egdFadeLabel">1.2 m</strong></label>
+    <input id="egdFade" type="range" min="0" max="4" step="0.1" value="1.2">
+    <label class="small"><input id="egdGrassOn" type="checkbox" checked> Hierba</label>
     <div class="row">
+      <div><label class="small">Teselas por lado</label><input id="worldSize" type="number" min="8" max="320" step="1" value="48"></div>
       <div><label class="small">Tesela (m)</label>
-        <select id="worldTile"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select></div>
-      <div><label class="small">Nivel (m)</label>
-        <select id="worldLevel"><option value="0.5">0.5</option><option value="1">1</option><option value="1.25" selected>1.25</option><option value="2.5">2.5</option></select></div>
+        <select id="worldTile"><option value="1">1</option><option value="2" selected>2</option><option value="4">4</option></select></div>
     </div>
-    <button class="ghost" id="applyResolutionBtn">Aplicar resolución (remuestrea las teselas)</button>
+    <button class="ghost" id="applyResolutionBtn">Aplicar tamaño (conserva el relieve)</button>
+    <h3>Generar terreno</h3>
+    <div class="row">
+      <div><select id="egdGenKind"><option value="island">Isla</option><option value="hills">Colinas</option><option value="mountains">Montañas</option><option value="canyon">Cañón</option><option value="sanborondon">San Borondón</option><option value="flat">Llano</option></select></div>
+      <div><input id="egdGenSeed" type="number" value="7" step="1"></div>
+    </div>
+    <button class="ghost" id="egdGenerateBtn">Generar (reemplaza el terreno)</button>
   </div>
 
   <h3>Abrir mapa del juego</h3>
@@ -193,6 +203,8 @@
       <button data-piece="rock_big">Roca grande</button>
       <button data-piece="rock_small">Piedras</button>
     </div>
+    <label class="small">Material (piezas de EGD)</label>
+    <select id="egdMaterial"></select>
     <label class="small">Rotación</label>
     <select id="rotSelect">
       <option value="0">0°</option>

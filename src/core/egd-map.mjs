@@ -112,7 +112,10 @@ export function egdPieceToEntity(p) {
   if (p.egd && typeof p.egd === 'object') {
     const e = { ...p.egd, position: pos };
     const r = Array.isArray(e.rotation) ? [...e.rotation] : [0, 0, 0];
-    r[1] = rotDeg;
+    // Conserva el valor original (p. ej. -90) si el ángulo no ha cambiado.
+    const prev = +r[1] || 0;
+    const same = Math.abs(((((prev - rotDeg) % 360) + 540) % 360) - 180) < 1e-3;
+    if (!same) r[1] = rotDeg;
     e.rotation = r;
     return e;
   }

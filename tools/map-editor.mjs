@@ -22,18 +22,24 @@ import {
   serializeMapData,
   buildRoadNetwork,
 } from '../src/core/map-system.mjs';
+import { modularCellAt } from '../src/core/modular-terrain.mjs';
 import {
-  MODULAR_TILE,
-  MODULAR_LEVEL,
-  MODULAR_DIRS,
-  modularKey,
-  modularIndex,
-  normalizeModularTerrain,
-  serializeModularTerrain,
-  resampleModularTerrain,
-  modularHeightAt,
-  modularLevelY,
-} from '../src/core/modular-terrain.mjs';
+  EGD_TILE_TYPES,
+  EGD_DIRS,
+  EGD_HEIGHT_STEP,
+  EGD_MIN_HEIGHT,
+  EGD_MAX_HEIGHT,
+  egdTile,
+  egdTileIndexAt,
+  egdTileCenter,
+  egdOrigin,
+  egdTileHeightAt,
+  egdMakeTile,
+  egdSetGrass,
+} from '../src/core/egd-terrain.mjs';
+import { egdNewWorld, openNiteToEgdMap, egdSeaLevel } from '../src/core/egd-map.mjs';
+import { egdGenerate, EGD_GENERATORS } from '../src/core/egd-generate.mjs';
+import { EGD_PROPS, EGD_BUILD_PIECES, EGD_BUILD_MATERIALS, EGD_PRESETS } from '../src/core/egd-objects.mjs';
 
 const gltfLoader = new GLTFLoader();
 const fbxLoader = new FBXLoader();
@@ -287,7 +293,7 @@ window.debugWorld = () => ({
     worldHalf: world.half,
   } : null,
 });
-window.world = world; window.scene = scene; window.renderer = renderer;
+window.world = world; window.scene = scene; window.renderer = renderer; window.camera = camera; window.orbit = orbit;
 world.playerState = { speed: 1.2 };
 world.detailDistance = 5000;
 world.renderDistance = 5000;
@@ -461,9 +467,12 @@ const brushGhostGrid = (() => {
 /** Actualiza el ghost del cursor al tamaño de grid activo. */
 function updateBrushGhost(wx, wz, heightY) {
   if (mode === 'tiles') {
+    if (!egdWorld) return;
     const r = tileRadius();
-    const t = modularState.tile;
-    brushGhostGrid.position.set(modularIndex(wx, t) * t, heightY + 0.08, modularIndex(wz, t) * t);
+    const t = egdWorld.tileSize;
+    const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
+    const [cx, cz] = egdTileCenter(egdWorld, ix, iz);
+    brushGhostGrid.position.set(cx, heightY + 0.08, cz);
     brushGhostGrid.scale.set(t * (2 * r + 1), 1, t * (2 * r + 1));
     brushGhostGrid.visible = true;
     return;
@@ -625,108 +634,106 @@ function eraseWaterAt(wx, wz) {
 }
 
 // ===========================================================================
-// TERRENO MODULAR (teselas de 4 m por niveles) — mismo formato que el juego
+// TERRENO DE EASY GAME DEVELOPER — el editor edita el mundo egd-map tal cual:
+// mismas teselas, alturas, rampas y estilos que EGD (y que el juego).
 // ===========================================================================
-const modularState = { tile: MODULAR_TILE, level: MODULAR_LEVEL, baseY: 0.5, outside: 'sea' };
-const tileCells = new Map(); // "gx,gz" -> { gx, gz, level, surface, shape, dir, edge }
+let egdWorld = null; // { size, tileSize, tiles, style, round, fade, paths, grass?, ... }
+let egdExtra = []; // entidades de EGD que OpenNite no dibuja: se guardan sin tocarlas
 const tileStroke = new Set(); // teselas ya tocadas en el trazo actual (subir/bajar una vez)
 let tileStrokeActive = false;
 const tileVal = (id, d) => document.querySelector(id)?.value ?? d;
-function tileRadius() { return Math.max(0, Math.min(6, Math.round(+tileVal('#tileRadius', 0) || 0))); }
+function tileRadius() { return Math.max(0, Math.min(8, Math.round(+tileVal('#tileRadius', 0) || 0))); }
+const tileHeight = () => Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, Math.round(+tileVal('#tileLevel', 2) || 0)));
 
-/** Bloque `modular` listo para guardar (o undefined si no hay teselas). */
-function modularPayload() {
-  if (!tileCells.size) return undefined;
-  return serializeModularTerrain({ ...modularState, cells: tileCells });
+/** Bloque `egd` del mapa que se manda al World (igual que el archivo guardado). */
+function egdPayload() {
+  return egdWorld ? { world: egdWorld, extraEntities: egdExtra } : undefined;
 }
 
-/** El World del editor usa el mismo terreno modular al instante (alturas exactas). */
-function syncWorldModular() {
-  world.modular = normalizeModularTerrain(modularPayload());
-}
-
-function autoTileDir(c) {
+/** Dirección automática de rampa: hacia la vecina más alta (0 = +Z, 1 = +X, 2 = -Z, 3 = -X). */
+function autoRampDir(ix, iz, h) {
   const sel = tileVal('#tileDir', 'auto');
   if (sel !== 'auto') return +sel;
+  let best = 0, bestH = -Infinity;
   for (let d = 0; d < 4; d++) {
-    const [dx, dz] = MODULAR_DIRS[d];
-    const n = tileCells.get(modularKey(c.gx + dx, c.gz + dz));
-    if (n && n.level === c.level + 1) return d;
+    const [dx, dz] = EGD_DIRS[d];
+    const n = egdTile(egdWorld, ix + dx, iz + dz);
+    if (n && n.h > bestH && n.h > h) { bestH = n.h; best = d; }
   }
-  return c.dir || 0;
+  return best;
 }
 
 function pickTileAt(wx, wz) {
-  const t = modularState.tile;
-  const c = tileCells.get(modularKey(modularIndex(wx, t), modularIndex(wz, t)));
-  if (!c) { document.querySelector('#status').textContent = 'No hay tesela ahí'; return; }
+  if (!egdWorld) return;
+  const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
+  const t = egdTile(egdWorld, ix, iz);
+  if (!t) { document.querySelector('#status').textContent = 'No hay tesela ahí'; return; }
   const set = (id, v) => { const el = document.querySelector(id); if (el) el.value = String(v); };
-  set('#tileLevel', c.level);
-  set('#tileSurface', c.surface);
-  set('#tileShape', c.shape);
-  set('#tileEdge', c.edge);
-  set('#tileRound', Math.round((c.round || 0) * 100));
+  set('#tileLevel', t.h);
+  set('#tileSurface', t.t);
+  set('#tileShape', t.m === 'ramp' ? 'ramp' : 'block');
+  set('#tileDir', t.m === 'ramp' ? (t.d || 0) : 'auto');
+  set('#tileRise', t.r || 2);
   syncTileLabels();
-  document.querySelector('#status').textContent = `Tesela ${c.gx},${c.gz}: nivel ${c.level}, ${c.surface}, ${c.shape}, borde ${c.edge}`;
+  document.querySelector('#status').textContent = `Tesela ${ix},${iz}: ${EGD_TILE_TYPES[t.t]?.name || t.t}, altura ${t.h} (${(t.h * EGD_HEIGHT_STEP).toFixed(1)} m)${t.m === 'ramp' ? ', rampa' : ''}`;
 }
 
 function applyTiles(wx, wz) {
+  if (!egdWorld) return;
   const tool = tileVal('#tileTool', 'paint');
-  const t = modularState.tile;
-  const cgx = modularIndex(wx, t), cgz = modularIndex(wz, t);
+  const { ix: cix, iz: ciz } = egdTileIndexAt(egdWorld, wx, wz);
   const r = tileRadius();
-  const level = Math.round(+tileVal('#tileLevel', 1) || 0);
-  const surface = tileVal('#tileSurface', 'grass');
-  const shape = tileVal('#tileShape', 'flat');
-  const edge = tileVal('#tileEdge', 'cliff');
+  const h = tileHeight();
+  const type = tileVal('#tileSurface', 'grass');
+  const shape = tileVal('#tileShape', 'block');
+  const rise = Math.max(1, Math.min(8, Math.round(+tileVal('#tileRise', 2) || 2)));
+  const N = egdWorld.size;
   let changed = 0;
-  for (let gz = cgz - r; gz <= cgz + r; gz++) {
-    for (let gx = cgx - r; gx <= cgx + r; gx++) {
-      const k = modularKey(gx, gz);
-      const cur = tileCells.get(k);
-      if ((tool === 'raise' || tool === 'lower') && tileStroke.has(k)) continue;
-      tileStroke.add(k);
-      if (tool === 'erase') { if (tileCells.delete(k)) changed++; continue; }
+  for (let iz = ciz - r; iz <= ciz + r; iz++) {
+    for (let ix = cix - r; ix <= cix + r; ix++) {
+      if (ix < 0 || iz < 0 || ix >= N || iz >= N) continue;
+      const idx = iz * N + ix;
+      const cur = egdWorld.tiles[idx];
+      if ((tool === 'raise' || tool === 'lower') && tileStroke.has(idx)) continue;
+      tileStroke.add(idx);
+      if (tool === 'erase') { if (cur) { egdWorld.tiles[idx] = null; changed++; } continue; }
+      if (tool === 'grass') { egdSetGrass(egdWorld, idx, Math.max(0, Math.min(3, +tileVal('#tileGrass', 2) || 0))); changed++; continue; }
       if (tool === 'paint') {
-        const c = { gx, gz, level, surface, shape: r === 0 ? shape : 'flat', dir: cur?.dir || 0, edge, round: Math.max(0, Math.min(1, (+tileVal('#tileRound', 0) || 0) / 100)) };
-        if (c.shape !== 'flat') c.dir = autoTileDir(c);
-        tileCells.set(k, c);
+        const t = egdMakeTile(type, h);
+        if (shape === 'ramp' && r === 0) { t.m = 'ramp'; t.r = rise; t.d = autoRampDir(ix, iz, h); }
+        egdWorld.tiles[idx] = t;
         changed++;
         continue;
       }
       if (tool === 'raise' || tool === 'lower') {
-        const base = cur || { gx, gz, level: tool === 'raise' ? -1 : 1, surface, shape: 'flat', dir: 0, edge };
-        tileCells.set(k, { ...base, level: base.level + (tool === 'raise' ? 1 : -1) });
+        const base = cur || egdMakeTile(type, tool === 'raise' ? -1 : 1);
+        egdWorld.tiles[idx] = { ...base, h: Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, base.h + (tool === 'raise' ? 1 : -1))) };
         changed++;
         continue;
       }
       if (!cur) continue;
-      if (tool === 'round') cur.round = Math.max(0, Math.min(1, (+tileVal('#tileRound', 0) || 0) / 100));
-      else if (tool === 'surface') cur.surface = surface;
-      else if (tool === 'edge') cur.edge = edge;
-      else if (tool === 'shape') { cur.shape = shape; if (shape !== 'flat') cur.dir = autoTileDir(cur); }
+      if (tool === 'flat') cur.h = h;
+      else if (tool === 'surface') cur.t = type;
+      else if (tool === 'shape') {
+        if (shape === 'ramp') { cur.m = 'ramp'; cur.r = rise; cur.d = autoRampDir(ix, iz, cur.h); }
+        else cur.m = 'block';
+      }
       changed++;
     }
   }
   if (!changed) return;
-  syncWorldModular();
-  repositionPlacedToTerrain();
   scheduleRebuild();
-  document.querySelector('#status').textContent = `Teselas: ${tileCells.size}`;
+  document.querySelector('#status').textContent = `Teselas: ${N}×${N} de ${egdWorld.tileSize} m`;
 }
 
-document.querySelector('#tileOutside')?.addEventListener('change', (e) => {
-  modularState.outside = e.target.value === 'terrain' ? 'terrain' : 'sea';
-  syncWorldModular();
-  scheduleRebuild();
-});
 document.querySelector('#clearTilesBtn')?.addEventListener('click', () => {
-  tileCells.clear();
-  syncWorldModular();
-  repositionPlacedToTerrain();
+  if (!egdWorld) return;
+  egdWorld.tiles = egdWorld.tiles.map(() => egdMakeTile(tileVal('#tileSurface', 'grass'), 0));
+  delete egdWorld.grass;
   scheduleRebuild();
-  document.querySelector('#status').textContent = 'Teselas borradas';
+  document.querySelector('#status').textContent = 'Terreno reiniciado (llano)';
 });
+
 
 // Abrir cualquier mapa del juego (mismo catálogo que el menú MAPAS).
 (async () => {
@@ -756,9 +763,9 @@ document.querySelector('#clearTilesBtn')?.addEventListener('click', () => {
 })();
 
 // ---------------------------------------------------------------------------
-// Rejilla 3D de teselas: plano de rejilla al nivel activo que cubre todo el
-// mundo, contorno de cada tesela sobre su cara superior y columna de guía en
-// la tesela bajo el cursor.
+// Rejilla 3D de teselas: plano de rejilla que cubre todo el mundo de EGD a la
+// altura activa, contorno de cada tesela sobre su cara superior y columna de
+// guía en la tesela bajo el cursor.
 // ---------------------------------------------------------------------------
 const tileGrid = new THREE.Group();
 tileGrid.name = 'tile-grid-3d';
@@ -773,56 +780,56 @@ tileGridColumn.renderOrder = 10;
 tileGrid.add(tileGridColumn);
 
 function rebuildTileGridPlane() {
-  if (tileGridPlane) { tileGridPlane.geometry.dispose(); tileGridPlane.material.dispose(); tileGrid.remove(tileGridPlane); }
-  const t = modularState.tile;
-  const size = Math.ceil((world.half * 2) / t) * t;
-  tileGridPlane = new THREE.GridHelper(size, Math.round(size / t), 0x4fd2ff, 0x2a6f9a);
+  if (tileGridPlane) { tileGridPlane.geometry.dispose(); tileGridPlane.material.dispose(); tileGrid.remove(tileGridPlane); tileGridPlane = null; }
+  if (!egdWorld) return;
+  const N = egdWorld.size, ts = egdWorld.tileSize;
+  // Mismo origen que EGD: las líneas caen en los bordes de las teselas.
+  tileGridPlane = new THREE.GridHelper(N * ts, N, 0x4fd2ff, 0x2a6f9a);
   tileGridPlane.material.transparent = true;
   tileGridPlane.material.opacity = 0.35;
   tileGridPlane.material.depthWrite = false;
-  // Las líneas caen en los bordes de las teselas (centros en múltiplos de t).
-  const off = (Math.round(size / t) % 2 === 0) ? t / 2 : 0;
-  tileGridPlane.position.set(off, modularState.baseY, off);
   tileGrid.add(tileGridPlane);
 }
 
 function rebuildTileOutlines() {
   if (tileGridOutlines) { tileGridOutlines.geometry.dispose(); tileGridOutlines.material.dispose(); tileGrid.remove(tileGridOutlines); tileGridOutlines = null; }
-  if (!tileCells.size) return;
-  const t = modularState.tile, h = t / 2;
-  const pos = new Float32Array(tileCells.size * 24);
-  let i = 0;
-  for (const c of tileCells.values()) {
-    const y = modularState.baseY + c.level * modularState.level + 0.04 + (c.shape !== 'flat' ? modularState.level : 0);
-    const x0 = c.gx * t - h, x1 = c.gx * t + h, z0 = c.gz * t - h, z1 = c.gz * t + h;
-    const yl = c.shape !== 'flat' ? y - modularState.level : y;
-    const seg = [[x0, z0, x1, z0], [x1, z0, x1, z1], [x1, z1, x0, z1], [x0, z1, x0, z0]];
-    for (const [ax, az, bx, bz] of seg) {
-      pos[i++] = ax; pos[i++] = yl; pos[i++] = az;
-      pos[i++] = bx; pos[i++] = yl; pos[i++] = bz;
+  if (!egdWorld) return;
+  const N = egdWorld.size, ts = egdWorld.tileSize, o = egdOrigin(egdWorld);
+  const pos = [];
+  for (let iz = 0; iz < N; iz++) {
+    for (let ix = 0; ix < N; ix++) {
+      const t = egdWorld.tiles[iz * N + ix];
+      if (!t || !EGD_TILE_TYPES[t.t]) continue;
+      const y = egdTileHeightAt(egdWorld, o + (ix + 0.5) * ts, o + (iz + 0.5) * ts) + 0.04;
+      const x0 = o + ix * ts, x1 = x0 + ts, z0 = o + iz * ts, z1 = z0 + ts;
+      pos.push(x0, y, z0, x1, y, z0, x1, y, z0, x1, y, z1, x1, y, z1, x0, y, z1, x0, y, z1, x0, y, z0);
     }
   }
+  if (!pos.length) return;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  tileGridOutlines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x0b2233, transparent: true, opacity: 0.35, depthWrite: false }));
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  tileGridOutlines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0x0b2233, transparent: true, opacity: 0.3, depthWrite: false }));
   tileGrid.add(tileGridOutlines);
 }
 
 /** Coloca el plano de rejilla y la columna guía en la tesela bajo el cursor. */
 function updateTileGridCursor(wx, wz) {
-  const t = modularState.tile;
-  const gx = modularIndex(wx, t), gz = modularIndex(wz, t);
-  const c = tileCells.get(modularKey(gx, gz));
+  if (!egdWorld) { tileGridColumn.visible = false; return; }
+  const ts = egdWorld.tileSize;
+  const { ix, iz } = egdTileIndexAt(egdWorld, wx, wz);
+  const t = egdTile(egdWorld, ix, iz);
   const tool = tileVal('#tileTool', 'paint');
-  const level = mode === 'tiles' && tool === 'paint' ? Math.round(+tileVal('#tileLevel', 1) || 0) : (c ? c.level : 0);
-  const topY = modularState.baseY + level * modularState.level;
+  const h = mode === 'tiles' && (tool === 'paint' || tool === 'flat') ? tileHeight() : (t ? t.h : 0);
+  const topY = h * EGD_HEIGHT_STEP;
   if (tileGridPlane) tileGridPlane.position.y = topY + 0.03;
-  const bottom = Math.min(modularState.baseY - modularState.level, topY);
+  const bottom = Math.min(-1, topY);
   const hgt = Math.max(0.05, topY - bottom);
+  const [cx, cz] = egdTileCenter(egdWorld, ix, iz);
   tileGridColumn.visible = mode === 'tiles';
-  tileGridColumn.scale.set(t * (2 * tileRadius() + 1), hgt, t * (2 * tileRadius() + 1));
-  tileGridColumn.position.set(gx * t, bottom + hgt / 2, gz * t);
+  tileGridColumn.scale.set(ts * (2 * tileRadius() + 1), hgt, ts * (2 * tileRadius() + 1));
+  tileGridColumn.position.set(cx, bottom + hgt / 2, cz);
 }
+
 
 // ---------------------------------------------------------------------------
 // Render final: sin él, el agua es un plano plano sin efectos (más rápido y
@@ -847,7 +854,7 @@ function applyRenderMode() {
     g.translate(0, world.waterLevel, 0);
     geos.push(g);
   }
-  for (const [k, wy] of waterCells.entries()) {
+  for (const [k, wy] of world.waterCells.entries()) {
     const [gx, gz] = k.split(',').map(Number);
     const g = new THREE.PlaneGeometry(TERRAIN_CELL, TERRAIN_CELL);
     g.rotateX(-Math.PI / 2);
@@ -870,119 +877,117 @@ function applyRenderMode() {
 finalRenderEl?.addEventListener('change', applyRenderMode);
 
 // ---------------------------------------------------------------------------
-// Resolución del mundo y pincel de redondeo
+// Ajustes del mundo de EGD: estilo (suave/bloques), redondeo, fundido de
+// colores, hierba, tamaño/resolución y generador (los mismos que en EGD).
 // ---------------------------------------------------------------------------
 function syncTileLabels() {
-  const r = document.querySelector('#tileRoundLabel');
-  if (r) r.textContent = `${Math.round(+tileVal('#tileRound', 0))}%`;
   const rr = document.querySelector('#tileRadiusLabel');
   if (rr) rr.textContent = String(tileRadius());
+  const lv = document.querySelector('#tileLevelLabel');
+  if (lv) lv.textContent = `${(tileHeight() * EGD_HEIGHT_STEP).toFixed(1)} m`;
+  if (!egdWorld) return;
   const info = document.querySelector('#tileInfo');
-  if (info) info.textContent = `Teselas de ${modularState.tile} m, nivel de ${modularState.level} m. Clic/arrastrar: aplicar. Shift+clic: coger nivel y estilo.`;
-  const wt = document.querySelector('#worldTile'); if (wt) wt.value = String(modularState.tile);
-  const wl = document.querySelector('#worldLevel'); if (wl) wl.value = String(modularState.level);
+  if (info) info.textContent = `Mundo de ${egdWorld.size}×${egdWorld.size} teselas de ${egdWorld.tileSize} m (${egdWorld.size * egdWorld.tileSize} m). Altura en pasos de 0,5 m. Shift+clic: coger tesela.`;
+  const set = (id, v) => { const el = document.querySelector(id); if (el) { if (el.type === 'checkbox') el.checked = !!v; else el.value = String(v); } };
+  set('#egdStyle', egdWorld.style || 'smooth');
+  set('#egdRound', egdWorld.round ?? 0.8);
+  set('#egdFade', egdWorld.fade ?? 1.2);
+  set('#egdGrassOn', egdWorld.grassOn !== false);
+  set('#worldTile', egdWorld.tileSize);
+  set('#worldSize', egdWorld.size);
+  const rl = document.querySelector('#egdRoundLabel'); if (rl) rl.textContent = `${(+egdWorld.round || 0).toFixed(1)} m`;
+  const fl = document.querySelector('#egdFadeLabel'); if (fl) fl.textContent = `${(+egdWorld.fade || 0).toFixed(1)} m`;
 }
-document.querySelector('#tileRound')?.addEventListener('input', syncTileLabels);
-document.querySelector('#tileRadius')?.addEventListener('input', syncTileLabels);
-document.querySelector('#applyResolutionBtn')?.addEventListener('click', () => {
-  const tile = +tileVal('#worldTile', modularState.tile);
-  const level = +tileVal('#worldLevel', modularState.level);
-  if (tileCells.size) {
-    const res = resampleModularTerrain({ ...modularState, cells: tileCells }, tile, level);
-    tileCells.clear();
-    if (res) for (const [k, c] of res.cells) tileCells.set(k, { ...c });
+for (const id of ['#tileRadius', '#tileLevel']) document.querySelector(id)?.addEventListener('input', syncTileLabels);
+document.querySelector('#egdStyle')?.addEventListener('change', (e) => { if (!egdWorld) return; egdWorld.style = e.target.value === 'blocks' ? 'blocks' : 'smooth'; scheduleRebuild(); });
+document.querySelector('#egdRound')?.addEventListener('input', (e) => { if (!egdWorld) return; egdWorld.round = +e.target.value; syncTileLabels(); scheduleRebuild(); });
+document.querySelector('#egdFade')?.addEventListener('input', (e) => { if (!egdWorld) return; egdWorld.fade = +e.target.value; syncTileLabels(); scheduleRebuild(); });
+document.querySelector('#egdGrassOn')?.addEventListener('change', (e) => { if (!egdWorld) return; egdWorld.grassOn = !!e.target.checked; scheduleRebuild(); });
+
+/** Cambia tamaño/resolución conservando el relieve (muestrea el mundo anterior). */
+function resampleEgdWorld(src, size, tileSize) {
+  const dst = egdNewWorld(size, tileSize);
+  for (const k of Object.keys(src)) if (!['size', 'tileSize', 'tiles', 'grass'].includes(k)) dst[k] = src[k];
+  const step = EGD_HEIGHT_STEP;
+  for (let iz = 0; iz < size; iz++) {
+    for (let ix = 0; ix < size; ix++) {
+      const [x, z] = egdTileCenter(dst, ix, iz);
+      const { ix: sx, iz: sz } = egdTileIndexAt(src, x, z);
+      const t = egdTile(src, sx, sz);
+      if (!t) { dst.tiles[iz * size + ix] = egdMakeTile('water', -1); continue; }
+      const copy = { ...t };
+      if (tileSize !== src.tileSize && t.m === 'ramp') {
+        // La rampa se convierte en escalón a la altura real de ese punto.
+        copy.m = 'block';
+        copy.h = Math.round(egdTileHeightAt(src, x, z) / step);
+      }
+      dst.tiles[iz * size + ix] = copy;
+    }
   }
-  modularState.tile = tile;
-  modularState.level = level;
-  syncWorldModular();
+  return dst;
+}
+document.querySelector('#applyResolutionBtn')?.addEventListener('click', () => {
+  if (!egdWorld) return;
+  const tileSize = Math.max(1, +tileVal('#worldTile', egdWorld.tileSize) || 2);
+  const size = Math.max(8, Math.min(320, Math.round(+tileVal('#worldSize', egdWorld.size) || 32)));
+  egdWorld = resampleEgdWorld(egdWorld, size, tileSize);
   rebuildTileGridPlane();
-  repositionPlacedToTerrain();
   scheduleRebuild();
   syncTileLabels();
-  document.querySelector('#status').textContent = `Resolución: teselas de ${tile} m, nivel ${level} m (${tileCells.size} teselas)`;
+  document.querySelector('#status').textContent = `Mundo: ${size}×${size} teselas de ${tileSize} m`;
+});
+document.querySelector('#egdGenerateBtn')?.addEventListener('click', () => {
+  if (!egdWorld) return;
+  const kind = tileVal('#egdGenKind', 'island');
+  const seed = Math.round(+tileVal('#egdGenSeed', 1) || 1);
+  egdGenerate(egdWorld, kind, seed);
+  scheduleRebuild();
+  document.querySelector('#status').textContent = `Terreno generado: ${EGD_GENERATORS[kind] || kind} (semilla ${seed})`;
 });
 
 // ---------------------------------------------------------------------------
-// Importar mapas antiguos (heightfield/procedural) a teselas
+// Importar mapas de OpenNite anteriores (procedurales o de teselas) a egd-map
 // ---------------------------------------------------------------------------
-function convertLegacyToTiles(norm) {
-  const tile = norm.terrain.heights.size ? 2 : 4;
-  const level = modularState.level;
-  const waterY = Number.isFinite(norm.waterLevel) ? norm.waterLevel : 0;
-  const baseY = waterY + 0.5;
-  Object.assign(modularState, { tile, level, baseY, outside: 'sea' });
-  world.modular = null;
+const MODULAR_TO_EGD = { grass: 'grass', path: 'dirt', cobble: 'stone', sand: 'sand', stone: 'stone', rock: 'stone' };
+function convertToEgd(norm) {
+  const ts = norm.modular ? Math.max(1, Math.round(norm.modular.tile / 2) * 2 || 2) : 2;
+  const size = Math.max(16, Math.min(320, Math.round((norm.size || 360) / ts)));
+  const w = egdNewWorld(size, ts);
+  w.name = norm.name;
+  // El World del editor tiene ahora el terreno del mapa antiguo: se muestrea.
+  world._setEgdWorld(null);
+  world._applyCustomTerrainData(norm);
   world._hCache = new Map();
-  const half = Math.min(world.half, (norm.size || 360) / 2);
-  const roadTiles = new Map();
-  for (const p of norm.pieces) {
-    if (p.type === 'road' || p.type === 'path') roadTiles.set(modularKey(modularIndex(p.x, tile), modularIndex(p.z, tile)), p.type === 'road' ? 'stone' : 'path');
-  }
-  tileCells.clear();
-  // 1) Muestreo: media de 5 puntos por tesela (evita teselas sueltas por ruido).
-  const g0 = modularIndex(-half, tile), g1 = modularIndex(half, tile);
-  const q = tile * 0.3;
-  const raw = new Map();
-  for (let gz = g0; gz <= g1; gz++) {
-    for (let gx = g0; gx <= g1; gx++) {
-      const x = gx * tile, z = gz * tile;
-      const hs = [world.heightAt(x, z), world.heightAt(x - q, z - q), world.heightAt(x + q, z - q), world.heightAt(x + q, z + q), world.heightAt(x - q, z + q)].filter(Number.isFinite);
-      if (!hs.length) continue;
-      const h = hs.reduce((a, b) => a + b, 0) / hs.length;
-      if (h < waterY - 0.6) continue;
-      raw.set(modularKey(gx, gz), { gx, gz, h, lvl: Math.max(0, Math.round((h - baseY) / level)) });
-    }
-  }
-  // 2) Filtro de mediana 3x3 (dos pasadas): limpia picos y hoyos de una tesela.
-  for (let pass = 0; pass < 2; pass++) {
-    const next = new Map();
-    for (const [k, c] of raw) {
-      const vals = [];
-      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-        const n = raw.get(modularKey(c.gx + dx, c.gz + dz));
-        vals.push(n ? n.lvl : 0);
+  const wl = Number.isFinite(norm.waterLevel) && norm.waterLevel > -20 ? norm.waterLevel : null;
+  const step = EGD_HEIGHT_STEP;
+  for (let iz = 0; iz < size; iz++) {
+    for (let ix = 0; ix < size; ix++) {
+      const [x, z] = egdTileCenter(w, ix, iz);
+      const y = world.heightAt(x, z);
+      const cell = norm.modular ? modularCellAt(norm.modular, x, z) : null;
+      let t;
+      if (wl !== null && y < wl - 0.2) t = egdMakeTile('water', Math.round((wl + 0.15) / step));
+      else {
+        const h = Math.max(EGD_MIN_HEIGHT, Math.min(EGD_MAX_HEIGHT, Math.round(y / step)));
+        let type = cell ? (MODULAR_TO_EGD[cell.surface] || cell.surface) : null;
+        if (!EGD_TILE_TYPES[type]) type = (wl !== null && y < wl + 1.2) ? 'sand' : (h >= 28 ? 'stone' : 'grass');
+        t = egdMakeTile(type, h);
       }
-      vals.sort((a, b) => a - b);
-      next.set(k, vals[4]);
+      w.tiles[iz * size + ix] = t;
     }
-    for (const [k, v] of next) raw.get(k).lvl = v;
   }
-  for (const [k, c] of raw) {
-    const surface = roadTiles.get(k) || (c.h < waterY + 1.6 ? 'sand' : 'grass');
-    tileCells.set(k, { gx: c.gx, gz: c.gz, level: c.lvl, surface, shape: 'flat', dir: 0, edge: 'cliff', round: 0 });
-  }
-  // 3) Laderas suaves: un escalón de 1 nivel con pendiente original baja pasa a rampa;
-  //    las pendientes fuertes se quedan como acantilado (estilo terrazas).
-  for (const c of tileCells.values()) {
-    const src = raw.get(modularKey(c.gx, c.gz));
-    let best = -1, bestSlope = Infinity;
-    for (let d = 0; d < 4; d++) {
-      const [dx, dz] = MODULAR_DIRS[d];
-      const up = tileCells.get(modularKey(c.gx + dx, c.gz + dz));
-      const down = tileCells.get(modularKey(c.gx - dx, c.gz - dz));
-      if (!up || up.level !== c.level + 1 || up.shape !== 'flat') continue;
-      if (down && down.level > c.level) continue;
-      const upSrc = raw.get(modularKey(up.gx, up.gz));
-      const slope = Math.abs(upSrc.h - src.h) / tile;
-      if (slope < bestSlope) { bestSlope = slope; best = d; }
-    }
-    if (best >= 0 && bestSlope < 0.32) { c.shape = 'ramp'; c.dir = best; }
-  }
-  // Las carreteras/caminos pasan a ser superficie de tesela.
-  for (let i = placed.length - 1; i >= 0; i--) if (placed[i].type === 'road' || placed[i].type === 'path') placed.splice(i, 1);
-  heightOverrides.clear();
-  cellSmooth.clear();
+  world._applyCustomTerrainData({});
+  return w;
 }
 
-/** Mundo vacío inicial: isla de teselas de hierba con playa. */
-function makeStarterTiles() {
-  Object.assign(modularState, { tile: 4, level: 1.25, baseY: (world.waterLevel ?? 0) + 0.5, outside: 'sea' });
-  tileCells.clear();
-  for (let gz = -8; gz <= 8; gz++) for (let gx = -8; gx <= 8; gx++) {
-    const d = Math.max(Math.abs(gx), Math.abs(gz));
-    tileCells.set(modularKey(gx, gz), { gx, gz, level: d >= 8 ? 0 : 1, surface: d >= 8 ? 'sand' : 'grass', shape: 'flat', dir: 0, edge: 'cliff', round: 0 });
-  }
+/** Mundo nuevo: isla generada como en EGD. */
+function makeStarterWorld() {
+  const w = egdNewWorld(48, 2);
+  w.name = 'Mapa nuevo';
+  egdGenerate(w, 'island', 7);
+  return w;
 }
+
 
 let rebuildTimer = null;
 let rebuildChain = Promise.resolve();
@@ -1166,6 +1171,7 @@ function getDecorConfig(type) {
 }
 function isDecorType(type) {
   if (!type) return false;
+  if (type.startsWith('egd:') || type === 'egd_object') return false;
   const structures = new Set(['house','cabin','tower','container','wall','wall_corner','column','wall_door','wall_window','floor','roof','stairs','road','path','chest','weapon_spawn','spawn','loot_spawn']);
   if (structures.has(type)) return false;
   return DECOR_MODEL_TYPES.has(type) || /^(tree_|rock|grass|bush|plant|flower|prop|crate|barrel|lamp|bench|fence|debris|rubble)/.test(type) || true;
@@ -1270,6 +1276,35 @@ modelFileInput?.addEventListener('change', async (e) => {
   await saveDecorModelConfig();
 });
 
+// Paleta de Easy Game Developer: sus decorados, piezas modulares y conjuntos.
+// Las piezas de OpenNite que EGD no conoce se ocultan (cofres y armas siguen).
+(() => {
+  const pal = document.querySelector('#piecePalette');
+  if (!pal) return;
+  for (const b of pal.querySelectorAll('button')) {
+    b.classList.remove('active');
+    if (!['chest', 'weapon_spawn'].includes(b.dataset.piece)) b.style.display = 'none';
+  }
+  const add = (piece, label) => {
+    const b = document.createElement('button');
+    b.dataset.piece = piece;
+    b.textContent = label;
+    pal.appendChild(b);
+    return b;
+  };
+  const first = add('egd:preset:house', EGD_PRESETS.house.name);
+  first.classList.add('active');
+  add('egd:preset:house2', EGD_PRESETS.house2.name);
+  add('egd:preset:tower', EGD_PRESETS.tower.name);
+  for (const [k, v] of Object.entries(EGD_BUILD_PIECES)) add('egd:build:' + k, v.name);
+  for (const [k, v] of Object.entries(EGD_PROPS)) if (k !== 'chest') add('egd:prop:' + k, v.name);
+  selectedPiece = 'egd:preset:house';
+  const mat = document.querySelector('#egdMaterial');
+  if (mat) for (const [k, v] of Object.entries(EGD_BUILD_MATERIALS)) {
+    const o = document.createElement('option'); o.value = k; o.textContent = v.name; mat.appendChild(o);
+  }
+  if (mat) mat.value = 'plaster';
+})();
 const palette = document.querySelectorAll('#piecePalette button');
 palette.forEach(b => b.addEventListener('click', () => {
   palette.forEach(x => x.classList.remove('active'));
@@ -1580,7 +1615,42 @@ function snapWallPlacement(x, z, type, rot) {
   return { x: snap(best.x, 1), z: snap(best.z, 1), rot: best.rot };
 }
 
+/** Coloca objetos de EGD con la misma rejilla de construcción que el motor (celdas de 4 m). */
+function placeEgdAt(x, z) {
+  const [, kind, name] = selectedPiece.split(':');
+  const deg = Math.round(((rotY * 180 / Math.PI) % 360 + 360) % 360);
+  const material = tileVal('#egdMaterial', 'plaster');
+  const newEnt = (e) => ({ id: 'ent_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-3), scripts: [], props: { health: 0 }, color: '#c8c8c8', scale: [1, 1, 1], ...e });
+  const push = (e) => {
+    const ent = newEnt(e);
+    placed.push({ type: 'egd_object', x: ent.position[0], y: ent.position[1], z: ent.position[2], rot: (ent.rotation?.[1] || 0) * Math.PI / 180, egd: ent });
+  };
+  const cell = (v) => Math.floor(v / 4) * 4 + 2;
+  let n = 0;
+  if (kind === 'preset') {
+    const cx = cell(x), cz = cell(z);
+    const list = EGD_PRESETS[name].build(cx, editorHeightAt(cx, cz), cz, { rot: deg, wall: material, roof: 'tile' });
+    for (const e of list) { push(e); n++; }
+  } else if (kind === 'build') {
+    let px = cell(x), pz = cell(z), rot = deg;
+    if (/^(wall|wallDoor|wallWindow|halfWall)$/.test(name)) {
+      // Muros en el borde de celda más cercano al cursor.
+      const dx = x - px, dz = z - pz;
+      if (Math.abs(dx) > Math.abs(dz)) { px += Math.sign(dx) * 2; rot = 90; } else { pz += Math.sign(dz) * 2; rot = 0; }
+    } else if (name === 'pillar') { px = Math.round(x / 4) * 4; pz = Math.round(z / 4) * 4; }
+    push({ type: 'build', piece: name, material, breakable: true, name: EGD_BUILD_PIECES[name]?.name || name, position: [px, editorHeightAt(px, pz), pz], rotation: [0, rot, 0] });
+    n = 1;
+  } else {
+    const px = Math.round(x * 2) / 2, pz = Math.round(z * 2) / 2;
+    push({ type: 'prop', prop: name, name: EGD_PROPS[name]?.name || name, position: [px, editorHeightAt(px, pz), pz], rotation: [0, deg, 0] });
+    n = 1;
+  }
+  scheduleRebuild();
+  document.querySelector('#status').textContent = `Colocado: ${name} (${n} pieza${n > 1 ? 's' : ''})`;
+}
+
 function placePieceAt(x, z) {
+  if (selectedPiece.startsWith('egd:')) return placeEgdAt(x, z);
   const isRoad = selectedPiece === 'road' || selectedPiece === 'path';
   const gs = isRoad ? ROAD_CELL_SIZE : GRID_SIZE;
   const preX = x, preZ = z;
@@ -1853,7 +1923,9 @@ window.addEventListener('pointerup', (e) => {
   }
   painting = false;
   // Al soltar, aplica el pincel definitivo (preview sostenido sobre grid).
-  const upHit = getGroundHit(e);
+  // Solo las teselas terminan el trazo al soltar; colocar piezas ya ocurre al pulsar
+  // (si no, cada clic colocaba la pieza dos veces).
+  const upHit = (mode === 'tiles' && tileStrokeActive) ? getGroundHit(e) : null;
   if (upHit) applyAt(upHit, e.shiftKey);
   tileStrokeActive = false;
 });
@@ -1947,10 +2019,10 @@ async function loadCustomMap(dataOverride = null) {
     baseCustomData = {};
     placed.length = 0;
     selected.clear();
-    makeStarterTiles();
+    egdWorld = makeStarterWorld();
+    egdExtra = [];
     rebuildTileGridPlane();
     syncTileLabels();
-    syncWorldModular();
     await rebuildNow();
     document.querySelector('#status').textContent = 'Mundo nuevo: isla de teselas inicial';
     return;
@@ -1986,25 +2058,36 @@ async function loadCustomMap(dataOverride = null) {
     waterVegCells.set(k, w.veg);
   }
 
-  // Terreno modular (teselas) y nivel del agua: los mismos valores que usa el juego.
-  tileCells.clear();
+  // Terreno: el mundo de Easy Game Developer (egd-map). Los mapas anteriores
+  // de OpenNite se importan a ese formato al abrirlos.
   let converted = false;
-  if (norm.modular) {
-    Object.assign(modularState, { tile: norm.modular.tile, level: norm.modular.level, baseY: norm.modular.baseY, outside: norm.modular.outside });
-    for (const [k, c] of norm.modular.cells) tileCells.set(k, { ...c });
-  } else if (data && (norm.terrain.heights.size || norm.pieces.length || norm.raw?.biome)) {
-    // Mapa antiguo: su relieve se importa a teselas (el editor solo edita teselas).
+  if (norm.egd) {
+    egdWorld = JSON.parse(JSON.stringify(norm.egd.world));
+    egdExtra = norm.egd.extraEntities || [];
+  } else if (data && (norm.modular || norm.terrain.heights.size || norm.pieces.length || norm.raw?.biome)) {
     if (Number.isFinite(norm.waterLevel)) world.setWaterLevelNow?.(norm.waterLevel);
-    convertLegacyToTiles(norm);
+    egdWorld = convertToEgd(norm);
+    egdExtra = [];
+    // Carreteras y caminos de teselas pasan a ser el tipo de la tesela.
+    for (let i = placed.length - 1; i >= 0; i--) {
+      const p = placed[i];
+      if (p.type !== 'road' && p.type !== 'path') continue;
+      const { ix, iz } = egdTileIndexAt(egdWorld, p.x, p.z);
+      const t = egdTile(egdWorld, ix, iz);
+      if (t && !['water', 'lava'].includes(t.t)) t.t = p.type === 'road' ? 'stone' : 'dirt';
+      placed.splice(i, 1);
+    }
+    heightOverrides.clear();
+    cellSmooth.clear();
     converted = true;
   } else {
-    makeStarterTiles();
+    egdWorld = makeStarterWorld();
+    egdExtra = [];
   }
+  waterCells.clear();
+  waterVegCells.clear();
   rebuildTileGridPlane();
   syncTileLabels();
-  const outsideEl = document.querySelector('#tileOutside');
-  if (outsideEl) outsideEl.value = modularState.outside;
-  syncWorldModular();
   if (Number.isFinite(norm.waterLevel)) {
     world.setWaterLevelNow?.(norm.waterLevel);
     if (waterLevelInput) waterLevelInput.value = snapH(norm.waterLevel);
@@ -2023,8 +2106,8 @@ async function loadCustomMap(dataOverride = null) {
   await rebuildNow();
   refreshWindGizmos();
   document.querySelector('#status').textContent = converted
-    ? `Mapa antiguo importado a ${tileCells.size} teselas (guárdalo para conservar la conversión)`
-    : `Cargadas ${placed.length} piezas, ${tileCells.size} teselas, ${winds.length} vientos`;
+    ? `Mapa anterior importado a egd-map: ${egdWorld.size}×${egdWorld.size} teselas (guárdalo para conservar la conversión)`
+    : `Cargado: ${egdWorld.size}×${egdWorld.size} teselas, ${placed.length} objetos, ${egdExtra.length} entidades solo de EGD`;
 }
 document.querySelector('#waterVegetation')?.addEventListener('change', scheduleRebuild);
 // Arranca en modo Teselas con su panel visible.
@@ -2062,16 +2145,19 @@ function buildSavePayload() {
     // El terreno antiguo por celdas ya no se edita ni se guarda: solo teselas.
     terrain: { cell: TERRAIN_CELL, heights: [] },
     waterVegetation: +globalVeg.toFixed(2),
-    waterCells: waterCellsArr,
+    // Con terreno de EGD el agua sale de sus teselas (World la calcula igual que el juego).
+    waterCells: egdWorld ? [] : waterCellsArr,
     winds: winds.map(w => ({ ...w })),
-    // Mismo nivel de agua que se ve en el editor (antes el juego usaba otro).
-    waterLevel: snapH(Number.isFinite(world.waterLevelTarget) ? world.waterLevelTarget : (world.waterLevel ?? 0)),
-    modular: modularPayload(),
+    // Mismo nivel de agua que el juego: en egd-map, el del mar de su borde.
+    waterLevel: egdWorld ? (egdSeaLevel(egdWorld) ?? -100) : snapH(Number.isFinite(world.waterLevelTarget) ? world.waterLevelTarget : (world.waterLevel ?? 0)),
+    // Terreno de Easy Game Developer: el agua sale de sus teselas de agua.
+    egd: egdPayload(),
   };
 }
 
 document.querySelector('#saveMap').onclick = async () => {
-  const payload = JSON.stringify(buildSavePayload(), null, 2);
+  // Se guarda en formato egd-map: el mismo archivo que abre Easy Game Developer.
+  const payload = JSON.stringify(openNiteToEgdMap(buildSavePayload()), null, 2);
   document.querySelector('#mapText').value = payload;
   const mapId = (baseCustomData.id && baseCustomData.id !== 'custom-map') ? String(baseCustomData.id).replace(/[^a-z0-9_-]/gi, '') : 'custom-map';
   const fileName = `${mapId || 'custom-map'}.json`;
@@ -2086,7 +2172,7 @@ document.querySelector('#saveMap').onclick = async () => {
     a.download = fileName;
     a.click();
   }
-  document.querySelector('#status').textContent = `Guardado ${fileName}: ${placed.length} piezas, ${heightOverrides.size} celdas terreno, ${tileCells.size} teselas`;
+  document.querySelector('#status').textContent = `Guardado ${fileName} (egd-map): ${egdWorld?.size}×${egdWorld?.size} teselas, ${placed.length} objetos`;
 };
 
 document.querySelector('#loadMap').onclick = async () => {
@@ -2109,8 +2195,7 @@ document.querySelector('#clearMap').onclick = () => {
   document.querySelector('#status').textContent = 'Piezas limpiadas';
 };
 document.querySelector('#clearTerrain').onclick = () => {
-  tileCells.clear();
-  syncWorldModular();
+  if (egdWorld) { egdWorld.tiles = egdWorld.tiles.map(() => egdMakeTile('grass', 0)); delete egdWorld.grass; }
   heightOverrides.clear();
   clearWaterPatches();
   repositionPlacedToTerrain();
