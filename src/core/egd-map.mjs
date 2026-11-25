@@ -91,6 +91,8 @@ export function egdEntityToPiece(e) {
   // Jugabilidad de OpenNite: cofres y recogibles pasan a cofres/puntos de arma.
   if (e.type === 'prop' && e.prop === 'chest') type = 'chest';
   else if (e.type === 'pickup') type = 'weapon_spawn';
+  // Punto de aparición del modo entrenamiento.
+  else if (e.type === 'spawn') type = 'spawn';
   // El resto de objetos visibles se dibuja con el mismo código que EGD.
   else if (['build', 'prop', 'primitive', 'composite'].includes(e.type)) type = 'egd_object';
   if (!type) return null;

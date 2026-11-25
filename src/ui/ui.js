@@ -35,7 +35,22 @@ export class UI {
     this.setScreen('menu', { version: this.app.version });
   }
 
+  /** Relee el índice de mapas (p. ej. tras guardar en el editor) y repinta. */
+  refreshMaps() {
+    return this.maps.reloadIndex?.().then(async () => {
+      // El editor de mapas marca en la configuración el último mapa guardado.
+      try {
+        const disk = await window.opennite?.settings?.get?.();
+        if (disk?.mapId && disk.mapId !== this.settings.get('mapId') && this.maps.get(disk.mapId)) this.settings.set('mapId', disk.mapId);
+      } catch { /* sin Electron */ }
+      const saved = this.settings.get('mapId');
+      if (saved && this.maps.get(saved)) this.selectedMap = saved;
+      bumpUi();
+    }).catch(() => {});
+  }
+
   showLobby() {
+    this.refreshMaps();
     const maps = this.maps.list();
     if (!maps.some((m) => m.id === this.selectedMap)) {
       this.selectedMap = maps[0]?.id || 'san-borondon';
@@ -49,6 +64,7 @@ export class UI {
   }
 
   showMaps(back = 'menu') {
+    this.refreshMaps();
     this.setScreen('maps', { back });
   }
 

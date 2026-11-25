@@ -14,14 +14,25 @@ export class MapManager {
 
   get api() { return window.opennite?.maps; }
 
-  async init() {
+  /**
+   * Vuelve a leer el índice de mapas del juego (sin caché). Así un mapa que se
+   * acaba de guardar desde el editor aparece sin reiniciar el juego.
+   */
+  async reloadIndex() {
     try {
-      const res = await fetch('./maps/index.json');
+      const res = await fetch(`./maps/index.json?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this.bundledIndex = await res.json();
     } catch (error) {
       console.warn('No se pudo leer el índice de mapas incluido:', error);
-      this.bundledIndex = { maps: [], baseUrl: '' };
+      this.bundledIndex ??= { maps: [], baseUrl: '' };
     }
+    this.refresh();
+    return this.list();
+  }
+
+  async init() {
+    await this.reloadIndex();
 
     try {
       let list = this.api ? await this.api.list() : JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
@@ -94,7 +105,7 @@ export class MapManager {
 
     let data = null;
     try {
-      const res = await fetch(`./maps/${id}.json`);
+      const res = await fetch(`./maps/${entry?.file || id + '.json'}?t=${Date.now()}`, { cache: 'no-store' });
       if (res.ok && /json/i.test(res.headers.get('content-type') || '')) data = await res.json();
     } catch { /* se intenta la copia instalada a continuación */ }
     if (data) {

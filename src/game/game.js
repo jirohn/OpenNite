@@ -529,7 +529,9 @@ export class Game {
       this.player.gliding = false;
       this.player.character.group.visible = true;
       const ps = spots[0] || { x: 0, y: 0, z: 34 };
-      this.player.position.set(ps.x, 0, ps.z);
+      // Sobre el suelo del mapa (los mapas de teselas no están a altura 0).
+      const groundY = this.world.surfaceHeightAt?.(ps.x, ps.z) ?? this.world.heightAt?.(ps.x, ps.z);
+      this.player.position.set(ps.x, Number.isFinite(groundY) ? Math.max(groundY, ps.y || 0) : (ps.y || 0), ps.z);
       this.player.velocity.set(0, 0, 0);
       this.player.yaw = Math.PI;
       this.player.pitch = 0;

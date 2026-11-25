@@ -383,7 +383,13 @@ class EditorApp {
           try {
             const res = await fetch('/maps/' + m.file + '?t=' + Date.now());
             const raw = await res.json();
-            if (this.openMapData(raw, m.name)) modal?.close();
+            if (this.openMapData(raw, m.name)) {
+              // Guardar sobrescribe este mismo mapa del juego (mismo id y archivo).
+              this.project.opennite = { ...(this.project.opennite || {}), id: m.id };
+              this.snapshot = JSON.stringify(this.project);
+              this.setDirty(false);
+              modal?.close();
+            }
           } catch (e) { alert('No se pudo abrir: ' + e.message); }
         },
       }, egdEl('span', { class: 'li-label' }, m.name || m.id), egdEl('small', {}, m.file)));
@@ -434,8 +440,13 @@ class EditorApp {
       for (const dir of ['public/maps', 'dist/maps']) { try { await write(`${dir}/index.json`, out); } catch {} }
     } catch (e) { this.log('No se pudo actualizar el índice de mapas: ' + e.message, 'warn'); }
     if (!ok) { this.download(fileName, json); return; }
+    // El juego abrirá este mapa (partida y entrenamiento) la próxima vez.
+    try {
+      const s = await window.opennite?.settings?.get?.();
+      await window.opennite?.settings?.set?.({ ...(s || {}), mapId: id });
+    } catch {}
     this.setDirty(false);
-    this.toast('Mapa guardado: ' + fileName);
+    this.toast('Mapa guardado en el juego: ' + file.name);
     this.log(`Guardado ${fileName}: ${file.world.size}×${file.world.size} teselas, ${file.entities.length} objetos, ${file.opennite.winds.length} vientos`);
   }
 

@@ -102,6 +102,7 @@ class AppController {
   }
 
   async startMatch(mapId) {
+    await this.maps.reloadIndex?.();
     const id = this.resolveMapId(mapId || settings.get('mapId'));
     this.setLoading(5, 'Cargando mapa...');
     try {
@@ -122,6 +123,7 @@ class AppController {
   }
 
   async startTraining() {
+    await this.maps.reloadIndex?.();
     this.setLoading(5, 'Cargando entrenamiento en la isla...');
     try {
       const id = this.resolveMapId(settings.get('mapId'));
