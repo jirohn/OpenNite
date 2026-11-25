@@ -2666,6 +2666,7 @@ transformed.y *= rise;`);
       }
       group.add(g);
     }
+    this._mergeStaticEgdObjects(group, pieceGroups, pieces);
     this.root.add(group);
     const result = { root: group, list: pieceGroups };
     this.customPieceGroup = result;
@@ -4058,6 +4059,7 @@ transformed.y *= rise;`);
 
   tick(dt) {
     this.debug?.update(dt);
+    this._patchEgdReflector();
     this._updateBubbles(dt);
     this._updateWaterfallFoam(dt);
     this._updateSplashDrops(dt);
@@ -5642,6 +5644,109 @@ transformed.y *= rise;`);
       o.castShadow = o.castShadow && !!this.settings.get('shadows');
     });
     console.info('[World] egd terrain:', { size: this.egdWorld.size, tileSize: this.egdWorld.tileSize, style: this.egdWorld.style, meshes: this.egdTerrain.meshes.length });
+  }
+
+  /**
+   * Junta las mallas estáticas de los objetos de EGD en pocas mallas por zona y
+   * material. Un mapa de EGD tiene cientos de piezas (muros, ventanas, tejas,
+   * árboles) y cada una era una llamada de dibujo, dos veces por frame (escena y
+   * reflejo del agua): ~1.400 llamadas, demasiado para GPUs modestas. Se ve igual;
+   * las colisiones ya están creadas como cajas aparte.
+   */
+  /**
+   * El reflejo del agua de EGD vuelve a dibujar toda la escena. La vida marina
+   * está bajo el agua y no sale en el reflejo, pero sus ~400.000 triángulos se
+   * procesaban igual, así que se oculta durante ese pase. Además, si el reflejo se
+   * dispara dentro de otro pase (refracción de la cúpula), se reutiliza el último.
+   */
+  _patchEgdReflector() {
+    const water = this.egdTerrain?.water;
+    const refl = water?.reflector;
+    if (!refl || refl.userData.openNitePatched) return;
+    refl.userData.openNitePatched = true;
+    const orig = refl.onBeforeRender;
+    const hide = () => [water.marine?.group].filter(Boolean);
+    refl.onBeforeRender = (renderer, scene, camera, ...rest) => {
+      if (this.skipEgdReflection) return;
+      const list = hide();
+      const prev = list.map((o) => o.visible);
+      for (const o of list) o.visible = false;
+      try { orig.call(refl, renderer, scene, camera, ...rest); }
+      finally { list.forEach((o, i) => { o.visible = prev[i]; }); }
+    };
+  }
+
+  _mergeStaticEgdObjects(group, pieceGroups, pieces) {
+    const CHUNK = 32;
+    const buckets = new Map();
+    const inv = new THREE.Matrix4();
+    group.updateMatrixWorld(true);
+    inv.copy(group.matrixWorld).invert();
+    const victims = [];
+    // Cada objeto crea sus propios materiales aunque sean iguales: se agrupan por
+    // su aspecto (tipo, colores, texturas, opciones) y no por instancia.
+    const texId = (t) => (t ? t.uuid : '');
+    const col = (c) => (c?.isColor ? c.getHexString() : '');
+    const matSig = (mt) => [mt.type, col(mt.color), col(mt.emissive), mt.emissiveIntensity, texId(mt.map), texId(mt.gradientMap),
+      texId(mt.normalMap), texId(mt.alphaMap), texId(mt.emissiveMap), mt.side, mt.vertexColors ? 1 : 0, mt.flatShading ? 1 : 0,
+      mt.opacity, mt.alphaTest, mt.depthWrite ? 1 : 0, mt.fog ? 1 : 0, mt.wireframe ? 1 : 0, mt.roughness, mt.metalness,
+      mt.defines ? JSON.stringify(mt.defines) : '', mt.onBeforeCompile && mt.onBeforeCompile !== THREE.Material.prototype.onBeforeCompile ? mt.uuid : ''].join(';');
+    for (let i = 0; i < pieceGroups.length; i++) {
+      if (pieces[i]?.type !== 'egd_object') continue;
+      pieceGroups[i].traverse((m) => {
+        if (!m.isMesh || m.isSkinnedMesh || m.isInstancedMesh || Array.isArray(m.material)) return;
+        const mat = m.material;
+        if (!mat || mat.transparent || m.userData.noMerge || m.onBeforeRender !== THREE.Object3D.prototype.onBeforeRender) return;
+        let hidden = false;
+        for (let n = m; n && n !== group; n = n.parent) if (!n.visible) { hidden = true; break; }
+        if (hidden) return;
+        const geo = m.geometry;
+        if (!geo?.attributes?.position || geo.morphAttributes?.position?.length) return;
+        const sig = Object.keys(geo.attributes).sort().map((k) => k + geo.attributes[k].itemSize).join(',') + (geo.index ? '|i' : '|n');
+        const mtx = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
+        const c = new THREE.Vector3().setFromMatrixPosition(mtx);
+        const key = `${Math.floor(c.x / CHUNK)},${Math.floor(c.z / CHUNK)}|${matSig(mat)}|${sig}|${m.castShadow ? 1 : 0}${m.receiveShadow ? 1 : 0}`;
+        let b = buckets.get(key);
+        if (!b) buckets.set(key, b = { mat, cast: m.castShadow, recv: m.receiveShadow, items: [] });
+        b.items.push({ m, mtx });
+      });
+    }
+    let merged = 0, removed = 0;
+    for (const b of buckets.values()) {
+      if (b.items.length < 2) continue;
+      const geos = b.items.map(({ m, mtx }) => {
+        const g = m.geometry.clone();
+        g.applyMatrix4(mtx);
+        for (const k of Object.keys(g.morphAttributes || {})) delete g.morphAttributes[k];
+        // Los grupos de material no se usan (material único) y romperían la unión.
+        g.clearGroups();
+        return g;
+      });
+      let geo = null;
+      try { geo = mergeGeometries(geos, false); } catch { geo = null; }
+      for (const g of geos) g.dispose();
+      if (!geo) continue;
+      geo.computeBoundingSphere();
+      // La malla se sitúa en el centro de su zona para que la distancia de detalle
+      // (updateDetailVisibility usa la posición de cada hijo) siga funcionando.
+      const center = geo.boundingSphere.center.clone();
+      geo.translate(-center.x, -center.y, -center.z);
+      geo.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geo, b.mat);
+      mesh.name = 'egd-static-merged';
+      mesh.position.copy(center);
+      mesh.castShadow = b.cast;
+      mesh.receiveShadow = b.recv;
+      mesh.matrixAutoUpdate = false;
+      mesh.updateMatrix();
+      group.add(mesh);
+      this.disposables?.push?.(geo);
+      for (const { m } of b.items) victims.push(m);
+      merged++;
+      removed += b.items.length;
+    }
+    for (const m of victims) m.removeFromParent();
+    if (merged) console.info('[World] egd objects merged:', { meshes: removed, into: merged });
   }
 
   /**

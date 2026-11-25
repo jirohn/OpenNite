@@ -942,9 +942,12 @@ export class Game {
     try {
       this.world.setWaterVisible?.(false);
       if (storm) storm.mesh.visible = false;
+      // El reflejo del agua de EGD ya se calcula en el pase principal.
+      this.world.skipEgdReflection = true;
       this.renderer.setRenderTarget(this.refractionTarget);
       this.renderer.render(this.scene, this.camera);
     } finally {
+      this.world.skipEgdReflection = false;
       this.renderer.setRenderTarget(null);
       this.world.setWaterVisible?.(true);
       if (storm) storm.mesh.visible = stormWasVisible;
