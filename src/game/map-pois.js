@@ -28,6 +28,7 @@ export function isSafeLand(world, x, z, ring = 3.5, margin = 0.6) {
     if (!isLand(world, px, pz)) return false;
     const g = world.surfaceHeightAt?.(px, pz) ?? world.heightAt(px, pz);
     const w = world.waterYAt?.(px, pz);
+    if (world.lavaDamageAt?.({ x: px, y: g, z: pz }) > 0) return false;
     const sea = Number.isFinite(world.waterLevel) && world.waterLevel > -50 ? world.waterLevel : -Infinity;
     const top = Math.max(Number.isFinite(w) ? w : -Infinity, sea);
     return !(top > -50 && g < top + margin);

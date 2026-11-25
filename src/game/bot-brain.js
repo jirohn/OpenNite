@@ -1048,6 +1048,8 @@ export class BotBrain {
       const g = world.surfaceHeightAt?.(x, z) ?? world.heightAt(x, z);
       const w = world.waterYAt?.(x, z) ?? -100;
       if (w > -20 && g < w - 0.55 && !b.swimming) return 'water';
+      // Lava: nunca se pisa a propósito.
+      if (world.lavaDamageAt?.({ x, y: g, z }) > 0) return 'blocked';
       const rise = g - y;
       if (!b.swimming) {
         if (rise > MANTLE_MAX) return 'blocked';
