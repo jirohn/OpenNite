@@ -99,6 +99,9 @@ export class BotBrain {
     this.detourYaw = null;
     this.detourUntil = 0;
     this.badSpots = [];
+    this.knownItems = new WeakSet();
+    this.visited = new Set();
+    this.scanPhase = rand(0, 6.28);
     this.spaceCd = 0;
     this.wantMove = false;
   }
@@ -134,7 +137,8 @@ export class BotBrain {
       const reach = 0.5 * Math.max(40, route.start.y - groundY) * 0.85 + 12;
       if (lateral > reach) continue;
       let crowd = 0;
-      for (const c of claims) if (distance2D(c, sp.pos) < 40) crowd++;
+      const crowdR = Math.min(40, world.half * 0.3);
+      for (const c of claims) if (distance2D(c, sp.pos) < crowdR) crowd++;
       const score = Math.random() * 0.9
         + sp.density * 0.07 * (0.4 + this.aggression)
         - crowd * (0.55 * (1 - this.aggression) + 0.12)
@@ -142,22 +146,21 @@ export class BotBrain {
       if (score > bestScore) { bestScore = score; best = sp.pos; }
     }
     if (!best) {
-      // Mapa sin botín cerca de la ruta: un punto de tierra cualquiera.
-      for (let i = 0; i < 40 && !best; i++) {
-        const along = rand(0.25, 0.85) * route.length;
-        const off = rand(-60, 60);
+      // Sin botín alcanzable: cualquier punto de tierra firme cerca de la ruta.
+      for (let i = 0; i < 200 && !best; i++) {
+        const along = rand(0.2, 0.9) * route.length;
+        const off = rand(-1, 1) * Math.min(90, world.half);
         const x = route.start.x + route.dir.x * along - route.dir.z * off;
         const z = route.start.z + route.dir.z * along + route.dir.x * off;
-        const g = world.surfaceHeightAt?.(x, z) ?? world.heightAt(x, z);
-        const w = world.waterYAt?.(x, z) ?? world.waterLevel ?? -100;
-        if (Math.abs(x) < world.half && Math.abs(z) < world.half && g > w + 0.3) best = new THREE.Vector3(x, g, z);
+        if (this.game.isLand(x, z)) best = new THREE.Vector3(x, world.surfaceHeightAt?.(x, z) ?? 0, z);
       }
-      if (!best) best = new THREE.Vector3(route.start.x + route.dir.x * route.length * 0.5, 0, route.start.z + route.dir.z * route.length * 0.5);
+      if (!best) best = new THREE.Vector3(0, 0, 0);
     }
     const chosen = best.clone();
-    // Un poco de dispersión: no todos al mismo cofre exacto.
-    chosen.x += rand(-4, 4);
-    chosen.z += rand(-4, 4);
+    // Un poco de dispersión (sin salir de tierra firme): no todos al mismo cofre exacto.
+    const jx = chosen.x + rand(-3, 3);
+    const jz = chosen.z + rand(-3, 3);
+    if (this.game.isLand(jx, jz)) { chosen.x = jx; chosen.z = jz; }
     claims.push(chosen);
     return chosen;
   }
@@ -467,12 +470,15 @@ export class BotBrain {
     }
   }
 
+  /**
+   * Mejor objeto que conoce: lo ha visto (línea de visión) o lo tiene muy cerca.
+   * Los objetos vistos se recuerdan aunque luego deje de verlos.
+   */
   _bestItem(maxDist, filter) {
     const loot = this.game.loot;
     if (!loot) return null;
     const b = this.bot.body;
-    let best = null;
-    let bestScore = 0;
+    const cands = [];
     for (const e of loot.items) {
       const d = distance2D(e.pos, b.position);
       if (d > (e.isChest ? maxDist * 0.75 : maxDist)) continue;
@@ -482,10 +488,53 @@ export class BotBrain {
       if (filter && !filter(e)) continue;
       const v = this._itemValue(e);
       if (v <= 0.05) continue;
-      const score = v / (1 + d / 18);
-      if (score > bestScore) { bestScore = score; best = e; }
+      cands.push({ e, d, score: v / (1 + d / 18) });
     }
-    return best ? { e: best, score: bestScore } : null;
+    cands.sort((p, q) => q.score - p.score);
+    let checks = 0;
+    const eye = b.eyePosition;
+    for (const c of cands) {
+      if (this.knownItems.has(c.e) || c.d < 9) return c;
+      if (checks++ >= 3) continue;
+      _probe.copy(c.e.pos);
+      _probe.y += 0.6;
+      if (this.canSee(eye, _probe, maxDist + 2)) {
+        this.knownItems.add(c.e);
+        return c;
+      }
+    }
+    return null;
+  }
+
+  /** Necesidad de equiparse (0 = bien armado, 1 = solo pistola/pico). */
+  _gearNeed() {
+    const inv = this.bot.body.inventory;
+    let best = 0;
+    let ammoOk = false;
+    for (const w of inv.slots) {
+      if (!w || w.def.melee) continue;
+      best = Math.max(best, (WEAPON_VALUE[w.type] || 1) * (1 + w.rarity * 0.15));
+      if ((inv.ammo[w.def.ammo] || 0) + w.ammo > w.def.mag) ammoOk = true;
+    }
+    if (best <= 1.2) return 1;
+    if (!ammoOk) return 0.7;
+    return best < 2.8 ? 0.45 : 0.15;
+  }
+
+  /** Casa o edificio más cercano sin registrar (dentro de la zona segura). */
+  _nextBuilding(st) {
+    const b = this.bot.body;
+    let best = null;
+    let bestD = Infinity;
+    for (const h of this.game.buildings || []) {
+      if (this.visited.has(h) || this._isBad(h.center)) continue;
+      if (st && Math.hypot(h.center.x - st.c.x, h.center.z - st.c.z) > st.r * 0.9) continue;
+      let d = distance2D(h.center, b.position);
+      // Si otro bot ya va hacia allí, prefiere otra (salvo que sea agresivo).
+      if (h._botClaim && h._botClaim.bot !== this.bot && h._botClaim.until > this.game.matchTime) d += 40 * (1 - this.aggression);
+      if (d < bestD) { bestD = d; best = h; }
+    }
+    return best;
   }
 
   _chooseGoal(storm) {
@@ -535,6 +584,13 @@ export class BotBrain {
     const item = this._bestItem(ranged ? 45 : 70);
     if (item) options.push({ type: 'loot', score: 0.2 + item.score * (0.35 + this.greed * 0.35) * (ranged ? 1 : 1.8), entity: item.e });
 
+    // Registrar casas cercanas si le falta equipo.
+    const house = this._nextBuilding(st);
+    if (house) {
+      const need = this._gearNeed();
+      options.push({ type: 'explore', score: 0.18 + need * 0.35 + this.greed * 0.08, entity: house });
+    }
+
     options.push({ type: 'roam', score: 0.16 });
 
     // Seguir con lo que estaba haciendo un poco más (no cambiar de idea cada tick).
@@ -562,6 +618,16 @@ export class BotBrain {
         break;
       }
       case 'loot': g.pos.copy(g.entity.pos); break;
+      case 'explore': {
+        const h = g.entity;
+        // Entra hasta el centro de la casa; al llegar la da por registrada.
+        g.pos.copy(h.floors.length ? h.floors[Math.floor(h.floors.length / 2)] : h.center);
+        if (distance2D(b.position, g.pos) < Math.max(2.5, Math.min(5, h.radius * 0.45))) {
+          this.visited.add(h);
+          this.thinkTimer = 0;
+        }
+        break;
+      }
       case 'hunt': g.pos.copy(this.memory.get(tgt).pos); break;
       case 'cover':
         if (!this.cover || this.time - this.coverCheckAt > 1.6) this._findCover(false);
@@ -761,7 +827,10 @@ export class BotBrain {
       this._turnYaw(yawTo(m.x - b.position.x, m.z - b.position.z), this.diff.aimSpeed * 0.7, dt);
       b.pitch += (0 - b.pitch) * Math.min(1, dt * 4);
     } else if (moveX * moveX + moveZ * moveZ > 0.01) {
-      this._turnYaw(yawTo(moveX, moveZ), 4.2, dt);
+      // Va mirando a los lados mientras camina (busca cofres, casas y enemigos).
+      const scanning = ['explore', 'roam', 'loot', 'hunt'].includes(g.type) && !this.closingIn;
+      const scan = scanning ? Math.sin(this.time * 1.1 + this.scanPhase) * 0.65 : 0;
+      this._turnYaw(yawTo(moveX, moveZ) + scan, 4.2, dt);
       b.pitch += (-0.05 - b.pitch) * Math.min(1, dt * 4);
       this.trackTime = 0;
     }

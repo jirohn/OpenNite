@@ -20,6 +20,7 @@ import { HUD } from './hud.js';
 import { WEAPONS } from './weapons.js';
 import { WorldDebug } from './debug.js';
 import { BuildingManager } from './building.js';
+import { findBuildings, ensureMatchLoot, isLand } from './map-pois.js';
 
 const DEFAULT_SKIN_CATALOG = [
   { id: '100avatars_003_jimmy', name: 'Jimmy', color: 0x1e88e5, modelPath: '/models/opennite/characters/100avatars/100Avatars_003_Jimmy.fbx', anim: 'idle' },
@@ -472,7 +473,13 @@ export class Game {
 
     this.loot = new LootManager(this.scene, this.world, this);
     await this.loot.load();
-    if (!this.training) this.loot.spawn(Math.round(78 * (config.map.lootDensity || 1)));
+    this.buildings = findBuildings(this.world);
+    this._landingSpots = null;
+    if (!this.training) {
+      // Botín garantizado: cofres en las casas y armas por tierra firme si el mapa trae poco.
+      ensureMatchLoot(this.world, this.buildings, 1 + clamp(config.bots ?? this.settings.get('maxBots'), 0, 19));
+      this.loot.spawn(Math.round(78 * (config.map.lootDensity || 1)));
+    }
     this.storm = new Storm(this.scene, this.world, this);
     this.storm.onStormEvent = (text, type) => this.hud.toast(text, type);
     this.storm.onStormFinal = () => this.hud.toast('La tormenta ha terminado', 'good');
@@ -480,7 +487,6 @@ export class Game {
     this.bots = [];
     this.noiseEvents = [];
     this._landingClaims = [];
-    this._landingSpots = null;
     const count = this.training ? 0 : clamp(config.bots ?? this.settings.get('maxBots'), 0, 19);
     const spots = this.world.spawnPoints || [];
     const botColors = [0xff5f6d, 0x4fa8ff, 0x54d17a, 0xf5b83d, 0xb07bff, 0x2fd6d0];
@@ -599,20 +605,23 @@ export class Game {
   }
 
   /** Sitios con botín (cofres, armas, objetos) y cuánto botín hay alrededor. */
+  /** Sitios en tierra firme con botín (cofres, armas, objetos, casas) y cuánto botín hay cerca. */
   getLandingSpots() {
     if (this._landingSpots) return this._landingSpots;
     const w = this.world;
-    const raw = [...(w.chestSpots || []), ...(w.weaponSpawnSpots || []), ...(w.lootSpots || [])];
-    const spots = raw.filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z)).map((p) => ({
-      pos: new THREE.Vector3(p.x, Number.isFinite(p.y) ? p.y : (w.surfaceHeightAt?.(p.x, p.z) ?? 0), p.z),
-      density: 0,
-    }));
+    const loot = [...(w.chestSpots || []), ...(w.weaponSpawnSpots || []), ...(w.lootSpots || [])];
+    const raw = [...loot, ...(this.buildings || []).map((b) => b.center)];
+    const spots = raw
+      .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.z) && isLand(w, p.x, p.z))
+      .map((p) => ({ pos: new THREE.Vector3(p.x, w.surfaceHeightAt?.(p.x, p.z) ?? 0, p.z), density: 0 }));
     for (const a of spots) {
-      for (const b of spots) if (a !== b && distance2D(a.pos, b.pos) < 30) a.density++;
+      for (const q of loot) if (Math.hypot(q.x - a.pos.x, q.z - a.pos.z) < 30) a.density++;
     }
     this._landingSpots = spots;
     return spots;
   }
+
+  isLand(x, z) { return isLand(this.world, x, z); }
 
   createBus() {
     const group = new THREE.Group();
