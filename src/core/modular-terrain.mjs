@@ -13,13 +13,16 @@
  * Formato JSON dentro del mapa:
  *   "modular": {
  *     "tile": 4, "level": 1.25, "baseY": 0.5, "outside": "sea",
- *     "cells": [[gx, gz, nivel, superficie?, forma?, dir?, borde?, redondeo?], ...]
+ *     "cells": [[gx, gz, nivel, superficie?, forma?, dir?, borde?, redondeo?, subida?], ...]
  *   }
  *   - gx, gz: índice de tesela. El centro de la tesela está en (gx * tile, gz * tile).
- *   - superficie: grass | path | cobble | sand | stone   (por defecto grass)
+ *   - superficie: grass | path | cobble | sand | stone, más los tipos de Easy Game
+ *     Developer: rock | brick | wood | snow | volcanic | picon | blacksand y los
+ *     líquidos water | lava (la tesela líquida es el lecho; el líquido se pinta encima).
  *   - forma: flat | ramp | stairs                         (por defecto flat)
  *   - dir: hacia dónde SUBE la rampa/escalera: 0 = -Z (norte), 1 = +X (este),
- *          2 = +Z (sur), 3 = -X (oeste). Sube exactamente 1 nivel.
+ *          2 = +Z (sur), 3 = -X (oeste).
+ *   - subida: niveles que sube la rampa/escalera (por defecto 1).
  *   - borde: cliff | wall                                 (por defecto cliff)
  *   - redondeo: 0..1. Redondea en planta las esquinas convexas de la tesela
  *     (radio = redondeo * tile / 2) cuando las tres vecinas de esa esquina están
@@ -42,7 +45,18 @@ export function modularStairSteps(mod) {
 }
 export const MODULAR_SEA_DEPTH = 8; // profundidad del fondo marino bajo baseY
 
-export const MODULAR_SURFACES = ['grass', 'path', 'cobble', 'sand', 'stone'];
+export const MODULAR_SURFACES = [
+  'grass', 'path', 'cobble', 'sand', 'stone',
+  // Tipos de Easy Game Developer
+  'rock', 'brick', 'wood', 'snow', 'volcanic', 'picon', 'blacksand', 'water', 'lava',
+];
+export const MODULAR_LIQUIDS = ['water', 'lava'];
+/** Profundidad del lecho bajo el nivel de una tesela líquida y altura de su superficie (igual que EGD). */
+export const MODULAR_LIQUID_BED = 0.6;
+export const MODULAR_LIQUID_SURFACE = 0.15;
+export function modularIsLiquid(cell) {
+  return !!cell && (cell.surface === 'water' || cell.surface === 'lava');
+}
 export const MODULAR_SHAPES = ['flat', 'ramp', 'stairs'];
 export const MODULAR_EDGES = ['cliff', 'wall'];
 
@@ -60,9 +74,10 @@ export function modularIndex(v, tile = MODULAR_TILE) {
   return Math.floor(v / tile + 0.5);
 }
 
-function normalizeCell(gx, gz, level, surface, shape, dir, edge, round) {
+function normalizeCell(gx, gz, level, surface, shape, dir, edge, round, rise) {
   const r = num(round, 0);
   return {
+    rise: Math.max(1, Math.min(16, Math.round(num(rise, 1)))),
     round: r > 0 ? Math.min(1, Math.round(r * 20) / 20) : 0,
     gx,
     gz,
@@ -89,20 +104,20 @@ export function normalizeModularTerrain(raw) {
     for (const c of raw.cells.values()) {
       const gx = Math.round(num(c.gx, 0));
       const gz = Math.round(num(c.gz, 0));
-      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round));
+      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round, c.rise));
     }
   } else if (Array.isArray(raw.cells)) {
     for (const item of raw.cells) {
       let c = item;
       if (Array.isArray(item)) {
         if (item.length < 3) continue;
-        c = { gx: item[0], gz: item[1], level: item[2], surface: item[3], shape: item[4], dir: item[5], edge: item[6], round: item[7] };
+        c = { gx: item[0], gz: item[1], level: item[2], surface: item[3], shape: item[4], dir: item[5], edge: item[6], round: item[7], rise: item[8] };
       }
       if (!c || typeof c !== 'object') continue;
       const gx = Math.round(Number(c.gx));
       const gz = Math.round(Number(c.gz));
       if (!Number.isFinite(gx) || !Number.isFinite(gz)) continue;
-      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round));
+      cells.set(modularKey(gx, gz), normalizeCell(gx, gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round, c.rise));
     }
   }
   if (!cells.size) return null;
@@ -115,8 +130,8 @@ export function serializeModularTerrain(mod) {
   if (!norm) return undefined;
   const cells = [];
   for (const c of norm.cells.values()) {
-    const row = [c.gx, c.gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round || 0];
-    const defaults = [null, null, null, 'grass', 'flat', 0, 'cliff', 0];
+    const row = [c.gx, c.gz, c.level, c.surface, c.shape, c.dir, c.edge, c.round || 0, c.rise || 1];
+    const defaults = [null, null, null, 'grass', 'flat', 0, 'cliff', 0, 1];
     while (row.length > 3 && row[row.length - 1] === defaults[row.length - 1]) row.pop();
     cells.push(row);
   }
@@ -151,12 +166,14 @@ export function modularUAlong(mod, cell, x, z) {
 /** Altura exacta de la superficie de una tesela en (x, z). */
 export function modularCellTopAt(mod, cell, x, z) {
   const low = modularLevelY(mod, cell.level);
+  if (cell.surface === 'water' || cell.surface === 'lava') return low - MODULAR_LIQUID_BED;
   if (cell.shape === 'flat') return low;
   const u = modularUAlong(mod, cell, x, z);
-  if (cell.shape === 'ramp') return low + u * mod.level;
-  const steps = modularStairSteps(mod);
+  const rise = (cell.rise || 1) * mod.level;
+  if (cell.shape === 'ramp') return low + u * rise;
+  const steps = Math.max(2, Math.ceil(rise / MODULAR_MAX_STEP - 1e-6));
   const k = Math.min(steps - 1, Math.floor(u * steps));
-  return low + (k + 1) * (mod.level / steps);
+  return low + (k + 1) * (rise / steps);
 }
 
 /**

@@ -11,6 +11,7 @@
 
 import { clamp, lerp, smoothstep, noise2 } from './utils.js';
 import { normalizeModularTerrain, serializeModularTerrain, modularHeightAt } from './modular-terrain.mjs';
+import { isEgdMap, egdMapToOpenNite, egdWorldDefaults } from './egd-map.mjs';
 
 // ============================================================================
 // 1. CONSTANTES DEL GRID MODULAR (ESTILO FORTNITE + CEL-SHADING TOTK)
@@ -88,6 +89,8 @@ export function parseGridKey(key) {
  * garantizando que contenga todos los campos requeridos con tipos válidos.
  */
 export function normalizeMapData(raw = {}) {
+  // Mapas de Easy Game Developer: se leen tal cual (el terreno es el de EGD).
+  if (isEgdMap(raw)) raw = egdMapToOpenNite(raw);
   const src = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
   const isCustomList = Array.isArray(raw);
 
@@ -217,16 +220,17 @@ export function normalizeMapData(raw = {}) {
     const z = Number(p.z) || 0;
     const y = Number.isFinite(p.y) ? Number(p.y) : null;
     const rot = Number(p.rot) || 0;
+    const exact = !!src.egd; // en mapas de EGD las posiciones son libres, como en el motor
     const entry = {
       type: String(p.type),
-      x: snapToGrid(x, p.type === 'road' || p.type === 'path' ? ROAD_CELL_SIZE : GRID_SIZE),
-      z: snapToGrid(z, p.type === 'road' || p.type === 'path' ? ROAD_CELL_SIZE : GRID_SIZE),
+      x: exact ? x : snapToGrid(x, p.type === 'road' || p.type === 'path' ? ROAD_CELL_SIZE : GRID_SIZE),
+      z: exact ? z : snapToGrid(z, p.type === 'road' || p.type === 'path' ? ROAD_CELL_SIZE : GRID_SIZE),
       rot,
     };
-    if (y !== null) entry.y = snapHeight(y);
+    if (y !== null) entry.y = exact ? y : snapHeight(y);
     if (Number(p.floors) > 1) entry.floors = Math.max(1, Math.min(10, Math.round(p.floors)));
     if (Number.isFinite(p.scale) && p.scale !== 1) entry.scale = Number(p.scale);
-    for (const k of ['modelSrc', 'modelName', 'model', 'modelScale', 'modelRotX', 'modelRotY', 'modelRotZ', 'strength', 'radius']) {
+    for (const k of ['modelSrc', 'modelName', 'model', 'modelScale', 'modelRotX', 'modelRotY', 'modelRotZ', 'strength', 'radius', 'egd', 'itemId', 'material']) {
       if (p[k] !== undefined && p[k] !== null) entry[k] = p[k];
     }
     pieces.push(entry);
@@ -262,6 +266,10 @@ export function normalizeMapData(raw = {}) {
     roads: Array.isArray(src.roads) ? src.roads : [],
     // Terreno modular (teselas de 4 m por niveles). null si el mapa no lo usa.
     modular: normalizeModularTerrain(src.modular),
+    // Mundo de Easy Game Developer (formato egd-map). null si el mapa no es de EGD.
+    egd: (src.egd && src.egd.world && Array.isArray(src.egd.world.tiles))
+      ? { ...src.egd, world: egdWorldDefaults(src.egd.world), extraEntities: Array.isArray(src.egd.extraEntities) ? src.egd.extraEntities : [] }
+      : null,
     raw: src,
   };
 }
@@ -310,6 +318,7 @@ export function serializeMapData(mapDef) {
     pieces: norm.pieces.map((p) => ({ ...p })),
     pois: norm.pois.map((poi) => ({ ...poi })),
     ...(norm.modular ? { modular: serializeModularTerrain(norm.modular) } : {}),
+    ...(norm.egd ? { egd: norm.egd } : {}),
   };
 }
 

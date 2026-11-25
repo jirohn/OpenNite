@@ -17,7 +17,6 @@ import { getCartoonGradient } from './cartoon.mjs';
 import { hash2, noise2 } from './utils.js';
 import {
   MODULAR_DIRS,
-  modularStairSteps,
   modularKey,
   modularLevelY,
   modularCellTopAt,
@@ -46,7 +45,26 @@ const PALETTE = {
   capStone: 0xc9c7c2,
   stairTread: 0xb9bbc0,
   stairRiser: 0x9094a0,
+  // Tipos de Easy Game Developer (mismos tonos base que EGD, ajustados al toon)
+  rock: 0x9a9da6,
+  brick: 0xb3593f,
+  brickDark: 0x8a4431,
+  wood: 0xb07c42,
+  woodDark: 0x8a5f31,
+  snow: 0xf4f7fb,
+  volcanic: 0x5a5153,
+  picon: 0x8a4232,
+  blacksand: 0x4d4846,
+  waterBed: 0xcdb98a,
+  lava: 0xff7a26,
+  lavaDark: 0xd2461a,
 };
+/** Color del labio superior del borde según la superficie. */
+const LIP_COLORS = {
+  grass: 0x3d9334, path: 0xc7aa78, sand: 0xd9c58a, snow: 0xdfe6ee, rock: 0x84878f, brick: 0x8a4431,
+  wood: 0x8a5f31, volcanic: 0x463e40, picon: 0x6e3326, blacksand: 0x3a3534,
+};
+
 
 const COLLIDE_MIN_DROP = 0.45; // = MAX_STEP_UP del jugador
 const MODULAR_CORNER_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
@@ -176,6 +194,22 @@ export function buildModularTerrainMesh(mod, opts = {}) {
       case 'cobble': return shade(PALETTE.cobbleBed, v, out);
       case 'sand': return shade(PALETTE.sand, v, out);
       case 'stone': return shade(PALETTE.plaza, v, out);
+      case 'rock': return shade(PALETTE.rock, v * (0.94 + noise2(x * 0.11, z * 0.11, seed + 61) * 0.14), out);
+      case 'brick': {
+        // Hiladas de ladrillo: tono alterno por fila (en planta).
+        const row = Math.floor(z * 2.5) + Math.floor(x * 1.25 + (Math.floor(z * 2.5) % 2) * 0.5);
+        return shade(hash2(row, 7, seed + 9) > 0.5 ? PALETTE.brick : PALETTE.brickDark, v, out);
+      }
+      case 'wood': {
+        const plank = Math.floor(x * 2.2);
+        return shade(hash2(plank, 3, seed + 13) > 0.5 ? PALETTE.wood : PALETTE.woodDark, v, out);
+      }
+      case 'snow': return shade(PALETTE.snow, 0.97 + noise2(x * 0.2, z * 0.2, seed + 7) * 0.05, out);
+      case 'volcanic': return shade(PALETTE.volcanic, v, out);
+      case 'picon': return shade(PALETTE.picon, v * (0.9 + noise2(x * 0.5, z * 0.5, seed + 17) * 0.2), out);
+      case 'blacksand': return shade(PALETTE.blacksand, v, out);
+      case 'water': return shade(PALETTE.waterBed, v * 0.9, out);
+      case 'lava': return shade(PALETTE.lavaDark, v, out);
       default: return grassColor(x, y, z, out);
     }
   };
@@ -338,9 +372,10 @@ export function buildModularTerrainMesh(mod, opts = {}) {
   };
 
   // ------------------------------------------------------------ bordes
-  const STEPS = modularStairSteps(mod);
-  const stairBoundaries = () => {
+  const stepsOf = (c) => Math.max(2, Math.ceil(((c?.rise || 1) * L) / 0.25 - 1e-6));
+  const stairBoundaries = (sc) => {
     const ts = [0, 1];
+    const STEPS = stepsOf(sc);
     for (let k = 1; k < STEPS; k++) {
       ts.push(k / STEPS - 5e-4, k / STEPS + 5e-4);
     }
@@ -404,7 +439,7 @@ export function buildModularTerrainMesh(mod, opts = {}) {
       const t0 = corners[d] ? corners[d].R / T : 0;
       const t1 = corners[(d + 1) % 4] ? 1 - corners[(d + 1) % 4].R / T : 1;
       if (t1 - t0 < 1e-3) continue;
-      const ts = stairsInvolved ? stairBoundaries() : uniformT(t0, t1);
+      const ts = stairsInvolved ? stairBoundaries(c.shape === 'stairs' ? c : n) : uniformT(t0, t1);
       const ex = cx + dx * T / 2, ez = cz + dz * T / 2;
       const pts = [];
       let anyDrop = false;
@@ -433,14 +468,15 @@ export function buildModularTerrainMesh(mod, opts = {}) {
       else buildCliffFace(c, pts, out, buf);
 
       // Colisionador fino dentro de la tesela alta: bots y balas lo respetan.
-      pushEdgeCollider(pts);
+      // Hacia un lecho de agua/lava no se pone: hay que poder meterse en él.
+      if (!(n && (n.surface === 'water' || n.surface === 'lava'))) pushEdgeCollider(pts);
     }
   };
 
   /** Acantilado: banda de césped + roca facetada que se hunde hacia dentro. */
   const buildCliffFace = (c, pts, _out, buf) => {
     const qOut = (a, b) => [(a.nx + b.nx) / 2, 0, (a.nz + b.nz) / 2];
-    const lipHex = c.surface === 'grass' ? PALETTE.lipGrass : c.surface === 'path' ? PALETTE.pathDark : c.surface === 'sand' ? 0xd9c58a : PALETTE.wallStone2;
+    const lipHex = LIP_COLORS[c.surface] ?? PALETTE.wallStone2;
     const lipCol = new THREE.Color(lipHex);
     const lipCol2 = shade(lipHex, 0.82);
     const K = pts.length;
@@ -617,8 +653,8 @@ export function buildModularTerrainMesh(mod, opts = {}) {
     const [dx, dz] = MODULAR_DIRS[c.dir];
     const perp = [-dz, dx];
     const low = modularLevelY(mod, c.level);
-    const steps = STEPS;
-    const sh = L / steps;
+    const steps = stepsOf(c);
+    const sh = (c.rise || 1) * L / steps;
     const P = (u, w, y) => [cx - dx * T / 2 + dx * u * T + perp[0] * (w - 0.5) * T, y, cz - dz * T / 2 + dz * u * T + perp[1] * (w - 0.5) * T];
     const back = [-dx, 0, -dz];
     for (let k = 0; k < steps; k++) {
@@ -634,10 +670,25 @@ export function buildModularTerrainMesh(mod, opts = {}) {
     }
   };
 
+  // Lava: superficie brillante sobre el lecho (el agua la dibuja World con su shader).
+  const buildLava = (c) => {
+    if (c.surface !== 'lava') return;
+    const cx = c.gx * T, cz = c.gz * T;
+    const y = modularLevelY(mod, c.level) - 0.15;
+    const buf = bufFor(cx, cz);
+    const n = 3, st = T / n;
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const x0 = cx - T / 2 + i * st, z0 = cz - T / 2 + j * st;
+      const col = (x, z) => new THREE.Color(PALETTE.lava).lerp(_c2.setHex(0xffc14d), noise2(x * 0.4, z * 0.4, seed + 91) * 0.7);
+      buf.quad([x0, y, z0], [x0 + st, y, z0], [x0 + st, y, z0 + st], [x0, y, z0 + st], col(x0, z0), UP, col(x0 + st, z0), col(x0 + st, z0 + st), col(x0, z0 + st));
+    }
+  };
+
   for (const c of mod.cells.values()) {
     buildTop(c);
     buildStairs(c);
     buildEdges(c);
+    buildLava(c);
   }
 
   // ------------------------------------------------------------ resultado

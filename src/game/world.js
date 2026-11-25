@@ -21,6 +21,12 @@ import {
 } from '../core/map-system.mjs';
 import { modularHeightAt, modularMinNear, normalizeModularTerrain } from '../core/modular-terrain.mjs';
 import { buildModularTerrainMesh } from '../core/modular-terrain-mesh.mjs';
+import { EgdTerrain, EGD_TILE_TYPES } from '../core/egd-terrain.mjs';
+import { egdWaterCells, egdPieceToEntity } from '../core/egd-map.mjs';
+import { egdBuildEntityObject } from '../core/egd-objects.mjs';
+
+/** Altura fuera del mundo de EGD (el vacío): se cae al agua/vacío como en el motor. */
+const EGD_VOID_Y = -30;
 
 
 const CHUNK_SIZE = 256;
@@ -482,6 +488,9 @@ export class World {
     // Terreno modular por teselas (null si el mapa no lo usa). Ver core/modular-terrain.mjs.
     this.modular = norm.modular || null;
     this.modularMesh = null;
+    // Terreno de Easy Game Developer (mapas egd-map). Ver core/egd-terrain.mjs.
+    this.egdWorld = null;
+    this.egdTerrain = null;
     this.islandFlat = !!norm.islandFlat || norm.base === 'test'; // editor: isla plana a 0, solo agua.
     this.terrainStyle = norm.terrainStyle || 'blocky'; // blocky | smooth | ramp | stairs
     this.terrainGridStep = norm.terrainGridStep || 2;
@@ -665,17 +674,20 @@ export class World {
     this._applyCustomTerrainData(customData);
     this.roadNetwork = buildRoadNetwork(this.customPieces || [], (x, z) => this.rawHeightAt(x, z));
     console.info('[World] map loaded:', { id: this.map.id, pieces: this.customPieces?.length || 0, heightOverrides: this.heightOverrides.size, roads: this.roadNetwork.size, modularCells: this.modular?.cells.size || 0 });
-    if ((this.customPieces && this.customPieces.length) || this.modular) {
+    if ((this.customPieces && this.customPieces.length) || this.modular || this.egdWorld) {
       // Alta resoluciÃ³n para celdas de 2u y suavizado por tile
       this.chunkSegments = 128;
       // Mapa limpio del editor: terreno + agua + piezas personalizadas + naturaleza zonificada.
       this.setupWater();
       this._buildWaterPatches();
       const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
-      for (let cx = -range; cx <= range; cx++) {
-        for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+      if (!this.egdWorld) {
+        for (let cx = -range; cx <= range; cx++) {
+          for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+        }
       }
       this._buildModularTerrain();
+      this._showEgdTerrain();
       // Mapa pequeÃ±o ya precargado: evitar streaming/churn de chunks en runtime.
       this.staticChunks = true;
       if (this.useKitAssets) {
@@ -907,6 +919,7 @@ export class World {
     }
     const density = this.settings?.get('vegetation') ?? 1;
     if (density <= 0 || !this.waterCells?.size) return;
+    if (this.egdWorld) return; // los mapas de EGD no llevan algas (igual que en el motor)
 
     const rnd = makeRandom((this.seed ^ 0x5ea7eed) >>> 0);
     const down = new THREE.Vector3(0, -1, 0);
@@ -1184,6 +1197,9 @@ transformed.y *= rise;`);
     this.waterVegetation = clamp(Number(data?.waterVegetation ?? 0.55), 0, 1);
     this._waterLevels = null;
     this.modular = (data && typeof data === 'object' && !Array.isArray(data)) ? normalizeModularTerrain(data.modular) : null;
+    // Mapa de Easy Game Developer: su terreno sustituye a todos los demás.
+    this._setEgdWorld(data?.egd?.world || null);
+    if (this.egdWorld) this.modular = null;
     if (!data || typeof data !== 'object' || Array.isArray(data)) return;
     const t = data.terrain;
     if (t && typeof t === 'object') {
@@ -1243,6 +1259,17 @@ transformed.y *= rise;`);
           this.waterCells.set(key, w.y);
           this.waterVegCells.set(key, this.waterVegetation);
         }
+      }
+    }
+    if (this.egdWorld) {
+      // Las teselas de agua de EGD son el agua del mapa (mismo nivel que en EGD).
+      this.heightOverrideCell = GRID_SIZE;
+      // Las que están al nivel del mar ya las cubre el mar; EGD no tiene algas.
+      const sea = Number.isFinite(this.waterLevel) ? this.waterLevel : -100;
+      for (const [k, y] of egdWaterCells(this.egdWorld, GRID_SIZE)) {
+        if (Math.abs(y - sea) < 0.05) continue;
+        this.waterCells.set(k, y);
+        this.waterVegCells.set(k, 0);
       }
     }
     if (this.waterCells.size) {
@@ -2260,6 +2287,7 @@ transformed.y *= rise;`);
       const g = new THREE.Group();
       pieceGroups.push(g);
       if (!p || !p.type) { group.add(g); continue; }
+      if (p.type === 'egd_object') { this._placeEgdObject(p, g); group.add(g); continue; }
       const x = +p.x || 0, z = +p.z || 0;
       let rot = +p.rot || 0;
       // Determinar altura base: edificios ya nivelados en el pre-paso; caminos siguen el terreno.
@@ -3676,6 +3704,11 @@ transformed.y *= rise;`);
 
   heightAt(x, z) {
     if (this.training) return 0;
+    // Mapa de Easy Game Developer: la misma altura que en el motor.
+    if (this.egdTerrain) {
+      const h = this.egdTerrain.heightAt(x, z);
+      return Number.isFinite(h) ? h : EGD_VOID_Y;
+    }
     // Terreno modular: altura exacta (sin caché cuantizada, los bordes son verticales).
     if (this.modular) {
       const mh = modularHeightAt(this.modular, x, z);
@@ -3708,6 +3741,13 @@ transformed.y *= rise;`);
   /** Altura de la superficie visual del terreno (interpolada desde la malla del chunk). */
   surfaceHeightAt(x, z) {
     if (!this.procedural) return this.rawHeightAt(x, z);
+    if (this.egdTerrain) {
+      let h = this.egdTerrain.heightAt(x, z);
+      if (!Number.isFinite(h)) h = EGD_VOID_Y;
+      // Puentes y caminos elevados de EGD: superficie más alta bajo el punto.
+      for (const sf of this.egdTerrain.pathSurfaces(x, z)) if (sf.y > h) h = sf.y;
+      return h;
+    }
     if (this.modular) {
       const mh = modularHeightAt(this.modular, x, z);
       if (mh !== null) return mh;
@@ -5506,6 +5546,7 @@ transformed.y *= rise;`);
 
   _clearTerrainChunks() {
     this._clearModularTerrain();
+    if (this.egdTerrain) this.egdTerrain.group.removeFromParent();
     for (const key of [...this.chunks.keys()]) this.removeChunk(key);
     this.chunkQueue.clear();
     this._hCache = new Map();
@@ -5537,6 +5578,73 @@ transformed.y *= rise;`);
     this.doors.length = 0;
     this.glassPanels.length = 0;
     if (this._glassInst) this._glassInst.count = 0;
+  }
+
+  /**
+   * Terreno de Easy Game Developer: se crea con el mismo código del motor
+   * (EgdTerrain), así que forma, rampas, bordes redondeados, caminos y hierba
+   * son idénticos. Solo cambian materiales y colores (estilo OpenNite).
+   */
+  _setEgdWorld(world) {
+    if (this.egdTerrain) {
+      this.egdTerrain.group.removeFromParent();
+      this.egdTerrain.dispose();
+      this.egdTerrain = null;
+    }
+    this.egdWorld = world || null;
+    if (!this.egdWorld) return;
+    this.egdTerrain = new EgdTerrain(this.egdWorld);
+    this.egdTerrain.group.name = 'egd-terrain';
+    // El agua la dibuja OpenNite (mismo nivel); se ocultan las láminas de agua de EGD.
+    const waterTop = new THREE.Color(EGD_TILE_TYPES.water.top);
+    const waterSide = new THREE.Color(EGD_TILE_TYPES.water.side);
+    this.egdTerrain.group.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = o.castShadow && !!this.settings.get('shadows');
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      if (mats.some((m) => m?.transparent && m.color && (m.color.equals(waterTop) || m.color.equals(waterSide)))) o.visible = false;
+    });
+    console.info('[World] egd terrain:', { size: this.egdWorld.size, tileSize: this.egdWorld.tileSize, style: this.egdWorld.style, meshes: this.egdTerrain.meshes.length });
+  }
+
+  /**
+   * Objeto de EGD (casa modular, decorado, primitiva, compuesto) con su misma
+   * forma. Colisiones: cada caja sólida de las piezas modulares; en decorados,
+   * el tronco o la caja del objeto.
+   */
+  _placeEgdObject(p, g) {
+    const e = egdPieceToEntity(p);
+    const obj = e ? egdBuildEntityObject(e) : null;
+    if (!obj) return;
+    g.add(obj);
+    obj.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const addBox = (b, shrink = 0) => {
+      if (b.isEmpty()) return;
+      this.addCollider(b.min.x + shrink, b.max.x - shrink, b.min.y, b.max.y, b.min.z + shrink, b.max.z - shrink, { role: 'egdObject' });
+    };
+    if (e.type === 'build') {
+      obj.traverse((m) => {
+        if (!m.isMesh || m.userData.solid === false) return;
+        box.setFromObject(m);
+        addBox(box);
+      });
+      return;
+    }
+    if (e.type === 'prop' && /^(flower|bush|lamp)$/.test(e.prop)) return;
+    box.setFromObject(obj);
+    if (e.type === 'prop' && /^(tree|pine|palm|drago)$/.test(e.prop)) {
+      // Solo el tronco bloquea.
+      const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+      const r = 0.25 * (Array.isArray(e.scale) ? +e.scale[0] || 1 : 1);
+      this.addCollider(cx - r, cx + r, box.min.y, box.max.y, cz - r, cz + r, { role: 'egdObject' });
+      return;
+    }
+    addBox(box, 0.05);
+  }
+
+  _showEgdTerrain() {
+    if (this.egdTerrain && !this.egdTerrain.group.parent) this.root.add(this.egdTerrain.group);
   }
 
   /** Construye la malla y los colisionadores del terreno modular (juego y editor). */
@@ -5595,10 +5703,13 @@ transformed.y *= rise;`);
     this.setupWater();
     this._buildWaterPatches();
     const range = Math.ceil(this.half / CHUNK_SIZE) + 1;
-    for (let cx = -range; cx <= range; cx++) {
-      for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+    if (!this.egdWorld) {
+      for (let cx = -range; cx <= range; cx++) {
+        for (let cz = -range; cz <= range; cz++) this.createChunk(cx, cz);
+      }
     }
     this._buildModularTerrain();
+    this._showEgdTerrain();
     this.staticChunks = true;
     if (this.useKitAssets) {
       await Promise.all([this.loadKitModels(), this.loadBuildKit()]);
