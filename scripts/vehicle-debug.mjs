@@ -38,7 +38,7 @@ console.log('Vehículos:', JSON.stringify(await J(`() => { const g = window.open
 
 // Jugador: subir al coche, conducir, bajar.
 await evaluate(`(() => { const g = window.openniteApp.game, p = g.player, v = g.vehicles.list.find((v) => v.kind === 'car') || g.vehicles.list[0];
-  p.inBus = false; p.character.group.visible = true; const d = v.doorPoint(); p.position.set(d.x, d.y + 0.3, d.z); p.velocity.set(0, 0, 0); return 1; })()`);
+  p.inBus = false; p.character.group.visible = true; const d = v.doorPoint(); p.position.set(d.x, d.y + 0.3, d.z); p.velocity.set(0, 0, 0); p.fallPeakY = d.y + 0.3; p.onFallDamage = () => {}; return 1; })()`);
 await sleep(1500);
 await evaluate(`window.openniteApp.game.input.keys.add('KeyE')`); await sleep(300); await evaluate(`window.openniteApp.game.input.keys.delete('KeyE')`);
 await sleep(1500);
@@ -53,9 +53,9 @@ console.log('Bajado:', JSON.stringify(await J(`() => { const p = window.opennite
 
 // Bots: se juntan cerca de los vehículos con destinos lejanos.
 await evaluate(`(() => { const g = window.openniteApp.game; const vs = g.vehicles.list.filter((v) => v.def.mode === 'ground' || v.def.mode === 'heli');
-  g.bots.forEach((b, i) => { const v = vs[i % vs.length]; if (!v || i >= vs.length * 2) return; b.body.inBus = false; b.body.gliding = false; b.brain.skydiving = false; const d = v.doorPoint(); b.body.position.set(d.x + 5, d.y + 1, d.z + 5); b.body.velocity.set(0, 0, 0); b.character.group.visible = true;
+  g.bots.forEach((b, i) => { const v = vs[i % vs.length]; if (!v || i >= vs.length * 2) return; b.body.inBus = false; b.body.gliding = false; b.brain.skydiving = false; const d = v.doorPoint(); b.body.position.set(d.x + 5, d.y + 1, d.z + 5); b.body.velocity.set(0, 0, 0); b.body.fallPeakY = d.y + 1; b.character.group.visible = true;
     b.brain.vehicleCd = 0; const a = Math.random() * 6.28; b.brain.roamPos = v.position.clone().set(Math.cos(a) * g.world.half * 0.7, 0, Math.sin(a) * g.world.half * 0.7); b.brain.goal.type = 'roam'; b.brain.thinkTimer = 0; });
-  g.player.position.set(0, 60, 0); return 1; })()`);
+  g.player.onFallDamage = () => {}; g.player.fallPeakY = 60; g.player.position.set(0, 60, 0); return 1; })()`);
 let seen = 0;
 const t0 = Date.now();
 while (Date.now() - t0 < seconds * 1000) {

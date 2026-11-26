@@ -392,7 +392,7 @@ export class BotBrain {
     let leave = d < (air ? 20 : 12)
       || v.health < v.maxHealth * 0.3
       || this.time - this.driveSince > 90
-      || this.driveStuck >= 4;
+      || this.driveStuck >= 3;
     if (tgt && this.targetVisible && dT < 32 && this._rangedWeapons().length && !(st && st.inStorm)) leave = true;
     if (leave) {
       if (air && alt > 1.2) { input.key('ShiftLeft', true); return; } // aterrizar primero
@@ -448,7 +448,7 @@ export class BotBrain {
       return;
     }
     if (pushing && v.realSpeed < 1.2) this.slowTime += dt; else this.slowTime = 0;
-    if (this.slowTime > 1.3) {
+    if (this.slowTime > 1.0) {
       this.slowTime = 0;
       this.driveStuck++;
       this.reverseUntil = this.time + rand(1.0, 1.6);
